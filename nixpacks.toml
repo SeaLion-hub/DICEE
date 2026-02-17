@@ -1,0 +1,5 @@
+# Nixpacks 빌드 설정 (Railway 웹 서버)
+# 배포 시 마이그레이션 자동 실행 후 앱 시작
+
+[start]
+cmd = "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"
