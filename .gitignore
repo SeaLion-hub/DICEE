@@ -47,3 +47,4 @@ htmlcov/
 
 # Misc
 .DS_Store
+.env 

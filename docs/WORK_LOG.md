@@ -87,3 +87,35 @@
 
 - [단계] 무엇을 했는지 (어떤 파일/기능). 왜 또는 결과 한 줄.
 ```
+## [2026-02-18] Phase 3: 크롤러 엔진 및 워커 인프라 구축
+
+### ✅ 완료된 작업
+1.  **인프라 설정**
+    * `app/core/config.py`: Redis 및 워커 관련 환경 변수(`REDIS_URL`, `CRAWL_TRIGGER_SECRET`) 추가.
+    * `.env`: 로컬 및 Railway 환경에 맞춘 DB/Redis 연결 설정 최적화.
+
+2.  **데이터베이스 세팅**
+    * `scripts/seed_colleges.py`: 단과대 기초 데이터(공과대학 등 7개) 시딩 완료.
+    * `app/models/notice.py`: `published_at` 필드 추가 및 필드명 정리 (`content` -> `raw_html`, `thumbnail_url` -> `poster_image_url`).
+    * **Alembic Migration**: `add published_at to notices` 마이그레이션 적용 완료.
+
+3.  **크롤러 엔진 구현**
+    * `app/core/crawler_config.py`: 사이트별 URL 및 선택자 분리 관리 (Hard-coding 방지).
+    * `app/services/crawlers/yonsei_engineering.py`: `app2.py(내가 만든 크롤러 모듈)`의 구조적 텍스트 추출 로직(표 HTML 유지, 라벨 기반 검색)을 이식한 정밀 크롤러 구현.
+    * `urljoin` 도입을 통한 상대 경로 URL 처리 안정화.
+
+4.  **비동기 워커 구축**
+    * `app/worker.py`: Celery 앱 초기화 및 워커 설정.
+    * `app/services/tasks.py`: 비동기 크롤러를 실행하기 위한 Celery 태스크 (`crawl_college_task`) 정의.
+
+5.  **검증**
+    * `scripts/test_crawler.py`: 공과대학 게시판 대상 실제 데이터 수집 및 DB 저장 테스트 성공.
+
+### ⚠️ 이슈 및 해결
+* **MissingGreenlet 에러**: 비동기 세션에서 `rollback` 후 만료된 객체 접근 시 발생하던 문제 해결 (ID 로컬 변수화).
+* **DB Column Miss**: 모델과 실제 테이블 간의 필드 불일치 해결 (Alembic upgrade).
+* **URL 404**: 잘못된 게시판 경로 수정 및 `crawler_config` 반영.
+
+### 넥스트 스텝
+* [ ] **Phase 4**: 수집된 `raw_html`을 Gemini API를 통해 JSON으로 정제하는 파이프라인 구축.
+* [ ] **Phase 3 확장**: 타 단과대(AI융합대학 등) 리스트 페이지 URL 확보 및 크롤러 확장.
