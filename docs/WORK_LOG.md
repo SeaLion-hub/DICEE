@@ -119,3 +119,24 @@
 ### 넥스트 스텝
 * [ ] **Phase 4**: 수집된 `raw_html`을 Gemini API를 통해 JSON으로 정제하는 파이프라인 구축.
 * [ ] **Phase 3 확장**: 타 단과대(AI융합대학 등) 리스트 페이지 URL 확보 및 크롤러 확장.
+
+## 2026-02-18
+
+### 3단계: 크롤러 고도화 및 DB 스키마 유연화 (완료)
+**1. DB 스키마 전면 개편 (PostgreSQL/Alembic)**
+- **유연성 확보**: `notices` 테이블의 경직된 컬럼(`deadline`, `event_start` 등)을 삭제.
+- **JSONB 도입**: AI 분석 데이터와 다중 미디어를 담기 위해 `dates`, `eligibility`, `images`, `attachments` 컬럼(JSONB) 신설.
+- **마이그레이션**: Railway 운영 DB 초기화 및 마이그레이션 스크립트(`005_refactor_schema.py`) 적용 완료.
+
+**2. 크롤러 로직 고도화 (`yonsei_engineering.py`)**
+- **로직 이식**: 기존 프로토타입(`app2.py`)의 강력한 파싱 로직을 백엔드에 이식.
+- **기능 강화**:
+  - HTML 테이블 구조를 유지하며 텍스트 추출.
+  - 본문 내 불필요한 요소(버튼, 아이콘 등) 제거 필터 적용.
+  - **이미지 처리**: URL 방식뿐만 아니라 Base64(Data URI) 형태의 이미지도 수집/저장하도록 업그레이드.
+  - **첨부파일**: 파일명과 다운로드 링크를 파싱하여 JSON 리스트로 저장.
+
+**3. 배포 파이프라인 및 의존성 해결**
+- **Dependency Hell 탈출**: `requirements.txt` 내 `pydantic-settings`, `langchain` 버전 충돌 및 OS 호환성(`pywin32`, `psycopg2`) 문제 해결.
+- **배포 정상화**: Railway 배포 커맨드(`nixpacks.toml`) 복구 및 정상 배포 확인.
+- **검증**: `seed_colleges.py` 및 `test_crawler.py`를 통해 로컬/서버 DB 연동 및 데이터 적재 성공 확인.
