@@ -1,7 +1,5 @@
 import logging
 import re
-import base64
-import os
 from datetime import datetime
 from urllib.parse import urljoin
 import httpx
@@ -128,7 +126,7 @@ class YonseiEngineeringCrawler:
                 h3 = soup.find('h3')
                 if h3: title = self.get_text_structurally(h3).strip()
 
-            # 2. 날짜 추출 (app2.py 정규식)
+            # 2. 날짜 추출
             pub_date = None
             date_match = re.search(r'\d{4}[.-]\d{2}[.-]\d{2}', soup.get_text())
             if date_match:
@@ -137,7 +135,7 @@ class YonseiEngineeringCrawler:
                     pub_date = datetime.strptime(date_str, "%Y-%m-%d")
                 except: pass
 
-            # 3. 본문 추출 (Garbage 제거 로직 포함)
+            # 3. 본문 추출
             content_text = ""
             main_container = None
             anchor_text = soup.find(string=lambda t: t and "게시글 내용" in t)
@@ -149,7 +147,7 @@ class YonseiEngineeringCrawler:
                     if target_body:
                         main_container = target_body
                         
-                        # [app2.py] 쓰레기 요소 제거
+                        # 쓰레기 요소 제거
                         garbage_selectors = ['.btn_area', '.btn-wrap', '#bo_v_share', 'ul.btn_bo_user', 'div.btn_confirm']
                         for selector in garbage_selectors:
                             for tag in main_container.select(selector):
@@ -157,7 +155,6 @@ class YonseiEngineeringCrawler:
                         
                         raw_text = self.get_text_structurally(main_container)
                         
-                        # [app2.py] 불필요 키워드 이후 절삭
                         stop_keywords = ["관리자 if문", "답변글 버튼", "목록 List 버튼", "등록 버튼"]
                         for keyword in stop_keywords:
                             if keyword in raw_text:
@@ -168,9 +165,8 @@ class YonseiEngineeringCrawler:
             if not content_text:
                 content_text = "(본문 내용을 찾지 못했습니다)"
 
-            # 4. 이미지 추출 (Base64 + URL 모두 지원)
+            # 4. 이미지 추출 (URL 방식)
             images_data = []
-            poster_url = None
             
             if main_container:
                 img_tags = main_container.find_all('img')
@@ -178,20 +174,12 @@ class YonseiEngineeringCrawler:
                     src = img.get('src', '')
                     if not src: continue
                     
-                    # Base64 처리
                     if src.startswith('data:image'):
-                        # DB에는 용량 문제로 base64 직접 저장은 비추천하지만, 
-                        # app2.py 로직을 따르기 위해 메타데이터 형태로 저장하거나 스킵합니다.
-                        # 여기서는 'url'이 없으므로 제외하거나, 필요시 별도 처리가 필요합니다.
-                        # 현재는 URL 기반 크롤러이므로 base64는 건너뛰거나 태그만 남깁니다.
                         continue 
                     else:
-                        # URL 처리
                         if any(x in src for x in ['icon', 'btn', 'button', 'search', 'blank']): continue
                         
                         full_url = urljoin(url, src)
-                        
-                        # 중복 제거
                         if any(d.get('url') == full_url for d in images_data): continue
                         
                         images_data.append({
@@ -199,10 +187,7 @@ class YonseiEngineeringCrawler:
                             "url": full_url
                         })
 
-            if images_data:
-                poster_url = images_data[0]['url']
-
-            # 5. 첨부파일 추출 ("첨부" 텍스트 기준 탐색)
+            # 5. 첨부파일 추출
             attachments = []
             attach_labels = soup.find_all(string=re.compile("첨부"))
             for label in attach_labels:
@@ -216,11 +201,10 @@ class YonseiEngineeringCrawler:
                         href = link.get('href', '')
                         if href and not href.startswith('#') and 'javascript' not in href:
                              full_href = urljoin(url, href)
-                             # 중복 방지
                              if not any(a['url'] == full_href for a in attachments):
                                  attachments.append({"name": file_name, "url": full_href})
 
-            # DB 저장
+            # DB 저장 (poster_image_url 제거됨)
             new_notice = Notice(
                 college_id=college_id,
                 external_id=external_id,
@@ -228,14 +212,13 @@ class YonseiEngineeringCrawler:
                 raw_html=content_text,
                 url=url,
                 published_at=pub_date,
-                poster_image_url=poster_url,
-                images=images_data,      # JSONB 저장
-                attachments=attachments, # JSONB 저장
+                # poster_image_url 삭제됨 (images 리스트 사용)
+                images=images_data,      
+                attachments=attachments, 
             )
             self.session.add(new_notice)
             await self.session.commit()
             
-            # 로그 출력 (app2.py 스타일)
             log_img_cnt = len(images_data)
             log_file_cnt = len(attachments)
             logger.info(f"✅ Saved: [{external_id}] {title[:20]}... (📅{pub_date} | 🖼️{log_img_cnt} | 📎{log_file_cnt})")
