@@ -87,56 +87,13 @@
 
 - [단계] 무엇을 했는지 (어떤 파일/기능). 왜 또는 결과 한 줄.
 ```
-## [2026-02-18] Phase 3: 크롤러 엔진 및 워커 인프라 구축
-
-### ✅ 완료된 작업
-1.  **인프라 설정**
-    * `app/core/config.py`: Redis 및 워커 관련 환경 변수(`REDIS_URL`, `CRAWL_TRIGGER_SECRET`) 추가.
-    * `.env`: 로컬 및 Railway 환경에 맞춘 DB/Redis 연결 설정 최적화.
-
-2.  **데이터베이스 세팅**
-    * `scripts/seed_colleges.py`: 단과대 기초 데이터(공과대학 등 7개) 시딩 완료.
-    * `app/models/notice.py`: `published_at` 필드 추가 및 필드명 정리 (`content` -> `raw_html`, `thumbnail_url` -> `poster_image_url`).
-    * **Alembic Migration**: `add published_at to notices` 마이그레이션 적용 완료.
-
-3.  **크롤러 엔진 구현**
-    * `app/core/crawler_config.py`: 사이트별 URL 및 선택자 분리 관리 (Hard-coding 방지).
-    * `app/services/crawlers/yonsei_engineering.py`: `app2.py(내가 만든 크롤러 모듈)`의 구조적 텍스트 추출 로직(표 HTML 유지, 라벨 기반 검색)을 이식한 정밀 크롤러 구현.
-    * `urljoin` 도입을 통한 상대 경로 URL 처리 안정화.
-
-4.  **비동기 워커 구축**
-    * `app/worker.py`: Celery 앱 초기화 및 워커 설정.
-    * `app/services/tasks.py`: 비동기 크롤러를 실행하기 위한 Celery 태스크 (`crawl_college_task`) 정의.
-
-5.  **검증**
-    * `scripts/test_crawler.py`: 공과대학 게시판 대상 실제 데이터 수집 및 DB 저장 테스트 성공.
-
-### ⚠️ 이슈 및 해결
-* **MissingGreenlet 에러**: 비동기 세션에서 `rollback` 후 만료된 객체 접근 시 발생하던 문제 해결 (ID 로컬 변수화).
-* **DB Column Miss**: 모델과 실제 테이블 간의 필드 불일치 해결 (Alembic upgrade).
-* **URL 404**: 잘못된 게시판 경로 수정 및 `crawler_config` 반영.
-
-### 넥스트 스텝
-* [ ] **Phase 4**: 수집된 `raw_html`을 Gemini API를 통해 JSON으로 정제하는 파이프라인 구축.
-* [ ] **Phase 3 확장**: 타 단과대(AI융합대학 등) 리스트 페이지 URL 확보 및 크롤러 확장.
-
 ## 2026-02-18
 
-### 3단계: 크롤러 고도화 및 DB 스키마 유연화 (완료)
-**1. DB 스키마 전면 개편 (PostgreSQL/Alembic)**
-- **유연성 확보**: `notices` 테이블의 경직된 컬럼(`deadline`, `event_start` 등)을 삭제.
-- **JSONB 도입**: AI 분석 데이터와 다중 미디어를 담기 위해 `dates`, `eligibility`, `images`, `attachments` 컬럼(JSONB) 신설.
-- **마이그레이션**: Railway 운영 DB 초기화 및 마이그레이션 스크립트(`005_refactor_schema.py`) 적용 완료.
-
-**2. 크롤러 로직 고도화 (`yonsei_engineering.py`)**
-- **로직 이식**: 기존 프로토타입(`app2.py`)의 강력한 파싱 로직을 백엔드에 이식.
-- **기능 강화**:
-  - HTML 테이블 구조를 유지하며 텍스트 추출.
-  - 본문 내 불필요한 요소(버튼, 아이콘 등) 제거 필터 적용.
-  - **이미지 처리**: URL 방식뿐만 아니라 Base64(Data URI) 형태의 이미지도 수집/저장하도록 업그레이드.
-  - **첨부파일**: 파일명과 다운로드 링크를 파싱하여 JSON 리스트로 저장.
-
-**3. 배포 파이프라인 및 의존성 해결**
-- **Dependency Hell 탈출**: `requirements.txt` 내 `pydantic-settings`, `langchain` 버전 충돌 및 OS 호환성(`pywin32`, `psycopg2`) 문제 해결.
-- **배포 정상화**: Railway 배포 커맨드(`nixpacks.toml`) 복구 및 정상 배포 확인.
-- **검증**: `seed_colleges.py` 및 `test_crawler.py`를 통해 로컬/서버 DB 연동 및 데이터 적재 성공 확인.
+- [문서] docs/ROADMAP.md — 지금 상태를 "3단계 진행 중"으로 갱신, 3단계 구현 현황 표(할 일별 ✅/❌)·할 일 상세·검증·마일스톤 보강. 미리 결정 필요에 Notice 일정 스키마 정합성(4단계 진입 전) 추가. WORK_LOG 작성 규칙에 맞게 본일자 3단계 항목 재정리.
+- [3단계] app/core/crawler_config.py — 사이트별 URL·selectors(row, link) config 분리. 하드코딩 방지, CAUTIONS 준수.
+- [3단계] app/services/crawlers/yonsei_engineering.py — 공대 게시판 크롤러(httpx+BeautifulSoup). 제목·본문·이미지(URL+Base64)·첨부파일 수집, (college_id, external_id) 중복 시 스킵. 표 HTML 유지·라벨 기반 본문 추출.
+- [3단계] app/services/tasks.py — Celery 태스크 crawl_college_task(college_code), asyncio.run(run_crawler_async). integrations.mdc(동기 def+asyncio.run) 준수.
+- [3단계] app/core/config.py — redis_url(또는 REDIS_URL) 등 환경변수. .env.example에 REDIS_URL·CRAWL_TRIGGER_SECRET 반영됨.
+- [2단계·스키마] app/models/notice.py — published_at, images, attachments, dates, eligibility(JSONB) 추가. alembic 534657f22f86(published_at), 005_refactor_schema(deadline/event_*/poster_image_url 제거, dates·eligibility·images·attachments 추가). 4·5단계 일정 API와 스키마 정합성은 ROADMAP 미리 결정 필요에 기록.
+- [2단계·시드] scripts/seed_colleges.py — 단과대 기초 데이터(공과대학 등) 시딩.
+- [검증] scripts/test_crawler.py — 공대 게시판 수집·DB 저장 테스트. (Celery 앱·worker.py 진입점, POST /internal/trigger-crawl, Dockerfile, Sentry 워커, upsert·content_hash·Repository 분리는 미구현 — ROADMAP 3단계 구현 현황 표에 반영.)

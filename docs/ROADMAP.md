@@ -31,8 +31,9 @@
 
 | 항목 | 내용 |
 |------|------|
-| **현재 단계** | 2단계 완료 → 3단계 진입 준비 |
-| **이번 목표** | Celery·Redis, Playwright 수집기, Railway Dockerfile 워커 |
+| **현재 단계** | **3단계 진행 중** (Playwright 자체 크롤러 및 작업 큐 연동) |
+| **이번 목표** | Celery·Redis 연동 완료, 크롤러 Repository 분리·upsert·content_hash, trigger-crawl API, Railway Dockerfile 워커, Sentry 워커 부착 |
+| **3단계 구현 현황** | 아래 [3단계 구현 현황](#3단계-구현-현황-진행-중) 표 참고. (완료/미완료·규칙 준수 여부) |
 | **작업 기록** | [WORK_LOG.md](./WORK_LOG.md) |
 | **배포** | 백엔드 Railway, 프론트 Vercel. 상세는 [DEPLOYMENT.md](./DEPLOYMENT.md). 프론트 폴더는 **6단계에서** 생성. |
 | **주의사항** | 바이브 코딩 시 실수 방지: [CAUTIONS.md](./CAUTIONS.md) |
@@ -64,6 +65,7 @@
 | 3단계 | College 목록·external_id | 3단계 시작 전 | 수집할 단과대/게시판 목록, College.external_id(소스 식별자) 정의. 크롤러 모듈·시드 데이터 설계에 직결. |
 | 3단계 | Notice.external_id 추출 규칙 | 3단계 시작 전 | 게시판별 공지 고유 ID 추출 방식(게시글 번호, URL 경로 등). 사이트마다 다르므로 소스별 규칙 문서화. |
 | 3단계 | 크롤 주기 | 3단계 Cron 설정 시 | 1시간마다 / 6시간마다 등. 비용·데이터 최신성 균형. |
+| 4단계 | Notice 일정 스키마 정합성 | 4단계 진입 전 | 현재: dates·eligibility(JSONB). 로드맵 5단계: deadline, event_start, event_end, event_title. 복원할지, dates/eligibility를 API에서 매핑할지 결정. |
 | 4단계 | User↔AI 매칭 규칙 | 4단계 스키마 설계 시 | User.profile_json(major, grade 등)와 ai_extracted_json(target_departments, target_grades)의 매칭 로직. "포함 여부" vs "정확 일치". |
 | 4단계 | 학과·학년 값 형식 | 4단계 스키마 설계 시 | target_departments, target_grades 값 범위·형식 통일. User 프로필 값과 비교 가능하도록. (예: "전기전자공학부" vs "컴퓨터공학" 매핑) |
 | 5단계 | 목록 API 페이지네이션 | 5단계 API 설계 시 | cursor vs offset, 기본 page_size. 6단계 무한 스크롤 설계에 영향. |
@@ -182,43 +184,89 @@ DB 클라이언트로 테이블 확인 가능. 앱 부팅 시 연결 검증. Aut
 
 Apify 의존을 줄이고, 백그라운드에서 공지를 수집하는 자체 엔진을 완성한다.
 
-### 할 일
+### 3단계 구현 현황 (진행 중)
+
+아래 표는 **할 일** 항목별로 코드·인프라 기준 구현 여부를 정리한 것. 규칙(계층 분리, CAUTIONS) 준수 여부 포함.
+
+| 할 일 항목 | 구현 여부 | 비고 (파일·규칙 준수) |
+|------------|-----------|------------------------|
+| **Celery & Redis** | | |
+| └ Redis 연결 설정 | ✅ | `app/core/config.py`에 `redis_url` (또는 `REDIS_URL`) 환경변수. `.env.example`에 REDIS_URL·CRAWL_TRIGGER_SECRET. |
+| └ Celery 앱 진입점(broker) | ❌ | `app/worker.py` 등 Celery 앱 생성·broker=Redis 설정 **미구현**. `shared_task`만 정의된 상태. |
+| └ Celery 크롤 태스크 정의 | ✅ | `app/services/tasks.py`: `crawl_college_task(college_code)`, 내부 `asyncio.run(run_crawler_async)`. integrations.mdc(동기 def + asyncio.run) 준수. |
+| **데이터 소스·수집 방식** | | |
+| └ httpx 우선(API 역공학) | ✅ | 공대 크롤러는 **httpx + BeautifulSoup** 사용. Playwright 미사용(해당 게시판은 정적 HTML). |
+| └ 사이트별 크롤러 모듈 분리 | ✅ | `app/services/crawlers/yonsei_engineering.py`. config로 `engineering` URL·선택자 분리. |
+| **크롤러 설정(config) 분리** | ✅ | `app/core/crawler_config.py`: 사이트별 `url`, `selectors.row`, `selectors.link` 등. 코드 하드코딩 최소화. |
+| **수집 대상·데이터** | | |
+| └ 제목·본문·이미지 URL/Base64·첨부 | ✅ | `yonsei_engineering.py`에서 제목, 본문(raw_html), images(URL+Base64), attachments 수집 후 Notice 저장. |
+| └ 포스터 이미지 원본 URL | ⚠️ | `images` JSONB에 URL/Base64 저장. 별도 `poster_image_url` 컬럼은 005 마이그레이션에서 제거됨. 4단계 Multimodal 시 첫 이미지 또는 poster 전용 필드 복원 검토. |
+| **데이터 정합성** | | |
+| └ 공지 유니크 (college_id, external_id) | ✅ | Notice에 `UniqueConstraint("college_id", "external_id")`. 크롤러에서 동일 조합 존재 시 **스킵**(신규만 insert). |
+| └ upsert(재수집 시 갱신) | ❌ | 현재는 **존재하면 스킵**만 구현. **upsert**(있으면 update, 없으면 insert) 미구현. 로드맵 요구사항. |
+| └ content_hash 저장·변경 감지 | ❌ | Notice 모델에 `content_hash` 컬럼 있음. 크롤러에서 **해시 계산·저장** 및 **해시 변경 시에만 4단계 큐 enqueue** 로직 미구현. |
+| └ 특정 기간/소스 재수집·복구 절차 | ❌ | 스크립트 또는 절차 미정리. |
+| **아키텍처 규칙(architecture.mdc)** | | |
+| └ DB 접근은 repositories만 | ❌ | 크롤러가 `services/crawlers`에서 직접 `select(College)`, `select(Notice)`, `session.add(Notice)` 수행. **Repository 레이어**로 분리 필요. |
+| **Railway Playwright 워커** | | |
+| └ Dockerfile (Chromium 설치) | ❌ | Dockerfile·Dockerfile.worker **미구현**. Nixpacks는 Chromium 미설치. Playwright 필요 시 Dockerfile 필수. |
+| └ OOM 방지 옵션·concurrency | — | 워커 진입점 없어 미적용. 구현 시 `--no-sandbox`, `--disable-dev-shm-usage`, `--concurrency=1` 적용. |
+| **재시도·스케줄링** | | |
+| └ Celery autoretry_for | ⚠️ | 태스크에 `autoretry_for` 미명시. 추가 권장. |
+| └ POST /internal/trigger-crawl | ❌ | FastAPI 엔드포인트 **미구현**. 보안 키 검증 후 Celery 태스크 enqueue 필요. |
+| **모니터링** | | |
+| └ Sentry 워커 부착 | ❌ | 워커 프로세스 진입점 없음. 구현 시 worker 초기화 단계에서 Sentry 설정. |
+
+**Notice 스키마 정합성 (4·5단계와 맞추기)**  
+- 현재 DB/모델: `dates`, `eligibility`(JSONB), `images`, `attachments`. 005 마이그레이션에서 `deadline`, `event_start`, `event_end`, `event_title`, `poster_image_url` 제거됨.  
+- 로드맵 확정: 5단계 일정 API는 **deadline, event_start, event_end, event_title** 컬럼 또는 이에 대응하는 구조 전제.  
+- **4단계 진입 전**에 `dates`/`eligibility`를 그대로 쓸지, **deadline/event_* 복원**할지, 또는 API 계층에서 `dates` JSON을 deadline/event_* 형태로 매핑할지 결정 필요. (미리 결정 필요 표에 4단계 항목으로 넣어 둠.)
+
+### 할 일 (상세)
 
 - **Celery & Redis**
-  - Railway에 Redis 추가. Celery로 크롤링 전용 워커 구동. FastAPI(비동기)와 Celery(동기) 역할 분리.
+  - Railway에 Redis 추가. **Celery 앱 진입점**(예: `app/worker.py`)에서 broker=Redis, result backend 설정. Celery로 크롤링 전용 워커 구동. FastAPI(비동기)와 Celery(동기) 역할 분리.
   - AI 호출 태스크는 4단계에서 **rate_limit** 적용(아래 4단계 참고).
 
 - **데이터 소스·수집 방식 (사전 조사 필수)**
   - 크롤 전 타겟 게시판에서 **내부 API(XHR/Fetch)** 존재 여부를 개발자 도구 Network 탭으로 확인. 가능한 소스는 **httpx**로 직접 호출 → 메모리·속도 절감. **Playwright는 JS 렌더링이 반드시 필요한** 극소수 페이지만 사용.
-  - 사이트마다 크롤러 모듈 분리(예: `crawlers/portal_yonsei.py`).
+  - 사이트마다 크롤러 모듈 분리(예: `crawlers/portal_yonsei.py`, `crawlers/yonsei_engineering.py`).
 
 - **크롤러 설정(config) 분리**
-  - CSS 선택자(제목, 날짜, 본문 등)·URL 패턴·페이징 규칙을 **코드에 하드코딩하지 말고** JSON config 또는 DB로 분리. 사이트 개편 시 **config만 수정**하고 재배포 없이 적용 가능하도록 설계.
+  - CSS 선택자(제목, 날짜, 본문 등)·URL 패턴·페이징 규칙을 **코드에 하드코딩하지 말고** JSON config 또는 `app/core/crawler_config.py` 등으로 분리. 사이트 개편 시 **config만 수정**하고 재배포 없이 적용 가능하도록 설계.
 
-- **Playwright 수집기**
-  - 연세대 포털·단과대 게시판 수집. 제목, 본문, **포스터 이미지 원본 URL** 포함. (API 역공학이 불가한 페이지에 한함.)
+- **Playwright 수집기 (필요 시)**
+  - 연세대 포털·단과대 게시판 중 **정적 HTML로 수집 불가한** 페이지만 Playwright 사용. 제목, 본문, **포스터 이미지 원본 URL**(또는 images 배열) 포함.
 
 - **데이터 정합성 (변동·복구 대비)**
-  - **공지 유니크: `(college_id, external_id)`** (2단계 코드 유지). URL은 페이징/쿼리에 따라 변할 수 있어 중복 위험이 있으므로 사용하지 않음. 저장은 **upsert**로 재수집 시 중복 방지.
+  - **공지 유니크: `(college_id, external_id)`** (2단계 코드 유지). URL은 페이징/쿼리에 따라 변할 수 있어 중복 위험이 있으므로 사용하지 않음. 저장은 **upsert**로 재수집 시 중복 방지·기존 공지 갱신.
   - **본문 해시(content_hash) 기반 변경 감지**: 제목+본문(또는 raw_html) 해시를 저장. 해시가 바뀌었을 때만 4단계 AI 재추출 큐에 넣고, 그렇지 않으면 덮어쓰기·AI 호출 생략으로 비용 절감.
   - 문제 발생 시: 특정 기간/소스만 삭제 후 재수집하는 스크립트 또는 절차를 두기.
+
+- **계층형 아키텍처 준수**
+  - **DB 접근은 repositories만**. 크롤러는 `repositories`(예: college_repository, notice_repository)를 통해 College 조회·Notice upsert. `services/crawlers`에서는 비즈니스 로직(파싱·흐름 제어)만 수행.
 
 - **Railway Playwright 워커 (인프라 필수)**
   - Nixpacks는 Chromium 등 **OS 수준 의존성**을 설치하지 않아 "Browser executable not found"로 실패함. **직접 작성한 Dockerfile** 사용. Dockerfile에 `RUN playwright install --with-deps chromium` 명시.
   - **OOM(Out of Memory) 방지**: Railway RAM 제한 때문에 Chromium 다수 실행 시 OOM Kill 위험.
     - 브라우저 실행 시 **`--no-sandbox`, `--disable-dev-shm-usage`** 옵션 반드시 추가.
-    - **Celery 워커 동시성(concurrency) 1~2로 제한**. 예: `celery -A app.worker worker -l info --concurrency=1`. 브라우저가 동시에 여러 개 뜨지 않도록 함. 여러 단과대는 순차 처리 또는 큐에 나눠 넣어도 concurrency 상한으로 동시 실행 개수 제한.
+    - **Celery 워커 동시성(concurrency) 1~2로 제한**. 예: `celery -A app.worker worker -l info --concurrency=1`. 브라우저가 동시에 여러 개 뜨지 않도록 함.
 
 - **재시도·스케줄링**
-  - Celery `autoretry_for` 등으로 재시도.
-  - **스케줄러: Railway Cron(또는 외부 Cron)** 으로 **POST /internal/trigger-crawl** 호출. FastAPI에 보안 키(헤더 또는 쿼리) 검증 엔드포인트 구현. 해당 엔드포인트에서 Celery 크롤 태스크 enqueue. Celery Beat는 서비스 추가 비용이 들므로 사용하지 않음. Cron이 1시간마다(또는 정해진 주기로) 위 엔드포인트를 호출.
+  - Celery 태스크에 `autoretry_for` 등으로 재시도 설정.
+  - **스케줄러: Railway Cron(또는 외부 Cron)** 으로 **POST /internal/trigger-crawl** 호출. FastAPI에 보안 키(헤더 예: X-Admin-Key 또는 쿼리) 검증 엔드포인트 구현. 해당 엔드포인트에서 Celery 크롤 태스크 enqueue. Celery Beat는 서비스 추가 비용이 들므로 사용하지 않음. Cron이 1시간마다(또는 정해진 주기로) 위 엔드포인트를 호출.
 
 - **모니터링**
-  - **Sentry를 3단계부터** 백엔드·크롤러 워커에 부착. 크롤러 실패 시 빨리 추적 가능. (6단계에서 프론트 에러 추가.)
+  - **Sentry를 3단계부터** 백엔드·크롤러 워커에 부착. 워커 진입점에서 Sentry 초기화. 크롤러 실패 시 빨리 추적 가능. (6단계에서 프론트 에러 추가.)
+
+### 검증
+
+- 로컬 또는 CI에서 Redis 연결·Celery 워커 기동 후 `crawl_college_task.delay("engineering")` 호출 시 공대 게시판 수집·DB 저장 성공 여부 확인.
+- (선택) 지정 시간에 trigger-crawl 호출 → 큐 적재 → 워커 처리 end-to-end 검증.
 
 ### 마일스톤
 
-지정 시간마다 크롤러가 최신 공지를 DB에 Raw로 저장. Playwright 워커는 Dockerfile 기반으로 Railway에서 정상 동작.
+지정 시간마다 크롤러가 최신 공지를 DB에 Raw로 저장(upsert·content_hash 반영). Playwright 워커는 Dockerfile 기반으로 Railway에서 정상 동작. POST /internal/trigger-crawl로 Cron 연동 가능.
 
 ---
 
@@ -379,3 +427,10 @@ Vercel 배포 사이트에서 프로필 설정 후 자신에게 맞는 최신 �
 - **4단계**: 입력(raw_html 본문 추출·poster_image_url)/출력(ai_extracted_json, deadline, event_*, hashtags) 명시. 자격요건 Pydantic 최소 필드(target_departments, target_grades, deadline, event_title, event_start/end) 및 rate_limit='10/m' 명시.
 - **5단계**: user_calendar_events에 UniqueConstraint(user_id, notice_id). 일정 API GET /v1/calendar/events?year=&month= 및 응답(매칭 공지 일정 배열 + user_calendar_events 배열) 스펙 명시.
 - **이유**: 사용자와 합의한 선택을 로드맵·코드·배포 문서에 반영해 이후 단계 구현 시 일관성 유지.
+
+### 2026-02-18 지금 상태·3단계 상세 반영 (로드맵 본문 수정)
+
+- **지금 상태**: 현재 단계를 "3단계 진행 중"으로 변경. 이번 목표에 Celery·Redis 완료, 크롤러 Repository 분리·upsert·content_hash, trigger-crawl API, Dockerfile 워커, Sentry 워커 부착 명시. "3단계 구현 현황" 표 링크 추가.
+- **3단계**: "3단계 구현 현황 (진행 중)" 표 추가 — 할 일 항목별 구현 여부(✅/❌/⚠️)·파일·규칙 준수. 할 일에 계층형 아키텍처(DB는 repositories만)·upsert·content_hash·trigger-crawl 상세 보강. 검증·마일스톤 문구 보강. Notice 스키마 정합성(dates/eligibility vs deadline/event_*) 안내 및 4단계 진입 전 결정 필요 명시.
+- **미리 결정 필요**: 4단계 "Notice 일정 스키마 정합성" 행 추가.
+- **이유**: 3단계 진행 중 어디까지 구현되었는지·규칙 대비 누락을 한눈에 보이게 하고, 남은 작업·마일스톤을 명확히 하기 위함.
