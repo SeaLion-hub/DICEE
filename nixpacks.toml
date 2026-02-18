@@ -1,6 +1,4 @@
 # nixpacks.toml
 
 [start]
-# 변경 전: cmd = "alembic upgrade head && uvicorn ..."
-# 변경 후: (reset_db.py를 먼저 실행 -> 마이그레이션 -> 앱 시작)
-cmd = "python scripts/reset_db.py && alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"
+cmd = "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"
