@@ -95,7 +95,7 @@ def get_business_notice_links(list_url):
                 no_text = ""
                 if prev_td and isinstance(prev_td, Tag):
                     no_text = prev_td.get_text(strip=True)
-                
+
                 # ★ 숫자가 아닌 경우(예: '공지', 'Link' 등) 빈 문자열로 처리하여
                 # _external_id_from_url이 url에서 idx를 파싱하도록 유도
                 if not no_text.isdigit():

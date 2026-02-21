@@ -268,13 +268,13 @@ async def crawl_college(session: AsyncSession, college_code: str) -> int:
         )
         if payload is None:
             continue
-            
+
         # ★ 중복 ID 방어 로직 (동일한 목록에 고정 공지가 여러 번 뜰 때 예방)
         ext_id = payload["external_id"]
         if ext_id in seen_external_ids:
             continue
         seen_external_ids.add(ext_id)
-        
+
         notices.append(payload)
 
     if not notices:
