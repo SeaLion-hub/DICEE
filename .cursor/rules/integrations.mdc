@@ -1,0 +1,38 @@
+---
+description: AI·외부 연동 제약 (Gemini Structured Output, Celery 동기/비동기, Playwright)
+alwaysApply: true
+---
+
+# AI 및 외부 연동 제약 조건
+
+Celery, Playwright, Gemini AI 연동 시 아래 가이드라인을 **반드시** 따른다.
+
+---
+
+## Gemini AI (Structured Outputs)
+
+- Gemini 1.5 API 호출 시 **텍스트 파싱을 시도하지 마라.**  
+  `re.search()`, `json.loads()` 로 응답 문자열에서 JSON을 추출하는 방식은 **금지**한다.
+- **반드시** `response_schema` (또는 해당 SDK의 구조화 출력 옵션) 파라미터에 **Pydantic BaseModel** 을 전달하여, **JSON 형식으로만** 응답을 받아라.
+- 이렇게 해야 AI 응답 형식이 바뀌어도 파이프라인이 깨지지 않는다.
+
+---
+
+## Celery & 동기/비동기 혼용 금지
+
+- **Celery Task는 동기(Sync) 환경**이다. Task 함수 안에서는 기본적으로 `await` 를 쓸 수 없다.
+- 워커 내부에서 **비동기 ORM(AsyncSession)** 을 써야 한다면, **반드시** `asyncio.run()` 으로 이벤트 루프를 생성해서 래핑하라.  
+  예: `asyncio.run(some_async_db_operation(session))` 처럼 동기 태스크 안에서 한 번만 비동기 블록 실행.
+- Celery 태스크 함수 자체를 `async def` 로 정의하지 마라. 동기 `def` 로 두고, 내부에서 필요할 때만 `asyncio.run()` 을 사용하라.
+- **Gemini API를 호출하는 Celery 태스크**에는 **rate_limit**(예: `rate_limit='10/m'`)을 반드시 지정하라. 동시에 많은 요청이 나가면 429 에러로 워커가 실패한다.
+- 429 재시도 시 **지수 백오프**(`retry_backoff=True`, `retry_backoff_max=600`)를 적용하라. 즉시 재시도하면 연속 429가 발생한다.
+
+---
+
+## Playwright 설정
+
+- 크롤러 코드 작성 시, **서버 메모리 폭주(OOM)** 를 막기 위해 브라우저 실행 옵션에 다음을 **무조건** 포함하라:
+  - `--no-sandbox`
+  - `--disable-dev-shm-usage`
+- Chromium/Playwright 런치 시 `args` 리스트에 위 옵션을 넣어라. Railway 등 제한된 RAM 환경에서 OOM Kill을 방지한다.
+- **동시에 여러 브라우저 인스턴스나 여러 탭(Context)** 을 열지 마라. Celery 워커는 **concurrency 1~2**로 제한하고, 한 번에 하나의 크롤 작업만 실행하도록 설계하라.

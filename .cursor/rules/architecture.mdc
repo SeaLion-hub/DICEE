@@ -1,0 +1,44 @@
+---
+description: 계층형 아키텍처 엄격 분리 (Routers / Services / Repositories)
+alwaysApply: true
+---
+
+# 계층형 아키텍처 엄격 분리
+
+관심사 분리를 지키지 않으면 main.py나 router 한 파일에 모든 것이 몰리는 경향이 있다. 아래 규칙을 **반드시** 따른다.
+
+---
+
+## 관심사 분리 (Separation of Concerns)
+
+### Routers (`api/`)
+
+- **HTTP 요청/응답 처리**와 **파라미터 검증**만 담당한다.
+- **비즈니스 로직은 절대 쓰지 마라.** 라우터는 Service를 호출하고, 그 결과를 응답으로만 변환한다.
+- `Request`, `Response`, `HTTPException` 등 HTTP 관련 객체는 이 레이어에서만 다룬다.
+
+### Services (`services/`)
+
+- **핵심 비즈니스 로직**(AI 매칭, 자격 요건 비교, 유효성 검사 등)만 작성한다.
+- **HTTP 관련 객체를 임포트하지 마라.** `Request`, `Response`, `HTTPException` 등을 services 폴더에서 사용하지 않는다.
+- 필요한 데이터는 **인자**로 받고, **반환값**으로만 결과를 넘긴다. Repository를 호출해 데이터를 가져오고, 로직만 수행한다.
+
+### Repositories (`repositories/`)
+
+- **데이터베이스 쿼리**(select, insert, update, delete)는 **오직 이 폴더에서만** 수행한다.
+- 라우터나 서비스에서 직접 `session.execute(select(...))` 를 호출하지 마라. Repository 함수를 통해만 DB에 접근한다.
+- 반환은 ORM 객체 또는 Pydantic 모델 등 **데이터만** 넘기고, HTTP/비즈니스 판단은 하지 않는다.
+
+### 호출 방향 (엄수)
+
+- **Router** → Service만 호출한다. Repository를 직접 호출하지 마라.
+- **Service** → Repository(및 필요 시 다른 Service)만 호출한다. Router를 호출하지 마라.
+- **Repository** → DB만 접근한다. Service·Router를 호출하지 마라. 한 단계를 건너뛰지 마라.
+
+---
+
+## 에러 처리 통일
+
+- **Service 레이어**에서는 **커스텀 Exception** 이나 표준 **Exception** 을 발생시킨다. `HTTPException` 을 raise 하지 마라.
+- **예외를 HTTP로 변환**하는 것은 **Router 레이어** 또는 **전역 Exception Handler** 에서만 수행한다. Service가 던진 예외를 잡아 `HTTPException` 으로 변환하라.
+- 이렇게 해야 Service는 HTTP에 의존하지 않고, 테스트·재사용이 가능하다.

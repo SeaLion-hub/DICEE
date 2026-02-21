@@ -1,0 +1,36 @@
+---
+description: 기술 스택 버전 및 절대 금지 문법 (SQLAlchemy 2.0, Pydantic v2, FastAPI Depends)
+alwaysApply: true
+---
+
+# 기술 스택 및 절대 금지 문법
+
+구버전(동기식)과 신버전(비동기식) 문법을 섞지 않도록 아래를 **반드시** 따른다.
+
+---
+
+## SQLAlchemy 2.0 (비동기) 강제
+
+- **절대** `session.query(Model)` 를 사용하지 마라.  
+  **무조건** SQLAlchemy 2.0 스타일인 `select(Model)` 과 `await session.execute()` 를 사용하라.
+- DB 모델 정의 시 **절대** `Column()` 을 사용하지 마라.  
+  **무조건** `Mapped[...]` 와 `mapped_column()` 을 사용하라.
+- 세션은 **비동기** `AsyncSession` 을 사용한다. 동기 `Session` 은 사용하지 마라.
+
+---
+
+## Pydantic v2 강제
+
+- **절대** Pydantic v1 문법을 사용하지 마라:
+  - `.dict()` → 사용 금지. **대신** `.model_dump()` 를 사용하라.
+  - `.parse_obj()` → 사용 금지. **대신** `.model_validate()` 를 사용하라.
+  - 기타 v1 전용 API 사용 금지.
+- **무조건** Pydantic v2 문법만 사용하라: `model_dump()`, `model_validate()`, `model_validate_json()` 등.
+
+---
+
+## 의존성 주입 (FastAPI Depends)
+
+- 비동기 DB 세션은 **무조건** `Depends(get_db)` 를 통해 주입받아 사용하라.
+- 라우터에서 직접 엔진/세션을 생성하거나 전역 세션을 쓰지 마라. 항상 `get_db` 로 주입받은 `AsyncSession` 만 사용하라.
+- 라우터 핸들러는 **async def** 를 사용하라. **sync 블로킹 호출**(`time.sleep`, 동기 HTTP 요청, 동기 파일 I/O 등)을 async 라우터 안에서 하지 마라. FastAPI 이벤트 루프가 막히면 다른 요청을 처리하지 못한다.
