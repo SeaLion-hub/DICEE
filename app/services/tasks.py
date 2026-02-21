@@ -35,8 +35,8 @@ def _set_task_context(task_id: str | None, college_code: str | None = None):
     retry_backoff_max=600,
     retry_jitter=True,
 )
-def crawl_college_task(college_code: str):
-    """Celery 크롤 태스크. 동기 세션·crawl_college_sync. 완료/예외 시 college별 분산락 조기 해제."""
+def crawl_college_task(college_code: str, lock_token: str | None = None):
+    """Celery 크롤 태스크. 동기 세션·crawl_college_sync. 완료/예외 시 college별 분산락 조기 해제(소유자만)."""
     task_id = getattr(crawl_college_task.request, "id", None) or ""
     _set_task_context(str(task_id) if task_id else None, college_code)
     logger.info("Task Started: task_id=%s college_code=%s", task_id, college_code)
@@ -58,7 +58,7 @@ def crawl_college_task(college_code: str):
         logger.info(msg)
         return {"upserted": count, "enqueued_ai": enqueued_ai}
     finally:
-        release_trigger_lock_sync(college_code)
+        release_trigger_lock_sync(college_code, lock_token)
 
 
 @shared_task(

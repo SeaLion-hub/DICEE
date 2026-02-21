@@ -10,7 +10,7 @@ from bs4 import BeautifulSoup, Comment, Tag
 from requests.exceptions import RequestException
 
 from app.core.crawler_config import CRAWLER_HEADERS
-from app.core.crawl_http import fetch_html_async
+from app.core.crawl_http import HtmlTooLargeError, fetch_html, fetch_html_async
 
 logger = logging.getLogger(__name__)
 
@@ -53,8 +53,14 @@ def get_body_soup(soup):
 
 def scrape_science_detail(url):
     try:
-        response = requests.get(url, headers=CRAWLER_HEADERS, timeout=10)
-        soup = BeautifulSoup(response.text, 'html.parser')
+        try:
+            text = fetch_html(url, timeout=10)
+        except HtmlTooLargeError as e:
+            logger.warning("scrape_science_detail body too large url=%s: %s", url, e)
+            raise RequestException from e
+        except RequestException:
+            raise
+        soup = BeautifulSoup(text, "html.parser")
 
         title = "제목 없음"
         t_tag = soup.find('h3', class_='nxb-view__header-title')
@@ -133,9 +139,14 @@ def scrape_science_detail(url):
 def get_science_links(url):
     links = []
     try:
-        response = requests.get(url, headers=CRAWLER_HEADERS, timeout=10)
-        response.raise_for_status()
-        soup = BeautifulSoup(response.text, 'html.parser')
+        try:
+            text = fetch_html(url, timeout=10)
+        except HtmlTooLargeError as e:
+            logger.warning("get_science_links body too large url=%s: %s", url, e)
+            return []
+        except RequestException:
+            return []
+        soup = BeautifulSoup(text, "html.parser")
 
         rows = soup.select('.nxb-list-table tbody tr')
         for row in rows:

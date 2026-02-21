@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
@@ -16,17 +17,31 @@ def create_crawl_run_sync(
     college_id: int,
     celery_task_id: str,
 ) -> CrawlRun:
-    """크롤 시작 시 1건 생성 (동기, 워커용). status=running."""
+    """크롤 시작 시 1건 생성 또는 갱신(upsert). 재시도 시 동일 task_id로 상태 단일화."""
     now = datetime.now(UTC)
-    row = CrawlRun(
+    stmt = insert(CrawlRun).values(
         college_id=college_id,
         celery_task_id=celery_task_id,
         started_at=now,
         status="running",
         notices_upserted=0,
+        finished_at=None,
+        error_message=None,
+    ).on_conflict_do_update(
+        index_elements=["celery_task_id"],
+        set_={
+            "started_at": now,
+            "status": "running",
+            "notices_upserted": 0,
+            "finished_at": None,
+            "error_message": None,
+        },
     )
-    session.add(row)
+    session.execute(stmt)
     session.flush()
+    row = session.execute(
+        select(CrawlRun).where(CrawlRun.celery_task_id == celery_task_id).limit(1)
+    ).scalar_one()
     session.refresh(row)
     return row
 

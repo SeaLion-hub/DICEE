@@ -24,3 +24,8 @@ def get_google_key_fetcher(request: Request) -> AsyncKeyFetcher:
 def get_redis_blocklist(request: Request) -> Any:
     """앱 lifespan에서 생성한 Blocklist용 Redis 비동기 클라이언트. 미설정 시 None."""
     return getattr(request.app.state, "redis_blocklist_client", None)
+
+
+def get_redis_trigger_lock(request: Request) -> Any:
+    """앱 lifespan에서 생성한 Trigger 락 전용 Redis 비동기 클라이언트. 미설정 시 None."""
+    return getattr(request.app.state, "redis_trigger_lock_client", None)

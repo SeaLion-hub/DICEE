@@ -4,7 +4,8 @@
 
 ## 문서 링크
 
-- [ROADMAP.md](./ROADMAP.md)
+- [ROADMAP.md](./ROADMAP.md) — 전략·원칙·마일스톤·기둥·지표
+- [ROADMAP_PHASES.md](./ROADMAP_PHASES.md) — 단계별 할 일·확정 사항·예상 문제·추가 검토
 - [DEPLOYMENT.md](./DEPLOYMENT.md)
 - [WORK_LOG.md](./WORK_LOG.md)
 
@@ -144,6 +145,8 @@
 |----------|------|------|
 | **비용·리소스 무시** | 웹+DB+Redis+워커 동시 운영 시 Railway 한도·비용을 안 보면 갑자기 과금·다운. | DEPLOYMENT "비용·리소스" 참고. 플랜별 제한·월 상한을 주기적으로 확인. |
 | **Start Command 불일치** | 로컬은 `main:app`, Railway는 `app.main:app` 처럼 다르면 배포만 실패. | **DEPLOYMENT와 ROADMAP의 진입점·Start Command** 와 코드가 일치하는지 확인. |
+| **Redis SPOF** | Blocklist와 Trigger 락은 **풀 분리**로 장애 전파를 완화하지만, **단일 Redis 인스턴스는 SPOF**. 인스턴스 다운 시 인증·락 모두 불가. | 문서화·모니터링 필수. 필요 시 Redis HA/Sentinel 등은 별도 검토. |
+| **분산 락 좀비 복구** | 워커 하드 킬·네트워크 파티션 시 `finally`가 실행되지 않아 락이 해제되지 않을 수 있음. **TTL이 유일한 복구 수단**. Compare-and-del은 "정상 종료 시 타인 락 삭제 방지"용. | `TRIGGER_LOCK_TTL_SECONDS`는 최대 크롤 소요 시간보다 크게, 그러나 죽은 워커가 락을 붙잡는 시간은 짧게 유지. 워커 정상 완료 시에는 반드시 compare-and-del로 조기 해제. |
 
 **배포 직전 10초 체크리스트**
 

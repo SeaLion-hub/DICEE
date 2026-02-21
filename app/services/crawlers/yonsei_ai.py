@@ -10,7 +10,7 @@ from bs4 import BeautifulSoup, Comment, NavigableString, Tag
 from requests.exceptions import RequestException
 
 from app.core.crawler_config import CRAWLER_HEADERS
-from app.core.crawl_http import fetch_html_async
+from app.core.crawl_http import HtmlTooLargeError, fetch_html, fetch_html_async
 
 logger = logging.getLogger(__name__)
 
@@ -81,8 +81,14 @@ def extract_between_comments(soup, start_keyword, end_keyword):
 
 def scrape_computing_detail(url):
     try:
-        response = requests.get(url, headers=CRAWLER_HEADERS, timeout=10)
-        soup = BeautifulSoup(response.text, 'html.parser')
+        try:
+            text = fetch_html(url, timeout=10)
+        except HtmlTooLargeError as e:
+            logger.warning("scrape_computing_detail body too large url=%s: %s", url, e)
+            raise RequestException from e
+        except RequestException:
+            raise
+        soup = BeautifulSoup(text, "html.parser")
 
         # 1. 제목
         title = "제목 없음"
@@ -178,9 +184,14 @@ def get_computing_notice_links(list_url):
     그누보드 게시판 목록에서 '공지'를 제외하고 '번호'가 있는 게시물의 링크를 추출합니다.
     """
     try:
-        response = requests.get(list_url, headers=CRAWLER_HEADERS, timeout=10)
-        soup = BeautifulSoup(response.text, 'html.parser')
-
+        try:
+            text = fetch_html(list_url, timeout=10)
+        except HtmlTooLargeError as e:
+            logger.warning("get_computing_notice_links body too large list_url=%s: %s", list_url, e)
+            return []
+        except RequestException:
+            return []
+        soup = BeautifulSoup(text, "html.parser")
         links = []
 
         # 그누보드 게시판은 보통 tbl_head01 클래스나 그냥 tbody 안의 tr을 씁니다.

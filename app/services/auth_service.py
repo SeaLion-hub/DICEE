@@ -197,7 +197,12 @@ async def google_login(
     4. User upsert, JWT 발급
     """
     allowed = _allowed_redirect_uris()
-    if allowed and redirect_uri is not None and redirect_uri.strip() not in allowed:
+    # Default-Deny: allowlist 비어 있으면 로그인 거부. 비어 있지 않으면 redirect_uri 필수 + exact match.
+    if not allowed:
+        raise AuthError("OAuth redirect allowlist must be configured")
+    if not redirect_uri or not redirect_uri.strip():
+        raise AuthError("redirect_uri required")
+    if redirect_uri.strip() not in allowed:
         raise AuthError("redirect_uri not allowed")
     token_data = await exchange_google_code(code, redirect_uri, http_client)
     id_token = token_data.id_token

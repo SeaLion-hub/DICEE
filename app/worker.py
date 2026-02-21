@@ -33,14 +33,13 @@ app.conf.update(
     broker_transport_options={"visibility_timeout": 3600},  # 1시간. 크롤 태스크 장시간 대비.
 )
 
-# rediss://(TLS)일 때 SSL 옵션 적용 (Railway Redis 등)
+# rediss://(TLS)일 때 SSL 옵션 적용. 인증서 검증 필수(MITM 방지).
 if broker_url.startswith("rediss://"):
-    app.conf.broker_use_ssl = {
-        "ssl_cert_reqs": ssl.CERT_NONE,  # Railway 등 자체 서명 인증서 대응
-    }
-    app.conf.redis_backend_use_ssl = {
-        "ssl_cert_reqs": ssl.CERT_NONE,
-    }
+    ssl_options = {"ssl_cert_reqs": ssl.CERT_REQUIRED}
+    if getattr(settings, "redis_ca_certs", None):
+        ssl_options["ssl_ca_certs"] = settings.redis_ca_certs
+    app.conf.broker_use_ssl = ssl_options
+    app.conf.redis_backend_use_ssl = ssl_options
 
 # 태스크 등록 (app.services.tasks가 이 app에 바인딩되도록 로드)
 from app.services import tasks  # noqa: F401, E402

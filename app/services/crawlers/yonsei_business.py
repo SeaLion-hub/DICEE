@@ -10,7 +10,7 @@ from bs4 import BeautifulSoup, Tag
 from requests.exceptions import RequestException
 
 from app.core.crawler_config import CRAWLER_HEADERS
-from app.core.crawl_http import HtmlTooLargeError, fetch_html_async
+from app.core.crawl_http import HtmlTooLargeError, fetch_html, fetch_html_async
 
 logger = logging.getLogger(__name__)
 
@@ -62,12 +62,14 @@ def get_business_notice_links(list_url):
     경영대 게시판에서 <td class="Subject"> 내부의 링크만 수집
     """
     try:
-        response = requests.get(list_url, headers=CRAWLER_HEADERS, timeout=10)
-
-        # ★ 경영대 인코딩 보정 (CP949/EUC-KR)
-        response.encoding = 'cp949'  # 경영대 게시판 CP949/EUC-KR 명시
-
-        soup = BeautifulSoup(response.text, 'html.parser')
+        try:
+            text = fetch_html(list_url, timeout=10, encoding="cp949")
+        except HtmlTooLargeError as e:
+            logger.warning("get_business_notice_links body too large list_url=%s: %s", list_url, e)
+            return []
+        except RequestException:
+            return []
+        soup = BeautifulSoup(text, "html.parser")
         links: list[dict[str, Any]] = []
         seen_urls: set[str] = set()
 
@@ -127,12 +129,14 @@ def get_business_notice_links(list_url):
 
 def scrape_business_detail(url):
     try:
-        response = requests.get(url, headers=CRAWLER_HEADERS, timeout=10)
-
-        # ★ 인코딩 보정
-        response.encoding = 'cp949'  # 경영대 게시판 CP949/EUC-KR 명시
-
-        soup = BeautifulSoup(response.text, 'html.parser')
+        try:
+            text = fetch_html(url, timeout=10, encoding="cp949")
+        except HtmlTooLargeError as e:
+            logger.warning("scrape_business_detail body too large url=%s: %s", url, e)
+            raise RequestException from e
+        except RequestException:
+            raise
+        soup = BeautifulSoup(text, "html.parser")
 
         # 1. 제목
         title = "제목 없음"

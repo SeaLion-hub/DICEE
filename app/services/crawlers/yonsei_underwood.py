@@ -10,7 +10,7 @@ from bs4 import BeautifulSoup, Tag
 from requests.exceptions import RequestException
 
 from app.core.crawler_config import CRAWLER_HEADERS
-from app.core.crawl_http import fetch_html_async
+from app.core.crawl_http import HtmlTooLargeError, fetch_html, fetch_html_async
 
 logger = logging.getLogger(__name__)
 
@@ -47,10 +47,14 @@ def get_uic_links(url):
     """UIC 메인 페이지의 divbox_half_news 박스 3개에서 각각 상위 5개의 링크를 추출합니다."""
     links = []
     try:
-        response = requests.get(url, headers=CRAWLER_HEADERS, timeout=10)
-        response.raise_for_status()
-        soup = BeautifulSoup(response.text, 'html.parser')
-
+        try:
+            text = fetch_html(url, timeout=10)
+        except HtmlTooLargeError as e:
+            logger.warning("get_uic_links body too large url=%s: %s", url, e)
+            return []
+        except RequestException:
+            return []
+        soup = BeautifulSoup(text, "html.parser")
         # 사진에서 확인한 3개의 half box 모두 찾기
         half_boxes = soup.find_all('div', class_='divbox_half_news')
 
@@ -108,8 +112,14 @@ def get_uic_links(url):
 # ================================================================================
 def scrape_uic_detail(url):
     try:
-        response = requests.get(url, headers=CRAWLER_HEADERS, timeout=10)
-        soup = BeautifulSoup(response.text, 'html.parser')
+        try:
+            text = fetch_html(url, timeout=10)
+        except HtmlTooLargeError as e:
+            logger.warning("scrape_uic_detail body too large url=%s: %s", url, e)
+            raise RequestException from e
+        except RequestException:
+            raise
+        soup = BeautifulSoup(text, "html.parser")
 
         title = "제목 없음"
         title_div = soup.find('div', id='BoardViewTitle')

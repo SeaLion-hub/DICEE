@@ -9,7 +9,7 @@ from bs4.element import PageElement
 from requests.exceptions import RequestException
 
 from app.core.crawler_config import CRAWLER_HEADERS
-from app.core.crawl_http import HtmlTooLargeError, fetch_html_async
+from app.core.crawl_http import HtmlTooLargeError, fetch_html, fetch_html_async
 
 logger = logging.getLogger(__name__)
 
@@ -62,11 +62,14 @@ def finalize_text(text):
 
 def scrape_yonsei_engineering_precise(url):
     try:
-        response = requests.get(url, headers=CRAWLER_HEADERS, timeout=10)
-        if response.status_code != 200:
+        try:
+            text = fetch_html(url, timeout=10)
+        except HtmlTooLargeError as e:
+            logger.warning("scrape_yonsei_engineering_precise body too large url=%s: %s", url, e)
             return None, "접속 실패", None, [], []
-
-        soup = BeautifulSoup(response.text, 'html.parser')
+        except RequestException:
+            return None, "접속 실패", None, [], []
+        soup = BeautifulSoup(text, "html.parser")
 
         # 제목
         title = "제목 없음"
@@ -114,6 +117,7 @@ def scrape_yonsei_engineering_precise(url):
 
         # 이미지
         images_data = []
+        seen_image_urls: set[str] = set()
         if main_container and isinstance(main_container, Tag):
             img_tags = main_container.find_all('img')
             for idx, img in enumerate(img_tags):
@@ -146,8 +150,9 @@ def scrape_yonsei_engineering_precise(url):
                         full_url = src
                     else:
                         continue
-                    if any(d['data'] == full_url for d in images_data if d['type'] == 'url'):
+                    if full_url in seen_image_urls:
                         continue
+                    seen_image_urls.add(full_url)
                     fn_raw = img.get('data-file_name')
                     file_name = fn_raw if isinstance(fn_raw, str) and fn_raw else os.path.basename(src.split('?')[0])
                     if not file_name or '.' not in file_name:
@@ -192,9 +197,14 @@ def scrape_yonsei_engineering_precise(url):
 # --------------------------------------------------------------------------------
 def get_notice_links(list_url):
     try:
-        response = requests.get(list_url, headers=CRAWLER_HEADERS, timeout=10)
-        soup = BeautifulSoup(response.text, 'html.parser')
-
+        try:
+            text = fetch_html(list_url, timeout=10)
+        except HtmlTooLargeError as e:
+            logger.warning("get_notice_links body too large list_url=%s: %s", list_url, e)
+            return []
+        except RequestException:
+            return []
+        soup = BeautifulSoup(text, "html.parser")
         links = []
         rows = soup.select('tbody tr')
 

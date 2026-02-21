@@ -53,26 +53,6 @@ MAX_HTML_BYTES = 5 * 1024 * 1024
 UPSERT_CHUNK_SIZE = 50
 
 
-def _normalize_url_for_hash(url: str) -> str:
-    """쿼리 스트링 노이즈(utm, session 등) 제거 후 URL 재조립. 동일 공지가 서로 다른 URL로 무한 적재되는 것 방지."""
-    try:
-        p = urlparse(url)
-        q = parse_qs(p.query, keep_blank_values=False)
-        # 추적/세션 파라미터 제거 (소문자 키 기준)
-        noise_prefixes = ("utm_", "fbclid", "gclid", "session", "sid", "from", "ref")
-        filtered = {
-            k: v for k, v in q.items()
-            if not any(k.lower().startswith(prefix) for prefix in noise_prefixes)
-        }
-        # 쿼리 재구성 (정렬해 일관된 해시)
-        new_query = "&".join(
-            f"{k}={v[0]}" for k, v in sorted(filtered.items()) if v
-        )
-        return urlunparse((p.scheme, p.netloc, p.path, p.params, new_query, ""))
-    except (ValueError, AttributeError):
-        return url
-
-
 def _url_path_only_for_hash(url: str) -> str:
     """해시 fallback용: 쿼리 제거, path만 사용. 세션/추적 파라미터로 동일 공지가 중복 저장되는 것 방지."""
     try:

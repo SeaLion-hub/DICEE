@@ -11,7 +11,7 @@ from bs4.element import PageElement
 from requests.exceptions import RequestException
 
 from app.core.crawler_config import CRAWLER_HEADERS
-from app.core.crawl_http import fetch_html_async
+from app.core.crawl_http import HtmlTooLargeError, fetch_html, fetch_html_async
 
 logger = logging.getLogger(__name__)
 
@@ -61,9 +61,14 @@ def get_medicine_notice_links(list_url):
     (페이지네이션 버튼 전까지만 수집하는 효과)
     """
     try:
-        response = requests.get(list_url, headers=CRAWLER_HEADERS, timeout=10)
-        soup = BeautifulSoup(response.text, 'html.parser')
-
+        try:
+            text = fetch_html(list_url, timeout=10)
+        except HtmlTooLargeError as e:
+            logger.warning("get_medicine_notice_links body too large list_url=%s: %s", list_url, e)
+            return []
+        except RequestException:
+            return []
+        soup = BeautifulSoup(text, "html.parser")
         links: list[dict[str, Any]] = []
 
         # ★ 핵심 수정: 주석 대신 'bbs-item' 클래스를 직접 타격
@@ -121,8 +126,14 @@ def get_medicine_notice_links(list_url):
 
 def scrape_medicine_detail(url):
     try:
-        response = requests.get(url, headers=CRAWLER_HEADERS, timeout=10)
-        soup = BeautifulSoup(response.text, 'html.parser')
+        try:
+            text = fetch_html(url, timeout=10)
+        except HtmlTooLargeError as e:
+            logger.warning("scrape_medicine_detail body too large url=%s: %s", url, e)
+            raise RequestException from e
+        except RequestException:
+            raise
+        soup = BeautifulSoup(text, "html.parser")
 
         # 1. 제목
         title = "제목 없음"

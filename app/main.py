@@ -39,7 +39,7 @@ from pyjwt_key_fetcher import AsyncKeyFetcher
 from app.api import health, internal
 from app.api.v1 import auth as v1_auth
 from app.core.database import get_engine, init_db, verify_db_connection
-from app.core.redis import create_blocklist_client
+from app.core.redis import create_blocklist_client, create_trigger_lock_client
 
 logger = logging.getLogger(__name__)
 
@@ -54,10 +54,13 @@ async def lifespan(app: FastAPI):
         valid_issuers=["https://accounts.google.com"],
     )
     app.state.redis_blocklist_client = create_blocklist_client()
+    app.state.redis_trigger_lock_client = create_trigger_lock_client()
     yield
     await app.state.httpx_client.aclose()
     if getattr(app.state, "redis_blocklist_client", None) is not None:
         await app.state.redis_blocklist_client.aclose()
+    if getattr(app.state, "redis_trigger_lock_client", None) is not None:
+        await app.state.redis_trigger_lock_client.aclose()
     eng = get_engine()
     if eng is not None:
         await eng.dispose()
@@ -95,26 +98,29 @@ async def validation_exception_handler(
 
 @app.exception_handler(httpx.HTTPError)
 async def httpx_error_handler(request: Request, exc: httpx.HTTPError) -> JSONResponse:
-    """Auth 외 다른 경로에서 httpx 예외가 누락되었을 때 503 폴백. Auth는 AuthServiceUnavailableError → 라우터에서 503."""
+    """Auth 외 다른 경로에서 httpx 예외가 누락되었을 때 503 폴백. detail 추상화 + code로 구분."""
     logger.warning("External HTTP error: %s", exc, exc_info=True)
     return JSONResponse(
         status_code=503,
-        content={"detail": "Service temporarily unavailable"},
+        content={
+            "detail": "Service temporarily unavailable",
+            "code": "UPSTREAM_UNAVAILABLE",
+        },
     )
 
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception) -> JSONResponse:
-    """비즈니스 예외(HTTPException) → 그대로 반환. 그 외 → 500 + 로그."""
+    """비즈니스 예외(HTTPException) → 그대로 반환. 그 외 → 500 + 로그. detail 추상화 + code."""
     if isinstance(exc, asyncio.CancelledError):
         raise exc  # 정상 연결 종료, 500 로그 방지
     if isinstance(exc, HTTPException):
-        return JSONResponse(
-            status_code=exc.status_code,
-            content={"detail": exc.detail},
-        )
+        content = {"detail": exc.detail}
+        if hasattr(exc, "code") and exc.code:
+            content["code"] = exc.code
+        return JSONResponse(status_code=exc.status_code, content=content)
     logger.exception("Unhandled exception: %s", exc, exc_info=True)
     return JSONResponse(
         status_code=500,
-        content={"detail": "Internal server error"},
+        content={"detail": "Internal server error", "code": "INTERNAL_ERROR"},
     )
