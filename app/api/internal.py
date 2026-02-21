@@ -1,10 +1,12 @@
 """
-내부 전용 API (Cron·관리). 보안 키 검증 후 크롤 트리거·크롤 이력 조회 등.
+내부 전용 API (Cron·관리). 보안 키는 Header만 허용(X-Crawl-Trigger-Secret 또는 Authorization: Bearer).
+Query 파라미터 시크릿 미지원(Access Log 유출 방지). college별 분산락으로 중복 enqueue 방지.
 """
 
 import asyncio
 import logging
 import secrets
+from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,6 +14,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.crawler_config import COLLEGE_CODE_TO_MODULE
 from app.core.database import get_db
+from app.core.deps import get_redis_blocklist
+from app.core.redis import acquire_trigger_lock
 from app.repositories.crawl_run_repository import get_recent_crawl_runs
 
 router = APIRouter(prefix="/internal", tags=["internal"])
@@ -24,9 +28,8 @@ CRAWL_STAGGER_SECONDS = 300
 def _validate_trigger_secret(
     x_crawl_trigger_secret: str | None = Header(None, alias="X-Crawl-Trigger-Secret"),
     authorization: str | None = Header(None),
-    secret: str | None = Query(None),
 ) -> None:
-    """CRAWL_TRIGGER_SECRET 검증. timing-safe 비교(S4). 실패 시 HTTPException."""
+    """CRAWL_TRIGGER_SECRET 검증. Header만 사용(Query 미허용). timing-safe 비교. 실패 시 HTTPException."""
     if not settings.crawl_trigger_secret:
         raise HTTPException(
             status_code=503,
@@ -35,7 +38,6 @@ def _validate_trigger_secret(
     provided = (
         x_crawl_trigger_secret
         or (authorization and authorization.startswith("Bearer ") and authorization[7:].strip())
-        or secret
     ) or ""
     expected = settings.crawl_trigger_secret.get_secret_value()
     if not secrets.compare_digest(provided, expected):
@@ -50,16 +52,15 @@ async def post_trigger_crawl(
     ),
     x_crawl_trigger_secret: str | None = Header(None, alias="X-Crawl-Trigger-Secret"),
     authorization: str | None = Header(None),
-    secret: str | None = Query(None),
+    redis_client: Any = Depends(get_redis_blocklist),
 ) -> dict:
     """
-    크롤 태스크 enqueue. 보안 키 필수. async def + to_thread(apply_async)(O2).
-    실패 시 503 + 로그.
+    크롤 태스크 enqueue. 보안 키는 Header만 필수. college별 Redis 분산락(SET NX EX)으로 중복 enqueue 방지.
+    락 실패 시 해당 college는 스킵. 워커 완료/예외 시 락 조기 해제.
     """
-    _validate_trigger_secret(x_crawl_trigger_secret, authorization, secret)
+    _validate_trigger_secret(x_crawl_trigger_secret, authorization)
 
     from app.services.tasks import crawl_college_task
-    from app.worker import app  # noqa: F401
 
     if college_code is not None:
         if college_code not in COLLEGE_CODE_TO_MODULE:
@@ -71,8 +72,14 @@ async def post_trigger_crawl(
     else:
         codes = list(COLLEGE_CODE_TO_MODULE.keys())
 
-    task_ids = []
+    task_ids: list[dict] = []
+    skipped: list[str] = []
     for i, code in enumerate(codes):
+        if redis_client is not None:
+            acquired = await acquire_trigger_lock(redis_client, code)
+            if not acquired:
+                skipped.append(code)
+                continue
         countdown = i * CRAWL_STAGGER_SECONDS if len(codes) > 1 else 0
         try:
             result = await asyncio.to_thread(
@@ -88,10 +95,10 @@ async def post_trigger_crawl(
             ) from e
         task_ids.append({"college_code": code, "task_id": result.id, "countdown_sec": countdown})
 
-    return {
-        "enqueued": len(task_ids),
-        "tasks": task_ids,
-    }
+    out: dict = {"enqueued": len(task_ids), "tasks": task_ids}
+    if skipped:
+        out["skipped"] = skipped
+    return out
 
 
 @router.get("/crawl-stats")
@@ -99,13 +106,12 @@ async def get_crawl_stats(
     limit: int = Query(50, ge=1, le=200, description="최근 N건"),
     x_crawl_trigger_secret: str | None = Header(None, alias="X-Crawl-Trigger-Secret"),
     authorization: str | None = Header(None),
-    secret: str | None = Query(None),
     session: AsyncSession = Depends(get_db),
 ) -> dict:
     """
     최근 크롤 실행 이력. 단과대별 last_run_at, status, notices_upserted, error_message.
-    보안 키 필수 (X-Crawl-Trigger-Secret 또는 Authorization: Bearer <secret>).
+    보안 키 필수. Header만 사용 (X-Crawl-Trigger-Secret 또는 Authorization: Bearer).
     """
-    _validate_trigger_secret(x_crawl_trigger_secret, authorization, secret)
+    _validate_trigger_secret(x_crawl_trigger_secret, authorization)
     runs = await get_recent_crawl_runs(session, limit=limit)
     return {"runs": runs, "limit": limit}

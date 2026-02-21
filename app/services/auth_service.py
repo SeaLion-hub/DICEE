@@ -34,20 +34,28 @@ async def exchange_google_code(
 ) -> GoogleTokenResponse:
     """
     구글 OAuth Authorization Code를 액세스 토큰으로 교환.
-    Pydantic 스키마로 검증. client는 앱 생명주기 싱글톤(재사용).
+    Pydantic 스키마로 검증. 네트워크 예외(Timeout, Connect) 시 AuthError로 변환(500 전파 방지).
     """
     client_secret = settings.google_client_secret.get_secret_value()
-    resp = await client.post(
-        "https://oauth2.googleapis.com/token",
-        data={
-            "code": code,
-            "client_id": settings.google_client_id,
-            "client_secret": client_secret,
-            "redirect_uri": redirect_uri or "http://localhost",
-            "grant_type": "authorization_code",
-        },
-        headers={"Content-Type": "application/x-www-form-urlencoded"},
-    )
+    try:
+        resp = await client.post(
+            "https://oauth2.googleapis.com/token",
+            data={
+                "code": code,
+                "client_id": settings.google_client_id,
+                "client_secret": client_secret,
+                "redirect_uri": redirect_uri or "http://localhost",
+                "grant_type": "authorization_code",
+            },
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+    except (
+        httpx.TimeoutException,
+        httpx.ConnectError,
+        httpx.RemoteProtocolError,
+    ) as e:
+        logger.warning("Google token exchange network error: %s", e, exc_info=True)
+        raise AuthError("Google auth temporarily unavailable") from e
     if resp.status_code != 200:
         logger.warning("Google token exchange failed: %s %s", resp.status_code, resp.text)
         raise AuthError("Invalid or expired authorization code")
@@ -160,6 +168,14 @@ async def revoke_refresh_tokens_for_user(
     await increment_refresh_token_version(session, user_id)
 
 
+def _allowed_redirect_uris() -> set[str]:
+    """설정된 허용 redirect_uri 목록(쉼표 구분). 비어 있으면 빈 set(검사 생략)."""
+    raw = (settings.google_redirect_uris or "").strip()
+    if not raw:
+        return set()
+    return {u.strip() for u in raw.split(",") if u.strip()}
+
+
 async def google_login(
     code: str,
     redirect_uri: str | None = None,
@@ -168,17 +184,23 @@ async def google_login(
     key_fetcher: AsyncKeyFetcher,
 ) -> TokenResponse:
     """
-    구글 OAuth code로 로그인. 트랜잭션 경계는 서비스 레이어(transaction())에서만 제어.
-    1. code → 구글 토큰 교환
-    2. id_token 비동기 JWKS 검증 후 프로필 추출
-    3. User upsert
-    4. JWT 발급 (refresh_token_version 연동)
+    구글 OAuth code로 로그인. redirect_uri allowlist·sub 클레임 필수 검증(Fail-fast).
+    1. redirect_uri 허용 목록 검사(설정 시)
+    2. code → 구글 토큰 교환
+    3. id_token JWKS 검증 후 프로필 추출, sub 필수(누락 시 AuthError)
+    4. User upsert, JWT 발급
     """
+    allowed = _allowed_redirect_uris()
+    if allowed and redirect_uri is not None and redirect_uri.strip() not in allowed:
+        raise AuthError("redirect_uri not allowed")
     token_data = await exchange_google_code(code, redirect_uri, http_client)
     id_token = token_data.id_token
 
     claims = await decode_google_id_token(id_token, key_fetcher)
-    provider_user_id = claims.get("sub") or ""
+    provider_user_id = claims.get("sub")
+    if not provider_user_id or not str(provider_user_id).strip():
+        raise AuthError("Invalid id_token: missing sub")
+    provider_user_id = str(provider_user_id).strip()
     email = claims.get("email")
     name = claims.get("name")
 

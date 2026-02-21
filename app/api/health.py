@@ -1,12 +1,15 @@
-"""Health check 엔드포인트."""
+"""Health check 엔드포인트. Redis는 app.state 비동기 클라이언트 재사용(스레드 풀/동기 클라이언트 미사용)."""
 
-from fastapi import APIRouter
+import asyncio
+
+from fastapi import APIRouter, Request
 from sqlalchemy import text
 
-from app.core.config import settings
 from app.core.database import get_async_session_maker
 
 router = APIRouter(tags=["health"])
+
+HEALTH_REDIS_PING_TIMEOUT = 2.0
 
 
 async def _check_db() -> str:
@@ -22,24 +25,23 @@ async def _check_db() -> str:
         return "error"
 
 
-def _check_redis() -> str:
-    """Redis 연결 상태. PING. 'ok' 또는 'error'. redis_url 없으면 'ok'(미사용)."""
-    if not settings.redis_url:
+async def _check_redis(request: Request) -> str:
+    """Redis 연결 상태. app.state 비동기 클라이언트(Blocklist용) 재사용. PING에 짧은 timeout."""
+    client = getattr(request.app.state, "redis_blocklist_client", None)
+    if client is None:
         return "ok"
     try:
-        import redis
-        client = redis.Redis.from_url(settings.redis_url)
-        client.ping()
+        await asyncio.wait_for(client.ping(), timeout=HEALTH_REDIS_PING_TIMEOUT)
         return "ok"
-    except Exception:
+    except (asyncio.TimeoutError, Exception):
         return "error"
 
 
 @router.get("/health")
-async def get_health() -> dict[str, str]:
-    """헬스 체크. DB(SELECT 1)·Redis(PING) 포함. status: ok | degraded | error."""
+async def get_health(request: Request) -> dict[str, str]:
+    """헬스 체크. DB(SELECT 1)·Redis(PING, 기존 비동기 풀 재사용). status: ok | degraded."""
     db_status = await _check_db()
-    redis_status = _check_redis()
+    redis_status = await _check_redis(request)
     if db_status == "ok" and redis_status == "ok":
         status = "ok"
     else:

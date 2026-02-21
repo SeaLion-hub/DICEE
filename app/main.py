@@ -93,6 +93,16 @@ async def validation_exception_handler(
     return await request_validation_exception_handler(request, exc)
 
 
+@app.exception_handler(httpx.HTTPError)
+async def httpx_error_handler(request: Request, exc: httpx.HTTPError) -> JSONResponse:
+    """외부 HTTP 클라이언트(구글 OAuth 등) 지연/타임아웃 시 503. 500 전파 방지."""
+    logger.warning("External HTTP error: %s", exc, exc_info=True)
+    return JSONResponse(
+        status_code=503,
+        content={"detail": "Service temporarily unavailable"},
+    )
+
+
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception) -> JSONResponse:
     """비즈니스 예외(HTTPException) → 그대로 반환. 그 외 → 500 + 로그."""

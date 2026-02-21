@@ -30,6 +30,8 @@ class Settings(BaseSettings):
     jwt_refresh_expire_days: int = 7  # Refresh 토큰 만료 (일). 기본 7일.
     google_client_id: str  # 필수. 기본값 없음.
     google_client_secret: SecretStr  # 필수. 기본값 없음.
+    # 허용 redirect_uri 목록(쉼표 구분). 비어 있으면 검사 생략. 예: http://localhost:3000/callback,https://app.example.com/callback
+    google_redirect_uris: str = ""
 
     # 3단계 Crawler & Worker (변수 추가)
     redis_url: str | None = None

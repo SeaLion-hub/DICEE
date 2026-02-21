@@ -7,7 +7,7 @@
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session, defer
@@ -23,9 +23,43 @@ NOTICE_LIST_DEFER_OPTIONS = (
 
 
 def get_by_id_sync(session: Session, notice_id: int) -> Notice | None:
-    """notice_id로 1건 조회 (동기, 워커용). 4단계 AI 태스크 멱등 처리용."""
+    """notice_id로 1건 조회 (동기, 워커용)."""
     result = session.execute(select(Notice).where(Notice.id == notice_id).limit(1))
     return result.scalars().one_or_none()
+
+
+def get_notice_for_ai_sync(session: Session, notice_id: int) -> Notice | None:
+    """
+    AI 처리 대상 1건 선점. ai_status='pending'인 행만 FOR UPDATE SKIP LOCKED로 잡고
+    ai_status='processing'으로 갱신 후 반환. 동시 워커 중복 처리 방지.
+    """
+    stmt = (
+        select(Notice)
+        .where(Notice.id == notice_id, Notice.ai_status == "pending")
+        .with_for_update(skip_locked=True)
+    )
+    result = session.execute(stmt)
+    notice = result.scalar_one_or_none()
+    if notice is None:
+        return None
+    notice.ai_status = "processing"
+    session.flush()
+    return notice
+
+
+def update_ai_result_sync(
+    session: Session,
+    notice_id: int,
+    ai_extracted_json: dict[str, Any],
+) -> None:
+    """AI 처리 완료 시 ai_status='done', ai_extracted_json 저장 (동기, 워커용)."""
+    stmt = (
+        update(Notice)
+        .where(Notice.id == notice_id)
+        .values(ai_status="done", ai_extracted_json=ai_extracted_json)
+    )
+    session.execute(stmt)
+    session.flush()
 
 
 def get_by_college_external_sync(
@@ -86,6 +120,7 @@ async def upsert_notice(
                 "attachments": attachments,
                 "content_hash": content_hash,
                 "published_at": published_at,
+                "ai_status": "pending",
                 "updated_at": datetime.now(UTC),
             },
         )
@@ -138,6 +173,7 @@ def upsert_notice_sync(
                 "attachments": attachments,
                 "content_hash": content_hash,
                 "published_at": published_at,
+                "ai_status": "pending",
                 "updated_at": datetime.now(UTC),
             },
         )
@@ -151,7 +187,7 @@ def upsert_notice_sync(
 
 
 def _notice_upsert_set_excluded(stmt: Any) -> dict:
-    """Bulk upsert set_ dict using excluded. stmt = insert(Notice).values(rows)."""
+    """Bulk upsert set_ dict using excluded. content 변경 시 AI 재처리를 위해 ai_status='pending'."""
     return {
         "title": stmt.excluded.title,
         "url": stmt.excluded.url,
@@ -160,6 +196,7 @@ def _notice_upsert_set_excluded(stmt: Any) -> dict:
         "attachments": stmt.excluded.attachments,
         "content_hash": stmt.excluded.content_hash,
         "published_at": stmt.excluded.published_at,
+        "ai_status": "pending",
         "updated_at": datetime.now(UTC),
     }
 

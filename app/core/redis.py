@@ -8,6 +8,9 @@ from app.core.config import settings
 logger = logging.getLogger(__name__)
 
 BLOCKLIST_KEY_PREFIX = "dicee:blocklist:access:"
+# 단과대별 크롤 트리거 분산락. TTL 내 중복 enqueue 방지. 워커 완료 시 조기 해제.
+TRIGGER_LOCK_KEY_PREFIX = "dicee:trigger_lock:"
+TRIGGER_LOCK_TTL_SECONDS = 600
 
 
 def create_blocklist_client() -> Any:
@@ -41,6 +44,39 @@ async def add_access_to_blocklist(
         await client.set(key, "1", ex=ttl_seconds)
     except Exception as e:
         logger.warning("Blocklist add failed (jti=%s): %s", jti, e, exc_info=True)
+
+
+async def acquire_trigger_lock(client: Any, college_code: str) -> bool:
+    """
+    college별 크롤 트리거 락 획득. SET NX EX. 성공 시 True, 이미 잠김 시 False.
+    client는 redis.asyncio.Redis. None이면 락 없이 True 반환(비활성).
+    """
+    if client is None:
+        return True
+    key = f"{TRIGGER_LOCK_KEY_PREFIX}{college_code}"
+    try:
+        return await client.set(key, "1", nx=True, ex=TRIGGER_LOCK_TTL_SECONDS)
+    except Exception as e:
+        logger.warning("Trigger lock acquire failed (college=%s): %s", college_code, e, exc_info=True)
+        return False
+
+
+def release_trigger_lock_sync(college_code: str) -> None:
+    """
+    단과대별 크롤 트리거 락 해제. 워커 완료/예외 시 호출하여 TTL 전 해제.
+    동기 Redis 사용(Celery 워커 환경).
+    """
+    from app.core.config import settings
+    if not settings.redis_url:
+        return
+    try:
+        import redis
+        client = redis.Redis.from_url(settings.redis_url, decode_responses=True)
+        key = f"{TRIGGER_LOCK_KEY_PREFIX}{college_code}"
+        client.delete(key)
+        client.close()
+    except Exception as e:
+        logger.warning("Trigger lock release failed (college=%s): %s", college_code, e, exc_info=True)
 
 
 async def is_access_blocked(

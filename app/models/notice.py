@@ -50,6 +50,8 @@ class Notice(Base):
     hashtags: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
 
     # 3. 운영용 필드
+    # AI 처리 선점·멱등: pending → processing(선점) → done. FOR UPDATE SKIP LOCKED와 연동.
+    ai_status: Mapped[str] = mapped_column(String(20), default="pending", nullable=False, index=True)
     content_hash: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     is_manual_edited: Mapped[bool] = mapped_column(default=False, nullable=False)
 

@@ -1,6 +1,6 @@
-"""Auth·JWT 관련 Pydantic 스키마."""
+"""Auth·JWT 관련 Pydantic 스키마. extra='forbid'로 페이로드 오염 방지."""
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class GoogleTokenResponse(BaseModel):
@@ -15,10 +15,21 @@ class GoogleTokenResponse(BaseModel):
 
 
 class TokenPayload(BaseModel):
-    """OAuth code 교환 요청."""
+    """OAuth code 교환 요청. code/redirect_uri 길이·형식 제약. 알 수 없는 필드 거부."""
 
-    code: str = Field(..., description="구글 OAuth Authorization Code")
-    redirect_uri: str | None = Field(None, description="OAuth redirect_uri (검증용)")
+    model_config = ConfigDict(extra="forbid")
+
+    code: str = Field(
+        ...,
+        min_length=1,
+        max_length=2000,
+        description="구글 OAuth Authorization Code",
+    )
+    redirect_uri: str | None = Field(
+        None,
+        max_length=2048,
+        description="OAuth redirect_uri (허용 목록과 일치해야 함)",
+    )
 
 
 class TokenResponse(BaseModel):
@@ -31,6 +42,8 @@ class TokenResponse(BaseModel):
 
 
 class RefreshTokenPayload(BaseModel):
-    """Refresh token으로 재발급 요청."""
+    """Refresh token으로 재발급 요청. extra='forbid'."""
 
-    refresh_token: str
+    model_config = ConfigDict(extra="forbid")
+
+    refresh_token: str = Field(..., min_length=1)
