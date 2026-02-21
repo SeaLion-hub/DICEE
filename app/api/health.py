@@ -4,17 +4,18 @@ from fastapi import APIRouter
 from sqlalchemy import text
 
 from app.core.config import settings
-from app.core.database import async_session_maker
+from app.core.database import get_async_session_maker
 
 router = APIRouter(tags=["health"])
 
 
 async def _check_db() -> str:
     """DB 연결 상태. SELECT 1 실행. 'ok' 또는 'error'. DB 미초기화 시 'error'."""
-    if not async_session_maker:
+    maker = get_async_session_maker()
+    if not maker:
         return "error"
     try:
-        async with async_session_maker() as session:
+        async with maker() as session:
             await session.execute(text("SELECT 1"))
         return "ok"
     except Exception:

@@ -1,6 +1,7 @@
 """Auth Service. 구글 OAuth code 검증, User upsert, JWT 발급."""
 
 import logging
+import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -12,23 +13,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.database import transaction
+from app.core.redis import add_access_to_blocklist, is_access_blocked
 from app.repositories.user_repository import increment_refresh_token_version, upsert_by_provider_uid
 from app.schemas.auth import GoogleTokenResponse, TokenResponse
 from app.schemas.user import UserBase
 
 logger = logging.getLogger(__name__)
-
-# 구글 ID 토큰 검증용 비동기 JWKS 클라이언트. 이벤트 루프 필요로 인해 첫 사용 시 생성.
-_google_key_fetcher: AsyncKeyFetcher | None = None
-
-
-def _get_google_key_fetcher() -> AsyncKeyFetcher:
-    global _google_key_fetcher
-    if _google_key_fetcher is None:
-        _google_key_fetcher = AsyncKeyFetcher(
-            valid_issuers=["https://accounts.google.com"],
-        )
-    return _google_key_fetcher
 
 
 class AuthError(Exception):
@@ -69,10 +59,12 @@ async def exchange_google_code(
         raise AuthError("Invalid Google token response") from e
 
 
-async def decode_google_id_token(id_token_str: str) -> dict[str, Any]:
-    """구글 ID token 서명 검증 후 디코딩. 비동기 JWKS(pyjwt-key-fetcher) 사용."""
+async def decode_google_id_token(
+    id_token_str: str, key_fetcher: AsyncKeyFetcher
+) -> dict[str, Any]:
+    """구글 ID token 서명 검증 후 디코딩. key_fetcher는 lifespan 싱글톤(Depends)."""
     try:
-        key_entry = await _get_google_key_fetcher().get_key(id_token_str)
+        key_entry = await key_fetcher.get_key(id_token_str)
         payload = jwt.decode(
             jwt=id_token_str,
             audience=settings.google_client_id,
@@ -87,7 +79,7 @@ async def decode_google_id_token(id_token_str: str) -> dict[str, Any]:
 
 def create_jwt_pair(user_id: int, token_version: int = 0) -> tuple[str, str]:
     """
-    Access + Refresh JWT 생성.
+    Access + Refresh JWT 생성. Access에는 jti 포함(Blocklist 무효화용).
     token_version: 로그아웃/탈취 시 서버에서 무효화하기 위해 User.refresh_token_version과 연동.
     """
     secret = settings.jwt_secret.get_secret_value()
@@ -97,6 +89,7 @@ def create_jwt_pair(user_id: int, token_version: int = 0) -> tuple[str, str]:
     access_payload = {
         "sub": str(user_id),
         "type": "access",
+        "jti": str(uuid.uuid4()),
         "iss": settings.jwt_issuer,
         "aud": settings.jwt_audience,
         "exp": now + timedelta(seconds=settings.jwt_access_expire_seconds),
@@ -124,10 +117,15 @@ def create_jwt_pair(user_id: int, token_version: int = 0) -> tuple[str, str]:
     return access_token, refresh_token
 
 
-def verify_access_token(encoded: str) -> dict[str, Any]:
+async def verify_access_token(
+    encoded: str,
+    redis_blocklist_client: Any = None,
+    *,
+    fail_closed: bool = True,
+) -> dict[str, Any]:
     """
-    Access JWT 검증. iss/aud/type=access 확인 후 payload 반환.
-    로그아웃·인가 시 사용. 실패 시 AuthError.
+    Access JWT 검증. iss/aud/type=access 확인 후 Blocklist 조회.
+    Redis 장애 시: fail_closed=True면 인증 거부, False면 서명만 믿고 통과.
     """
     try:
         payload = jwt.decode(
@@ -140,7 +138,16 @@ def verify_access_token(encoded: str) -> dict[str, Any]:
         )
         if payload.get("type") != "access":
             raise AuthError("Invalid token type")
+        jti = payload.get("jti")
+        if redis_blocklist_client is not None and jti:
+            blocked = await is_access_blocked(
+                redis_blocklist_client, jti, fail_closed=fail_closed
+            )
+            if blocked:
+                raise AuthError("Token revoked or invalid")
         return payload
+    except AuthError:
+        raise
     except jwt.InvalidTokenError as e:
         logger.warning("Invalid access token: %s", e)
         raise AuthError("Invalid or expired token") from e
@@ -158,6 +165,7 @@ async def google_login(
     redirect_uri: str | None = None,
     *,
     http_client: httpx.AsyncClient,
+    key_fetcher: AsyncKeyFetcher,
 ) -> TokenResponse:
     """
     구글 OAuth code로 로그인. 트랜잭션 경계는 서비스 레이어(transaction())에서만 제어.
@@ -169,7 +177,7 @@ async def google_login(
     token_data = await exchange_google_code(code, redirect_uri, http_client)
     id_token = token_data.id_token
 
-    claims = await decode_google_id_token(id_token)
+    claims = await decode_google_id_token(id_token, key_fetcher)
     provider_user_id = claims.get("sub") or ""
     email = claims.get("email")
     name = claims.get("name")
@@ -193,7 +201,20 @@ async def google_login(
         )
 
 
-async def logout_user(user_id: int) -> None:
-    """해당 유저의 refresh_token_version 증가 → 기존 Refresh 토큰 전부 무효화. 트랜잭션은 서비스에서 제어."""
+async def logout_user(
+    user_id: int,
+    *,
+    access_jti: str | None = None,
+    ttl_seconds: int | None = None,
+    redis_blocklist_client: Any = None,
+) -> None:
+    """
+    해당 유저의 refresh_token_version 증가 → 기존 Refresh 토큰 전부 무효화.
+    access_jti·ttl_seconds·redis_blocklist_client가 있으면 해당 Access Token을 Blocklist에 등록.
+    """
     async with transaction() as session:
         await revoke_refresh_tokens_for_user(session, user_id)
+    if redis_blocklist_client and access_jti and ttl_seconds and ttl_seconds > 0:
+        await add_access_to_blocklist(
+            redis_blocklist_client, access_jti, ttl_seconds
+        )

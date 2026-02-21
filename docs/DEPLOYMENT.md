@@ -69,7 +69,7 @@
 1. 프론트에서 구글 OAuth → **Authorization Code** 획득
 2. 프론트가 백엔드 `POST /v1/auth/google`에 **code** 전달
 3. 백엔드가 구글에 code 검증 → **Access JWT + Refresh JWT** 발급
-4. **응답 body JSON**으로 토큰 반환: `{ "access_token": "...", "refresh_token": "...", "token_type": "bearer", "expires_in": 3600 }`
+4. **응답 body JSON**으로 토큰 반환: `{ "access_token": "...", "refresh_token": "...", "token_type": "bearer", "expires_in": 600 }` (expires_in은 JWT_ACCESS_EXPIRE_SECONDS 설정값.)
 5. 프론트는 access_token을 저장(메모리/로컬스토리지 등) 후 API 호출 시 `Authorization: Bearer <token>` 헤더에 포함
 
 CORS: `ALLOWED_ORIGINS`에 프론트 도메인 등록. credentials: 프론트가 쿠키를 보내지 않으면 `credentials: "omit"` 또는 omit.
@@ -120,7 +120,9 @@ CORS: `ALLOWED_ORIGINS`에 프론트 도메인 등록. credentials: 프론트가
 | `CRAWL_TRIGGER_SECRET` | Cron이 POST /internal/trigger-crawl 호출 시 검증용 시크릿 (헤더 또는 쿼리로 전달) | 3단계 Cron 연동 시 |
 | `POLITE_DELAY_SECONDS` | 요청/페이지 간 최소 딜레이(초). 대상 서버 부하·IP 차단 완화. 기본 1. | 3단계 (선택) |
 | `JWT_SECRET` | JWT 서명용 비밀키 (강한 랜덤 문자열) | 2단계 Auth 후 |
-| `JWT_ACCESS_EXPIRE_SECONDS` | Access 토큰 만료(초). 기본 3600. | 2단계 (선택) |
+| `JWT_ACCESS_EXPIRE_SECONDS` | Access 토큰 만료(초). 기본 600(10분). 탈퇴/탈취 시 노출 시간 최소화. | 2단계 (선택) |
+| `REDIS_BLOCKLIST_FAIL_CLOSED` | Redis 장애 시 True=인증 거부(Fail-Closed), False=서명만 검증 후 통과(Fail-Open). 기본 True. | 2단계 Auth (Blocklist 사용 시) |
+| `REDIS_BLOCKLIST_MAX_CONNECTIONS` | Blocklist용 Redis 비동기 풀 크기. Uvicorn 동시 처리량에 맞게. 기본 20. | 2단계 Auth (Blocklist 사용 시) |
 | `JWT_REFRESH_EXPIRE_DAYS` | Refresh 토큰 만료(일). 기본 7. | 2단계 (선택) |
 | `GOOGLE_CLIENT_ID` | 구글 OAuth 2.0 클라이언트 ID | 2단계 Auth (구글 먼저) |
 | `GOOGLE_CLIENT_SECRET` | 구글 OAuth 2.0 클라이언트 시크릿 | 2단계 Auth |

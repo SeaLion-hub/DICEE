@@ -4,21 +4,9 @@ import asyncio
 import logging
 from contextlib import asynccontextmanager
 
-import httpx
-from fastapi import FastAPI, Request
-from fastapi.exception_handlers import request_validation_exception_handler
-from fastapi.exceptions import HTTPException, RequestValidationError
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
-
-from app.api import health, internal
-from app.api.v1 import auth as v1_auth
 from app.core.config import settings
-from app.core.database import engine, init_db, verify_db_connection
 
-logger = logging.getLogger(__name__)
-
-
+# 환경 변수 로드 직후 Sentry 초기화. 임포트/라우터 등록 단계 예외도 수집.
 def _init_sentry() -> None:
     """SENTRY_DSN이 있으면 Sentry 초기화. environment는 설정에서 로드(스테이징/로컬 구분)."""
     if settings.sentry_dsn:
@@ -37,17 +25,42 @@ def _init_sentry() -> None:
         )
 
 
+_init_sentry()
+
+import httpx
+from fastapi import FastAPI, Request
+from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.exceptions import HTTPException, RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+
+from pyjwt_key_fetcher import AsyncKeyFetcher
+
+from app.api import health, internal
+from app.api.v1 import auth as v1_auth
+from app.core.database import get_engine, init_db, verify_db_connection
+from app.core.redis import create_blocklist_client
+
+logger = logging.getLogger(__name__)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """앱 수명 주기: Sentry, DB, HTTP 클라이언트(싱글톤)."""
-    _init_sentry()
+    """앱 수명 주기: DB, HTTP 클라이언트·Google Key Fetcher(싱글톤), Redis(Blocklist)."""
     init_db()
     await verify_db_connection()
     app.state.httpx_client = httpx.AsyncClient()
+    app.state.google_key_fetcher = AsyncKeyFetcher(
+        valid_issuers=["https://accounts.google.com"],
+    )
+    app.state.redis_blocklist_client = create_blocklist_client()
     yield
     await app.state.httpx_client.aclose()
-    if engine is not None:
-        await engine.dispose()
+    if getattr(app.state, "redis_blocklist_client", None) is not None:
+        await app.state.redis_blocklist_client.aclose()
+    eng = get_engine()
+    if eng is not None:
+        await eng.dispose()
 
 
 app = FastAPI(

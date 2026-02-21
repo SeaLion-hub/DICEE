@@ -30,19 +30,13 @@ def test_create_jwt_pair_raises_without_secret(monkeypatch: pytest.MonkeyPatch) 
 
 @pytest.mark.asyncio
 async def test_decode_google_id_token_valid() -> None:
-    """decode_google_id_token: JWKS get_key + jwt.decode mock 시 claims 반환."""
+    """decode_google_id_token: key_fetcher.get_key + jwt.decode mock 시 claims 반환."""
     mock_fetcher = AsyncMock()
     mock_fetcher.get_key = AsyncMock(return_value={"key": "dummy-key-for-test"})
-    with (
-        patch(
-            "app.services.auth_service._get_google_key_fetcher",
-            return_value=mock_fetcher,
-        ),
-        patch(
-            "app.services.auth_service.jwt.decode",
-            return_value={"sub": "123", "email": "a@b.com", "name": "Test"},
-        ),
+    with patch(
+        "app.services.auth_service.jwt.decode",
+        return_value={"sub": "123", "email": "a@b.com", "name": "Test"},
     ):
-        result = await decode_google_id_token("fake-id-token")
+        result = await decode_google_id_token("fake-id-token", mock_fetcher)
         assert result["sub"] == "123"
         assert result["email"] == "a@b.com"
