@@ -100,6 +100,7 @@ def scrape_computing_detail(url):
         # 3. 본문 (주석 타격)
         content_text = ""
         images: list[dict[str, Any]] = []
+        image_urls_ai: set[str] = set()
 
         # '본문 내용 시작' ~ '본문 내용 끝' 주석 사이 추출
         body_tags = extract_between_comments(soup, "본문 내용 시작", "본문 내용 끝")
@@ -134,13 +135,15 @@ def scrape_computing_detail(url):
                     if not fname or '.' not in fname:
                         fname = "image.jpg"
 
-                    if not any(d['data'] == full for d in images):
+                    if full not in image_urls_ai:
+                        image_urls_ai.add(full)
                         images.append({"type": "url", "data": full, "name": fname})
         else:
             content_text = "(본문을 찾을 수 없습니다)"
 
         # 4. 첨부파일 (주석 타격)
         attachments = []
+        attachment_names_ai: set[str] = set()
         file_tags = extract_between_comments(soup, "첨부파일 시작", "첨부파일 끝")
         if file_tags:
             for t in file_tags:
@@ -153,7 +156,8 @@ def scrape_computing_detail(url):
                         href_str = href_val if isinstance(href_val, str) else ''
                         if 'download.php' in href_str:
                             fname = a.get_text(strip=True)
-                            if fname and fname not in attachments:
+                            if fname and fname not in attachment_names_ai:
+                                attachment_names_ai.add(fname)
                                 attachments.append(fname)
 
         return title, date, content_text, images, attachments
@@ -279,6 +283,7 @@ async def scrape_computing_detail_async(client: httpx.AsyncClient, url: str):
             date = normalize_date(date_match.group())
         content_text = ""
         images: list[dict[str, Any]] = []
+        image_urls_ai_async: set[str] = set()
         body_tags = extract_between_comments(soup, "본문 내용 시작", "본문 내용 끝")
         if body_tags:
             temp_html = "".join(str(t) for t in body_tags)
@@ -294,12 +299,14 @@ async def scrape_computing_detail_async(client: httpx.AsyncClient, url: str):
                 if any(x in src for x in ["icon", "btn", "blank"]):
                     continue
                 full = "https://computing.yonsei.ac.kr" + src if src.startswith("/") else src
-                fname = os.path.basename(full.split("?")[0]) or "image.jpg"
-                if not any(d["data"] == full for d in images):
+                if full not in image_urls_ai_async:
+                    image_urls_ai_async.add(full)
+                    fname = os.path.basename(full.split("?")[0]) or "image.jpg"
                     images.append({"type": "url", "data": full, "name": fname})
         else:
             content_text = "(본문을 찾을 수 없습니다)"
         attachments = []
+        attachment_names_ai_async: set[str] = set()
         file_tags = extract_between_comments(soup, "첨부파일 시작", "첨부파일 끝")
         if file_tags:
             for t in file_tags:
@@ -309,7 +316,8 @@ async def scrape_computing_detail_async(client: httpx.AsyncClient, url: str):
                             href_str = a.get("href") or ""
                             if "download.php" in href_str:
                                 fname = a.get_text(strip=True)
-                                if fname and fname not in attachments:
+                                if fname and fname not in attachment_names_ai_async:
+                                    attachment_names_ai_async.add(fname)
                                     attachments.append(fname)
         return title, date, content_text, images, attachments
     except Exception as e:

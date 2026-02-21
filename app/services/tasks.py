@@ -1,20 +1,17 @@
 """
 Celery 워커가 실행할 작업(Task) 정의.
-동기 DB(psycopg2)·crawl_service.crawl_college_sync 사용. "Too many connections" 방지.
+동기 DB(psycopg2)·crawl_service.run_crawl_job_sync 사용. "Too many connections" 방지.
 """
 
 import logging
-from datetime import UTC, datetime
 
 from celery import shared_task
 from requests.exceptions import RequestException
 
 from app.core.database_sync import get_sync_session
 from app.core.redis import release_trigger_lock_sync
-from app.repositories.college_repository import get_by_external_id_sync as get_college_by_external_id_sync
-from app.repositories.crawl_run_repository import create_crawl_run_sync, update_crawl_run_sync
 from app.repositories.notice_repository import get_notice_for_ai_sync, update_ai_result_sync
-from app.services.crawl_service import crawl_college_sync
+from app.services.crawl_service import run_crawl_job_sync
 
 logger = logging.getLogger(__name__)
 
@@ -44,42 +41,22 @@ def crawl_college_task(college_code: str):
     _set_task_context(str(task_id) if task_id else None, college_code)
     logger.info("Task Started: task_id=%s college_code=%s", task_id, college_code)
     count = 0
-    notice_ids: list[int] = []
+    enqueued_ai = 0
     try:
+        def on_chunk(ids: list[int]) -> None:
+            for nid in ids:
+                process_notice_ai_task.delay(nid)
+
         with get_sync_session() as session:
-            college = get_college_by_external_id_sync(session, college_code)
-            if not college:
-                raise ValueError(f"College not found: {college_code}")
-            create_crawl_run_sync(session, college.id, task_id)
-            session.commit()
-            try:
-                count, notice_ids = crawl_college_sync(session, college_code)
-                update_crawl_run_sync(
-                    session,
-                    task_id,
-                    finished_at=datetime.now(UTC),
-                    status="success",
-                    notices_upserted=count,
-                )
-                session.commit()
-            except Exception as e:
-                update_crawl_run_sync(
-                    session,
-                    task_id,
-                    finished_at=datetime.now(UTC),
-                    status="failed",
-                    error_message=(str(e))[:2000],
-                )
-                session.commit()
-                raise
-        for nid in notice_ids:
-            process_notice_ai_task.delay(nid)
+            count, enqueued_ai = run_crawl_job_sync(
+                session, college_code, task_id, on_chunk
+            )
         msg = (
             f"Crawling {college_code} completed. Upserted {count} notices, "
-            f"enqueued AI for {len(notice_ids)}."
+            f"enqueued AI for {enqueued_ai}."
         )
         logger.info(msg)
-        return {"upserted": count, "enqueued_ai": len(notice_ids)}
+        return {"upserted": count, "enqueued_ai": enqueued_ai}
     finally:
         release_trigger_lock_sync(college_code)
 

@@ -118,6 +118,7 @@ def scrape_uic_detail(url):
 
         date = "날짜 없음"
         attachments = []
+        attachment_names_uic: set[str] = set()
 
         board_adds = soup.find_all('div', id='BoardViewAdd')
         for b_add in board_adds:
@@ -136,11 +137,13 @@ def scrape_uic_detail(url):
                 if img:
                     fname = a.get_text(separator=' ', strip=True).strip('"').strip()
                     fname = re.sub(r'\([\d.,]+\s*(KB|MB|GB|Bytes?)\)', '', fname, flags=re.IGNORECASE).strip()
-                    if fname and fname not in attachments:
+                    if fname and fname not in attachment_names_uic:
+                        attachment_names_uic.add(fname)
                         attachments.append(fname)
 
         content_html = ""
         images = []
+        image_urls_uic: set[str] = set()
 
         content_div = soup.find('div', id='BoardContent')
 
@@ -167,8 +170,9 @@ def scrape_uic_detail(url):
                         safe_url = urllib.parse.urlunparse(
                             (parsed.scheme, parsed.netloc, encoded_path, parsed.params, parsed.query, parsed.fragment)
                         )
-                        fname = os.path.basename(parsed.path)
-                        if not any(d.get('data') == safe_url for d in images):
+                        if safe_url not in image_urls_uic:
+                            image_urls_uic.add(safe_url)
+                            fname = os.path.basename(parsed.path)
                             images.append({"type": "url", "data": safe_url, "name": fname or f"image_{idx+1}.jpg"})
 
                 img.decompose()
@@ -233,6 +237,7 @@ async def scrape_uic_detail_async(client: httpx.AsyncClient, url: str):
             title = title_div.get_text(strip=True)
         date = "날짜 없음"
         attachments = []
+        attachment_names_uic_async: set[str] = set()
         for b_add in soup.find_all("div", id="BoardViewAdd"):
             if not isinstance(b_add, Tag):
                 continue
@@ -244,10 +249,12 @@ async def scrape_uic_detail_async(client: httpx.AsyncClient, url: str):
                     continue
                 if a.find("img"):
                     fname = re.sub(r"\([\d.,]+\s*(KB|MB|GB|Bytes?)\)", "", a.get_text(separator=" ", strip=True).strip('"'), flags=re.IGNORECASE).strip()
-                    if fname and fname not in attachments:
+                    if fname and fname not in attachment_names_uic_async:
+                        attachment_names_uic_async.add(fname)
                         attachments.append(fname)
         content_html = ""
         images = []
+        image_urls_uic_async: set[str] = set()
         content_div = soup.find("div", id="BoardContent")
         if content_div and isinstance(content_div, Tag):
             for idx, img in enumerate(content_div.find_all("img")):
@@ -268,8 +275,9 @@ async def scrape_uic_detail_async(client: httpx.AsyncClient, url: str):
                     parsed = urllib.parse.urlparse(full_url)
                     enc_path = urllib.parse.quote(parsed.path)
                     safe_url = urllib.parse.urlunparse((parsed.scheme, parsed.netloc, enc_path, parsed.params, parsed.query, parsed.fragment))
-                    fname = os.path.basename(parsed.path) or f"image_{idx+1}.jpg"
-                    if not any(d.get("data") == safe_url for d in images):
+                    if safe_url not in image_urls_uic_async:
+                        image_urls_uic_async.add(safe_url)
+                        fname = os.path.basename(parsed.path) or f"image_{idx+1}.jpg"
                         images.append({"type": "url", "data": safe_url, "name": fname})
                 img.decompose()
             for table in content_div.find_all("table"):

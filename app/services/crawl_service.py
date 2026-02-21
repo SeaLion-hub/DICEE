@@ -8,7 +8,7 @@ import hashlib
 import logging
 import re
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
 from urllib.error import URLError
 from urllib.parse import parse_qs, urlparse, urlunparse
@@ -21,12 +21,17 @@ from sqlalchemy.orm import Session
 import httpx
 
 from app.core.config import settings
+from app.core.crawl_http import HtmlTooLargeError
 from app.core.crawler_config import COLLEGE_CODE_TO_MODULE, CRAWLER_CONFIG, get_crawler, get_crawler_async
 from app.repositories.college_repository import (
     get_by_external_id as get_college_by_external_id,
 )
 from app.repositories.college_repository import (
     get_by_external_id_sync as get_college_by_external_id_sync,
+)
+from app.repositories.crawl_run_repository import (
+    create_crawl_run_sync,
+    update_crawl_run_sync,
 )
 from app.repositories.notice_repository import (
     upsert_notices_bulk,
@@ -294,6 +299,13 @@ def _collect_payloads_sync(
                 exc_info=True,
             )
             continue
+        except HtmlTooLargeError as e:
+            logger.warning(
+                "scrape skipped (body too large): url=%s %s",
+                detail_url[:200] if detail_url else "",
+                e,
+            )
+            continue
         except (ValueError, KeyError, AttributeError, TypeError) as e:
             logger.warning(
                 "scrape failed (parser): url=%s error=%s",
@@ -343,6 +355,13 @@ async def _collect_payloads_async(
                 exc_info=True,
             )
             continue
+        except HtmlTooLargeError as e:
+            logger.warning(
+                "scrape skipped (body too large): url=%s %s",
+                detail_url[:200] if detail_url else "",
+                e,
+            )
+            continue
         except (ValueError, KeyError, AttributeError, TypeError) as e:
             logger.warning(
                 "scrape failed (parser): url=%s error=%s",
@@ -363,12 +382,18 @@ async def _collect_payloads_async(
         yield payload
 
 
-def crawl_college_sync(session: Session, college_code: str) -> tuple[int, list[int]]:
+def crawl_college_sync(
+    session: Session,
+    college_code: str,
+    *,
+    on_chunk_processed: Callable[[list[int]], None] | None = None,
+) -> tuple[int, list[int]]:
     """
     단과대 1개 크롤 (동기, Celery 워커 전용). 동기 DB 세션·Repository 사용.
     get_*_links / (1초 sleep) / scrape_*_detail → upsert_notice_sync.
-    content_hash가 바뀌었거나 신규 공지는 4단계 AI 큐 대상이므로 notice_id 목록으로 반환.
-    반환: (upsert한 개수, AI 처리 대상 notice_id 목록).
+    content_hash가 바뀌었거나 신규 공지는 4단계 AI 큐 대상.
+    on_chunk_processed: 청크 upsert 직후 호출(메모리 누적 없이 즉시 enqueue용). None이면 notice_id 목록 반환.
+    반환: (upsert한 개수, AI 처리 대상 notice_id 목록). on_chunk_processed 사용 시 목록은 [].
     """
     college = get_college_by_external_id_sync(session, college_code)
     if not college:
@@ -390,6 +415,7 @@ def crawl_college_sync(session: Session, college_code: str) -> tuple[int, list[i
 
     seen: set[str] = set()
     notice_ids_to_process: list[int] = []
+    total_upserted = 0
     chunk: list[dict] = []
     for payload in _collect_payloads_sync(
         links, college.id, scrape_fn, POLITE_DELAY_SECONDS, seen
@@ -399,11 +425,64 @@ def crawl_college_sync(session: Session, college_code: str) -> tuple[int, list[i
             ids = upsert_notices_bulk_sync(session, chunk)
             session.commit()
             session.expunge_all()
-            notice_ids_to_process.extend(ids)
+            total_upserted += len(ids)
+            if on_chunk_processed is not None:
+                on_chunk_processed(ids)
+            else:
+                notice_ids_to_process.extend(ids)
             chunk.clear()
     if chunk:
         ids = upsert_notices_bulk_sync(session, chunk)
         session.commit()
         session.expunge_all()
-        notice_ids_to_process.extend(ids)
-    return (len(notice_ids_to_process), notice_ids_to_process)
+        total_upserted += len(ids)
+        if on_chunk_processed is not None:
+            on_chunk_processed(ids)
+        else:
+            notice_ids_to_process.extend(ids)
+    if on_chunk_processed is not None:
+        return (total_upserted, [])
+    return (total_upserted, notice_ids_to_process)
+
+
+def run_crawl_job_sync(
+    session: Session,
+    college_code: str,
+    task_id: str,
+    on_chunk_processed: Callable[[list[int]], None],
+) -> tuple[int, int]:
+    """
+    크롤 작업 한 건 실행 (college 조회 + crawl_run 생성/갱신 + crawl_college_sync).
+    서비스 레이어 단일 진입점: tasks에서 college/crawl_run repository 직접 주입 없이 사용.
+    반환: (upserted 개수, enqueued_ai 개수).
+    """
+    from datetime import UTC, datetime
+
+    college = get_college_by_external_id_sync(session, college_code)
+    if not college:
+        raise ValueError(f"College not found: {college_code}")
+    create_crawl_run_sync(session, college.id, task_id)
+    session.commit()
+    try:
+        count, _ = crawl_college_sync(
+            session, college_code, on_chunk_processed=on_chunk_processed
+        )
+        update_crawl_run_sync(
+            session,
+            task_id,
+            finished_at=datetime.now(UTC),
+            status="success",
+            notices_upserted=count,
+        )
+        session.commit()
+        return (count, count)
+    except Exception as e:
+        update_crawl_run_sync(
+            session,
+            task_id,
+            finished_at=datetime.now(UTC),
+            status="failed",
+            error_message=(str(e))[:2000],
+        )
+        session.commit()
+        raise

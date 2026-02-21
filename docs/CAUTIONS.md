@@ -132,6 +132,7 @@
 | 주의사항 | 설명 | 대응 |
 |----------|------|------|
 | **OAuth 핸드쉐이크 미정** | 프론트(Vercel)와 백(Railway)이 다른 도메인인데, 토큰 주고받는 방식을 6단계에서만 정하면 CORS·보안으로 일주일 낭비. | **2단계에서** "프론트가 code를 백으로 전달 → 백이 JWT 발급 → body JSON vs HttpOnly Cookie" 중 하나로 **핸드쉐이크 확정**. CORS·Credentials를 그에 맞춰 설계. |
+| **토큰 무효화(로그아웃) 원자성** | 로그아웃 시 DB와 Redis가 따로 실패하면 좀비 세션·일관성 깨짐. | **순서 보장**: DB(Refresh 버전 증가) 선행 → Redis(Blocklist 등록). Redis 실패 시 예외 발생·클라이언트 재시도 가능. DB는 이미 반영되어 Refresh 무효화됨. auth_service.logout_user 참고. |
 | **API 버전 없음** | 나중에 필드명 바꾸면 프론트 연쇄 수정. | 공개 API는 **`/v1/` prefix**. 기존 필드 삭제·이름 변경 금지. 추가만 하거나 /v2/로. |
 | **ALLOWED_ORIGINS 누락** | 6단계에서 프론트 도메인을 안 넣으면 CORS 에러. | 6단계 연동 전에 Railway Variables에 **ALLOWED_ORIGINS**(Vercel URL) 설정. |
 

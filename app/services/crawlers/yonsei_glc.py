@@ -110,6 +110,7 @@ def scrape_glc_detail(url):
         # 3. 본문 및 4. 이미지 추출
         content_html = ""
         images = []
+        image_urls_glc: set[str] = set()
 
         content_div = soup.find('div', class_='content-view')
 
@@ -136,8 +137,9 @@ def scrape_glc_detail(url):
                         safe_url = urllib.parse.urlunparse(
                             (parsed.scheme, parsed.netloc, encoded_path, parsed.params, parsed.query, parsed.fragment)
                         )
-                        fname = os.path.basename(parsed.path)
-                        if not any(d.get('data') == safe_url for d in images):
+                        if safe_url not in image_urls_glc:
+                            image_urls_glc.add(safe_url)
+                            fname = os.path.basename(parsed.path)
                             images.append({"type": "url", "data": safe_url, "name": fname or f"image_{idx+1}.jpg"})
 
                 img.decompose()
@@ -152,12 +154,14 @@ def scrape_glc_detail(url):
 
         # 5. 첨부파일 추출
         attachments = []
+        attachment_names_glc: set[str] = set()
         buttons = soup.find_all('button', class_=lambda c: c and 'kboard-button-download' in c)
         for btn in buttons:
             if not isinstance(btn, Tag):
                 continue
             fname = btn.get_text(strip=True)
-            if fname and fname not in attachments:
+            if fname and fname not in attachment_names_glc:
+                attachment_names_glc.add(fname)
                 attachments.append(fname)
 
         return title, date, content_html, images, attachments
@@ -218,6 +222,7 @@ async def scrape_glc_detail_async(client: httpx.AsyncClient, url: str):
                 date = normalize_date(val_div.get_text(strip=True))
         content_html = ""
         images = []
+        image_urls_glc_async: set[str] = set()
         content_div = soup.find("div", class_="content-view")
         if content_div and isinstance(content_div, Tag):
             for idx, img in enumerate(content_div.find_all("img")):
@@ -237,8 +242,9 @@ async def scrape_glc_detail_async(client: httpx.AsyncClient, url: str):
                         parsed = urllib.parse.urlparse(full_url)
                         enc_path = urllib.parse.quote(parsed.path)
                         safe_url = urllib.parse.urlunparse((parsed.scheme, parsed.netloc, enc_path, parsed.params, parsed.query, parsed.fragment))
-                        fname = os.path.basename(parsed.path) or f"image_{idx+1}.jpg"
-                        if not any(d.get("data") == safe_url for d in images):
+                        if safe_url not in image_urls_glc_async:
+                            image_urls_glc_async.add(safe_url)
+                            fname = os.path.basename(parsed.path) or f"image_{idx+1}.jpg"
                             images.append({"type": "url", "data": safe_url, "name": fname})
                 img.decompose()
             for table in content_div.find_all("table"):
@@ -248,10 +254,12 @@ async def scrape_glc_detail_async(client: httpx.AsyncClient, url: str):
         else:
             content_html = "(본문 영역을 찾을 수 없습니다)"
         attachments = []
+        attachment_names_glc_async: set[str] = set()
         for btn in soup.find_all("button", class_=lambda c: c and "kboard-button-download" in c):
             if isinstance(btn, Tag):
                 fname = btn.get_text(strip=True)
-                if fname and fname not in attachments:
+                if fname and fname not in attachment_names_glc_async:
+                    attachment_names_glc_async.add(fname)
                     attachments.append(fname)
         return title, date, content_html, images, attachments
     except Exception as e:

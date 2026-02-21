@@ -72,6 +72,7 @@ def scrape_science_detail(url):
 
         content_html = ""
         images = []
+        image_urls_sync: set[str] = set()
 
         temp_soup = get_body_soup(soup)
         if temp_soup:
@@ -94,8 +95,9 @@ def scrape_science_detail(url):
                         safe_url = urllib.parse.urlunparse(
                             (parsed.scheme, parsed.netloc, encoded_path, parsed.params, parsed.query, parsed.fragment)
                         )
-                        fname = os.path.basename(parsed.path)
-                        if not any(d.get('data') == safe_url for d in images):
+                        if safe_url not in image_urls_sync:
+                            image_urls_sync.add(safe_url)
+                            fname = os.path.basename(parsed.path)
                             images.append({"type": "url", "data": safe_url, "name": fname or f"image_{idx+1}.jpg"})
                 img.decompose()
 
@@ -107,12 +109,14 @@ def scrape_science_detail(url):
             content_html = "(본문 영역을 찾을 수 없습니다)"
 
         attachments = []
+        attachment_names_sync: set[str] = set()
         file_divs = soup.find_all('div', class_='file-name-area')
         for fdiv in file_divs:
             if not isinstance(fdiv, Tag):
                 continue
             fname = "".join([node for node in fdiv.contents if isinstance(node, str)]).strip()
-            if fname and fname not in attachments:
+            if fname and fname not in attachment_names_sync:
+                attachment_names_sync.add(fname)
                 attachments.append(fname)
 
         return title, date, content_html, images, attachments
@@ -217,6 +221,7 @@ async def scrape_science_detail_async(client: httpx.AsyncClient, url: str):
                     break
         content_html = ""
         images = []
+        image_urls_async: set[str] = set()
         temp_soup = get_body_soup(soup)
         if temp_soup:
             for idx, img in enumerate(temp_soup.find_all("img")):
@@ -234,8 +239,9 @@ async def scrape_science_detail_async(client: httpx.AsyncClient, url: str):
                         parsed = urllib.parse.urlparse(full_url)
                         encoded_path = urllib.parse.quote(parsed.path)
                         safe_url = urllib.parse.urlunparse((parsed.scheme, parsed.netloc, encoded_path, parsed.params, parsed.query, parsed.fragment))
-                        fname = os.path.basename(parsed.path) or f"image_{idx+1}.jpg"
-                        if not any(d.get("data") == safe_url for d in images):
+                        if safe_url not in image_urls_async:
+                            image_urls_async.add(safe_url)
+                            fname = os.path.basename(parsed.path) or f"image_{idx+1}.jpg"
                             images.append({"type": "url", "data": safe_url, "name": fname})
                 img.decompose()
             for table in temp_soup.find_all("table"):
@@ -245,11 +251,13 @@ async def scrape_science_detail_async(client: httpx.AsyncClient, url: str):
         else:
             content_html = "(본문 영역을 찾을 수 없습니다)"
         attachments = []
+        attachment_names_async: set[str] = set()
         for fdiv in soup.find_all("div", class_="file-name-area"):
             if not isinstance(fdiv, Tag):
                 continue
             fname = "".join([node for node in fdiv.contents if isinstance(node, str)]).strip()
-            if fname and fname not in attachments:
+            if fname and fname not in attachment_names_async:
+                attachment_names_async.add(fname)
                 attachments.append(fname)
         return title, date, content_html, images, attachments
     except Exception as e:

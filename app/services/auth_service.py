@@ -237,12 +237,22 @@ async def logout_user(
     redis_blocklist_client: Any = None,
 ) -> None:
     """
-    해당 유저의 refresh_token_version 증가 → 기존 Refresh 토큰 전부 무효화.
-    access_jti·ttl_seconds·redis_blocklist_client가 있으면 해당 Access Token을 Blocklist에 등록.
+    로그아웃: DB 선행(Refresh 무효화) 후 Redis Blocklist 등록.
+    순서 보장: DB commit 후 Redis. Redis 실패 시 예외를 발생시켜 클라이언트 재시도 가능하게 함.
+    DB는 이미 반영되므로 재시도 시 Refresh는 이미 무효; Blocklist만 재등록 시도.
     """
     async with transaction() as session:
         await revoke_refresh_tokens_for_user(session, user_id)
     if redis_blocklist_client and access_jti and ttl_seconds and ttl_seconds > 0:
-        await add_access_to_blocklist(
-            redis_blocklist_client, access_jti, ttl_seconds
-        )
+        try:
+            await add_access_to_blocklist(
+                redis_blocklist_client, access_jti, ttl_seconds
+            )
+        except Exception as e:
+            logger.warning(
+                "logout_user: blocklist add failed (jti=%s); refresh already invalidated. Re-raise for client retry: %s",
+                access_jti,
+                e,
+                exc_info=True,
+            )
+            raise

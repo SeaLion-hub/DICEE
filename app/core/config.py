@@ -1,6 +1,6 @@
 """환경 변수 기반 설정. pydantic-settings 사용."""
 
-from pydantic import SecretStr
+from pydantic import SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -45,6 +45,29 @@ class Settings(BaseSettings):
 
     # 6단계 CORS
     allowed_origins: str = ""
+
+    @model_validator(mode="after")
+    def fail_fast_production(self: "Settings") -> "Settings":
+        """프로덕션 환경 시 필수 변수 누락이면 부팅 거부(Fail-Fast)."""
+        if (self.environment or "").strip().lower() != "production":
+            return self
+        missing: list[str] = []
+        if not (self.database_url or "").strip():
+            missing.append("DATABASE_URL")
+        if not (self.redis_url or "").strip():
+            missing.append("REDIS_URL")
+        if not (self.jwt_secret.get_secret_value() or "").strip():
+            missing.append("JWT_SECRET")
+        if not (self.google_client_id or "").strip():
+            missing.append("GOOGLE_CLIENT_ID")
+        if not (self.google_client_secret.get_secret_value() or "").strip():
+            missing.append("GOOGLE_CLIENT_SECRET")
+        if missing:
+            raise ValueError(
+                f"Production environment requires these variables to be set: {', '.join(missing)}. "
+                "Set them in Secret Manager or environment before boot."
+            )
+        return self
 
 
 settings = Settings()

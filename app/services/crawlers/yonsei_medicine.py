@@ -75,6 +75,7 @@ def get_medicine_notice_links(list_url):
             fallback = soup.select('.bbs-list li') or soup.select('tbody tr')
             items = [t for t in fallback if isinstance(t, Tag)]
 
+        seen_urls: set[str] = set()
         for item in items:
             if not isinstance(item, Tag):
                 continue
@@ -99,8 +100,9 @@ def get_medicine_notice_links(list_url):
                             break
                 except Exception:
                     pass
-                # 중복 방지
-                if not any(link['url'] == full_url for link in links):
+                # 중복 방지 (set 기반 O(1))
+                if full_url not in seen_urls:
+                    seen_urls.add(full_url)
                     link = {"url": full_url}
                     link["no"] = no_text if no_text else "Post"  # 스키마 일관성: 없으면 기본값
                     links.append(link)
@@ -163,6 +165,7 @@ def scrape_medicine_detail(url):
 
         # 4. 이미지 (본문에서 추출)
         images = []
+        image_urls_med: set[str] = set()
         if isinstance(fr_view, Tag):
             # 원본 soup에서 이미지 태그 탐색 (clean_html_content는 복사본을 썼으므로)
             # 안전하게 다시 찾기
@@ -189,16 +192,16 @@ def scrape_medicine_detail(url):
                         if any(x in src for x in ['icon', 'btn', 'blank']):
                             continue
                         full_url = urljoin(url, src)
-                        fname = os.path.basename(full_url.split('?')[0])
-                        if not fname or '.' not in fname:
-                            fname = "image.jpg"
-
-                        # 중복 방지
-                        if not any(d['data'] == full_url for d in images if d['type']=='url'):
+                        if full_url not in image_urls_med:
+                            image_urls_med.add(full_url)
+                            fname = os.path.basename(full_url.split('?')[0])
+                            if not fname or '.' not in fname:
+                                fname = "image.jpg"
                             images.append({"type":"url", "data":full_url, "name":fname})
 
         # 5. 첨부파일
         attachments = []
+        attachment_names_med: set[str] = set()
         attach_div = soup.find('div', class_='attach-files')
         if attach_div and isinstance(attach_div, Tag):
             for a in attach_div.find_all('a'):
@@ -209,7 +212,8 @@ def scrape_medicine_detail(url):
                 # 다운로드 링크 식별
                 if 'download' in href or 'mode=download' in href:
                     fname = a.get_text(strip=True)
-                    if fname and fname not in attachments:
+                    if fname and fname not in attachment_names_med:
+                        attachment_names_med.add(fname)
                         attachments.append(fname)
 
         return title, date, content_html, images, attachments
@@ -226,6 +230,7 @@ async def get_medicine_notice_links_async(client: httpx.AsyncClient, list_url: s
         text = await fetch_html_async(client, list_url, timeout=10.0)
         soup = BeautifulSoup(text, "html.parser")
         links: list[dict[str, Any]] = []
+        seen_urls_async: set[str] = set()
         items = [t for t in soup.find_all("div", class_="bbs-item") if isinstance(t, Tag)]
         if not items:
             fallback = soup.select(".bbs-list li") or soup.select("tbody tr")
@@ -248,7 +253,8 @@ async def get_medicine_notice_links_async(client: httpx.AsyncClient, list_url: s
                             break
                 except Exception:
                     pass
-                if not any(link["url"] == full_url for link in links):
+                if full_url not in seen_urls_async:
+                    seen_urls_async.add(full_url)
                     links.append({"url": full_url, "no": no_text if no_text else "Post"})
         return links
     except Exception:
@@ -287,6 +293,7 @@ async def scrape_medicine_detail_async(client: httpx.AsyncClient, url: str):
         else:
             content_html = "(본문 영역 .fr-view를 찾을 수 없습니다)"
         images = []
+        image_urls_med_async: set[str] = set()
         raw_view = soup.find("div", class_="fr-view")
         if raw_view and isinstance(raw_view, Tag):
             for img in raw_view.find_all("img"):
@@ -306,10 +313,12 @@ async def scrape_medicine_detail_async(client: httpx.AsyncClient, url: str):
                     if any(x in src for x in ["icon", "btn", "blank"]):
                         continue
                     full_url = urljoin(url, src)
-                    fname = os.path.basename(full_url.split("?")[0]) or "image.jpg"
-                    if not any(d.get("data") == full_url for d in images if d.get("type") == "url"):
+                    if full_url not in image_urls_med_async:
+                        image_urls_med_async.add(full_url)
+                        fname = os.path.basename(full_url.split("?")[0]) or "image.jpg"
                         images.append({"type": "url", "data": full_url, "name": fname})
         attachments = []
+        attachment_names_med_async: set[str] = set()
         attach_div = soup.find("div", class_="attach-files")
         if attach_div and isinstance(attach_div, Tag):
             for a in attach_div.find_all("a"):
@@ -318,7 +327,8 @@ async def scrape_medicine_detail_async(client: httpx.AsyncClient, url: str):
                 href = a.get("href", "") or ""
                 if "download" in href or "mode=download" in href:
                     fname = a.get_text(strip=True)
-                    if fname and fname not in attachments:
+                    if fname and fname not in attachment_names_med_async:
+                        attachment_names_med_async.add(fname)
                         attachments.append(fname)
         return title, date, content_html, images, attachments
     except Exception as e:

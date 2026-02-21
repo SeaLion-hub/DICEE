@@ -9,6 +9,7 @@ from bs4.element import PageElement
 from requests.exceptions import RequestException
 
 from app.core.crawler_config import CRAWLER_HEADERS
+from app.core.crawl_http import HtmlTooLargeError, fetch_html_async
 
 logger = logging.getLogger(__name__)
 
@@ -235,10 +236,10 @@ def get_notice_links(list_url):
 async def get_notice_links_async(client: httpx.AsyncClient, list_url: str):
     """비동기: 목록 URL에서 공지 링크 수집."""
     try:
-        resp = await client.get(list_url, headers=CRAWLER_HEADERS, timeout=10.0)
-        resp.raise_for_status()
-        soup = BeautifulSoup(resp.text, "html.parser")
+        text = await fetch_html_async(client, list_url, timeout=10.0)
+        soup = BeautifulSoup(text, "html.parser")
         links = []
+        seen_urls: set[str] = set()
         rows = soup.select("tbody tr")
         for row in rows:
             if not isinstance(row, Tag):
@@ -255,8 +256,13 @@ async def get_notice_links_async(client: httpx.AsyncClient, list_url: str):
                     href_str = href_val if isinstance(href_val, str) else (href_val[0] if isinstance(href_val, list) and href_val else "")
                     if href_str:
                         full_url = urljoin(list_url, href_str)
-                        links.append({"no": num_text, "url": full_url})
+                        if full_url not in seen_urls:
+                            seen_urls.add(full_url)
+                            links.append({"no": num_text, "url": full_url})
         return links
+    except HtmlTooLargeError as e:
+        logger.warning("get_notice_links_async body too large list_url=%s: %s", list_url, e)
+        return []
     except Exception:
         logger.exception("get_notice_links_async parsing error list_url=%s", list_url)
         return []
@@ -265,10 +271,8 @@ async def get_notice_links_async(client: httpx.AsyncClient, list_url: str):
 async def scrape_yonsei_engineering_precise_async(client: httpx.AsyncClient, url: str):
     """비동기: 상세 페이지 스크래핑. 반환 (title, date, content_text, images_data, attachment_names)."""
     try:
-        resp = await client.get(url, headers=CRAWLER_HEADERS, timeout=10.0)
-        if resp.status_code != 200:
-            return None, "접속 실패", None, [], []
-        soup = BeautifulSoup(resp.text, "html.parser")
+        text = await fetch_html_async(client, url, timeout=10.0)
+        soup = BeautifulSoup(text, "html.parser")
         title = "제목 없음"
         title_label = soup.find(string=lambda t: t and "제목" in t)
         if title_label:
@@ -305,6 +309,7 @@ async def scrape_yonsei_engineering_precise_async(client: httpx.AsyncClient, url
         if not content_text:
             content_text = "(본문 영역인 <dd> 태그를 찾지 못했습니다.)"
         images_data = []
+        image_urls_async: set[str] = set()
         if main_container and isinstance(main_container, Tag):
             for idx, img in enumerate(main_container.find_all("img")):
                 if not isinstance(img, Tag):
@@ -323,13 +328,15 @@ async def scrape_yonsei_engineering_precise_async(client: httpx.AsyncClient, url
                     if any(x in src for x in ["icon", "btn", "button", "search", "blank"]):
                         continue
                     full_url = "https://engineering.yonsei.ac.kr" + src if src.startswith("/") else (src if src.startswith("http") else None)
-                    if full_url and not any(d.get("data") == full_url for d in images_data if d.get("type") == "url"):
+                    if full_url and full_url not in image_urls_async:
+                        image_urls_async.add(full_url)
                         fn_raw = img.get("data-file_name")
                         file_name = fn_raw if isinstance(fn_raw, str) and fn_raw else os.path.basename(src.split("?")[0])
                         if not file_name or "." not in file_name:
                             file_name = f"image_{idx+1}.jpg"
                         images_data.append({"type": "url", "data": full_url, "ext": file_name.split(".")[-1], "name": file_name})
         attachment_names = []
+        attachment_names_set: set[str] = set()
         for label in soup.find_all(string=re.compile("첨부")):
             parent_row = label.find_parent(["tr", "li", "div", "dl", "dt", "dd"])
             if isinstance(parent_row, Tag) and parent_row.name == "dt":
@@ -341,9 +348,13 @@ async def scrape_yonsei_engineering_precise_async(client: httpx.AsyncClient, url
                         continue
                     file_name = link.get_text(strip=True)
                     href = link.get("href", "") or ""
-                    if href and not href.startswith("#") and "javascript" not in href and file_name and file_name not in attachment_names:
+                    if href and not href.startswith("#") and "javascript" not in href and file_name and file_name not in attachment_names_set:
+                        attachment_names_set.add(file_name)
                         attachment_names.append(file_name)
         return title, date, content_text, images_data, attachment_names
+    except HtmlTooLargeError as e:
+        logger.warning("scrape_yonsei_engineering_precise_async body too large url=%s: %s", url, e)
+        return None, "본문 초과", None, [], []
     except Exception as e:
         logger.exception("scrape_yonsei_engineering_precise_async error url=%s", url)
         raise
