@@ -22,6 +22,8 @@ class Settings(BaseSettings):
 
     # 2단계 Auth
     jwt_secret: str = ""
+    jwt_issuer: str = ""  # JWT iss 클레임 (발급자). 검증 시 사용.
+    jwt_audience: str = ""  # JWT aud 클레임 (대상). 검증 시 사용.
     jwt_access_expire_seconds: int = 3600  # Access 토큰 만료 (초). 기본 1시간.
     jwt_refresh_expire_days: int = 7  # Refresh 토큰 만료 (일). 기본 7일.
     google_client_id: str = ""

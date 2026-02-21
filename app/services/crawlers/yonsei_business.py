@@ -4,11 +4,13 @@ import re
 from typing import Any
 from urllib.parse import urljoin
 
+import httpx
 import requests
 from bs4 import BeautifulSoup, Tag
 from requests.exceptions import RequestException
 
 from app.core.crawler_config import CRAWLER_HEADERS
+from app.core.crawl_http import fetch_html_async
 
 logger = logging.getLogger(__name__)
 
@@ -214,4 +216,105 @@ def scrape_business_detail(url):
         raise
     except Exception as e:
         logger.exception("scrape_business_detail parsing error url=%s, error=%s", url, e)
+        raise
+
+
+async def get_business_notice_links_async(client: httpx.AsyncClient, list_url: str):
+    try:
+        resp = await client.get(list_url, headers=CRAWLER_HEADERS, timeout=10.0)
+        resp.raise_for_status()
+        try:
+            text = resp.content.decode("cp949")
+        except Exception:
+            text = resp.text
+        soup = BeautifulSoup(text, "html.parser")
+        links: list[dict[str, Any]] = []
+        for td in soup.find_all("td", class_="Subject") or soup.find_all("td", class_="subject"):
+            if not isinstance(td, Tag):
+                continue
+            a_tag = td.find("a")
+            if not a_tag or not isinstance(a_tag, Tag):
+                continue
+            href = a_tag.get("href", "") or ""
+            title_text = a_tag.get_text(strip=True)
+            if href:
+                full_url = urljoin(list_url, href)
+                prev_td = td.find_previous_sibling("td")
+                no_text = prev_td.get_text(strip=True) if isinstance(prev_td, Tag) else ""
+                if not no_text.isdigit():
+                    no_text = ""
+                if not any(link["url"] == full_url for link in links):
+                    links.append({"no": no_text, "url": full_url, "title_hint": title_text})
+        return links
+    except Exception:
+        logger.exception("get_business_notice_links_async parsing error list_url=%s", list_url)
+        return []
+
+
+async def scrape_business_detail_async(client: httpx.AsyncClient, url: str):
+    try:
+        resp = await client.get(url, headers=CRAWLER_HEADERS, timeout=10.0)
+        resp.raise_for_status()
+        try:
+            text = resp.content.decode("cp949")
+        except Exception:
+            text = resp.text
+        soup = BeautifulSoup(text, "html.parser")
+        title = "제목 없음"
+        t_elem = soup.find(id="BoardViewTitle")
+        if t_elem and isinstance(t_elem, Tag):
+            title = t_elem.get_text(strip=True)
+        else:
+            h = soup.find(["h2", "h3"])
+            if isinstance(h, Tag):
+                title = h.get_text(strip=True)
+        date = "날짜 없음"
+        info = soup.find(id="BoardViewAdd")
+        if isinstance(info, Tag):
+            txt = info.get_text()
+            m = re.search(r"등록일\s*:\s*([\d.-]+)", txt) or re.search(r"\d{4}[.-]\d{2}[.-]\d{2}", txt)
+            if m:
+                date = normalize_date(m.group(1) if m.lastindex else m.group())
+        content_html = ""
+        container = soup.find("div", id="BoardContent")
+        if container and isinstance(container, Tag):
+            content_html = clean_html_content(container)
+        else:
+            content_html = "(본문 BoardContent를 찾을 수 없습니다)"
+        images = []
+        raw_cont = soup.find("div", id="BoardContent")
+        if raw_cont and isinstance(raw_cont, Tag):
+            for img in raw_cont.find_all("img"):
+                if not isinstance(img, Tag):
+                    continue
+                img_src = img.get("src", "") or ""
+                if not img_src:
+                    continue
+                if img_src.startswith("data:image"):
+                    try:
+                        _, enc = img_src.split(",", 1)
+                        images.append({"type": "base64", "data": enc, "name": "img.png"})
+                    except Exception:
+                        continue
+                else:
+                    if any(x in img_src for x in ["icon", "btn", "blank"]):
+                        continue
+                    full_url_str = urljoin(url, img_src)
+                    fname = os.path.basename(full_url_str.split("?")[0]) or "image.jpg"
+                    if not any(d.get("data") == full_url_str for d in images if d.get("type") == "url"):
+                        images.append({"type": "url", "data": full_url_str, "name": fname})
+        attachments = []
+        area = soup.find(id="BoardViewFile")
+        cont = area if isinstance(area, Tag) else soup
+        for a in cont.find_all("a"):
+            if not isinstance(a, Tag):
+                continue
+            href = a.get("href", "") or ""
+            if "downloadfile.asp" in href:
+                fname = a.get_text(strip=True)
+                if fname and fname not in attachments:
+                    attachments.append(fname)
+        return title, date, content_html, images, attachments
+    except Exception as e:
+        logger.exception("scrape_business_detail_async error url=%s", url)
         raise

@@ -4,11 +4,13 @@ import re
 import urllib.parse
 from urllib.parse import urljoin
 
+import httpx
 import requests
 from bs4 import BeautifulSoup, Tag
 from requests.exceptions import RequestException
 
 from app.core.crawler_config import CRAWLER_HEADERS
+from app.core.crawl_http import fetch_html_async
 
 logger = logging.getLogger(__name__)
 
@@ -185,4 +187,98 @@ def scrape_uic_detail(url):
         raise
     except Exception as e:
         logger.exception("scrape_uic_detail parsing error url=%s, error=%s", url, e)
+        raise
+
+
+async def get_uic_links_async(client: httpx.AsyncClient, url: str):
+    links = []
+    try:
+        text = await fetch_html_async(client, url, timeout=10.0)
+        soup = BeautifulSoup(text, "html.parser")
+        idx = 1
+        for box in soup.find_all("div", class_="divbox_half_news"):
+            if not isinstance(box, Tag):
+                continue
+            category_span = box.find("span", class_="Text_26bk")
+            category = category_span.get_text(strip=True) if isinstance(category_span, Tag) else "Notice"
+            newsbox = box.find("div", class_="newsbox")
+            if not newsbox or not isinstance(newsbox, Tag):
+                continue
+            count = 0
+            for a in newsbox.find_all("a"):
+                if count >= 5:
+                    break
+                if not isinstance(a, Tag) or not a.get("href"):
+                    continue
+                full_url = urljoin(url, a.get("href"))
+                title = a.get_text(strip=True)
+                if not title or title.lower() == "more":
+                    continue
+                links.append({"no": str(idx), "title": f"[{category}] {title}", "url": full_url})
+                idx += 1
+                count += 1
+        return links
+    except Exception:
+        logger.exception("get_uic_links_async parsing error url=%s", url)
+        return []
+
+
+async def scrape_uic_detail_async(client: httpx.AsyncClient, url: str):
+    try:
+        text = await fetch_html_async(client, url, timeout=10.0)
+        soup = BeautifulSoup(text, "html.parser")
+        title = "제목 없음"
+        title_div = soup.find("div", id="BoardViewTitle")
+        if title_div and isinstance(title_div, Tag):
+            title = title_div.get_text(strip=True)
+        date = "날짜 없음"
+        attachments = []
+        for b_add in soup.find_all("div", id="BoardViewAdd"):
+            if not isinstance(b_add, Tag):
+                continue
+            text_content = b_add.get_text(strip=True)
+            if "Views:" in text_content or re.search(r"[A-Za-z]+\s+\d{1,2},\s+\d{4}", text_content):
+                date = normalize_uic_date(text_content)
+            for a in b_add.find_all("a"):
+                if not isinstance(a, Tag):
+                    continue
+                if a.find("img"):
+                    fname = re.sub(r"\([\d.,]+\s*(KB|MB|GB|Bytes?)\)", "", a.get_text(separator=" ", strip=True).strip('"'), flags=re.IGNORECASE).strip()
+                    if fname and fname not in attachments:
+                        attachments.append(fname)
+        content_html = ""
+        images = []
+        content_div = soup.find("div", id="BoardContent")
+        if content_div and isinstance(content_div, Tag):
+            for idx, img in enumerate(content_div.find_all("img")):
+                if not isinstance(img, Tag):
+                    continue
+                src = img.get("src", "") or ""
+                if not src or any(x in src for x in ["icon", "btn", "blank", "ext_"]):
+                    continue
+                if src.startswith("data:image"):
+                    try:
+                        header, encoded = src.split(",", 1)
+                        ext = "jpg" if "jpeg" in header or "jpg" in header else "png"
+                        images.append({"type": "base64", "data": encoded, "name": f"image_{idx+1}.{ext}"})
+                    except Exception:
+                        pass
+                else:
+                    full_url = urljoin(url, src)
+                    parsed = urllib.parse.urlparse(full_url)
+                    enc_path = urllib.parse.quote(parsed.path)
+                    safe_url = urllib.parse.urlunparse((parsed.scheme, parsed.netloc, enc_path, parsed.params, parsed.query, parsed.fragment))
+                    fname = os.path.basename(parsed.path) or f"image_{idx+1}.jpg"
+                    if not any(d.get("data") == safe_url for d in images):
+                        images.append({"type": "url", "data": safe_url, "name": fname})
+                img.decompose()
+            for table in content_div.find_all("table"):
+                if isinstance(table, Tag) and not table.get("border"):
+                    table["border"] = "1"
+            content_html = content_div.decode_contents().strip()
+        else:
+            content_html = "(본문 영역을 찾을 수 없습니다)"
+        return title, date, content_html, images, attachments
+    except Exception as e:
+        logger.exception("scrape_uic_detail_async error url=%s", url)
         raise

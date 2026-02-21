@@ -3,6 +3,17 @@
 from pydantic import BaseModel, Field
 
 
+class GoogleTokenResponse(BaseModel):
+    """구글 OAuth 토큰 교환 응답. model_validate로 검증 (cast 금지)."""
+
+    id_token: str
+    access_token: str
+    token_type: str = "Bearer"
+    expires_in: int | None = None
+    scope: str | None = None
+    refresh_token: str | None = None
+
+
 class TokenPayload(BaseModel):
     """OAuth code 교환 요청."""
 

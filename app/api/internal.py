@@ -2,6 +2,10 @@
 내부 전용 API (Cron·관리). 보안 키 검증 후 크롤 트리거·크롤 이력 조회 등.
 """
 
+import asyncio
+import logging
+import secrets
+
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -11,6 +15,7 @@ from app.core.database import get_db
 from app.repositories.crawl_run_repository import get_recent_crawl_runs
 
 router = APIRouter(prefix="/internal", tags=["internal"])
+logger = logging.getLogger(__name__)
 
 # 단과대별 크롤 시작 시간 분산(Thundering Herd 방지). 초 단위. 예: 300 = 5분 간격.
 CRAWL_STAGGER_SECONDS = 300
@@ -21,7 +26,7 @@ def _validate_trigger_secret(
     authorization: str | None = Header(None),
     secret: str | None = Query(None),
 ) -> None:
-    """CRAWL_TRIGGER_SECRET 검증. 실패 시 HTTPException."""
+    """CRAWL_TRIGGER_SECRET 검증. timing-safe 비교(S4). 실패 시 HTTPException."""
     if not settings.crawl_trigger_secret:
         raise HTTPException(
             status_code=503,
@@ -31,13 +36,13 @@ def _validate_trigger_secret(
         x_crawl_trigger_secret
         or (authorization and authorization.startswith("Bearer ") and authorization[7:].strip())
         or secret
-    )
-    if not provided or provided != settings.crawl_trigger_secret:
+    ) or ""
+    if not secrets.compare_digest(provided, settings.crawl_trigger_secret or ""):
         raise HTTPException(status_code=401, detail="Invalid or missing crawl trigger secret")
 
 
 @router.post("/trigger-crawl")
-def post_trigger_crawl(
+async def post_trigger_crawl(
     college_code: str | None = Query(
         None,
         description="단과대 코드(engineering, science, ...). 없으면 전체 순차 enqueue.",
@@ -47,13 +52,11 @@ def post_trigger_crawl(
     secret: str | None = Query(None),
 ) -> dict:
     """
-    크롤 태스크 enqueue. 보안 키 필수.
-    헤더: X-Crawl-Trigger-Secret 또는 Authorization: Bearer <secret>
-    쿼리: ?secret=... 또는 ?college_code=engineering
+    크롤 태스크 enqueue. 보안 키 필수. async def + to_thread(apply_async)(O2).
+    실패 시 503 + 로그.
     """
     _validate_trigger_secret(x_crawl_trigger_secret, authorization, secret)
 
-    # app.worker를 먼저 로드해 Celery app이 default가 되도록 한 뒤 태스크 import
     from app.services.tasks import crawl_college_task
     from app.worker import app  # noqa: F401
 
@@ -70,7 +73,18 @@ def post_trigger_crawl(
     task_ids = []
     for i, code in enumerate(codes):
         countdown = i * CRAWL_STAGGER_SECONDS if len(codes) > 1 else 0
-        result = crawl_college_task.apply_async(args=[code], countdown=countdown)
+        try:
+            result = await asyncio.to_thread(
+                crawl_college_task.apply_async,
+                args=[code],
+                countdown=countdown,
+            )
+        except Exception as e:
+            logger.exception("trigger-crawl apply_async failed: code=%s", code)
+            raise HTTPException(
+                status_code=503,
+                detail="Crawl task enqueue failed",
+            ) from e
         task_ids.append({"college_code": code, "task_id": result.id, "countdown_sec": countdown})
 
     return {

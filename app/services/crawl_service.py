@@ -15,8 +15,10 @@ from bs4 import BeautifulSoup
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
+import httpx
+
 from app.core.config import settings
-from app.core.crawler_config import COLLEGE_CODE_TO_MODULE, CRAWLER_CONFIG, get_crawler
+from app.core.crawler_config import COLLEGE_CODE_TO_MODULE, CRAWLER_CONFIG, get_crawler, get_crawler_async
 from app.repositories.college_repository import (
     get_by_external_id as get_college_by_external_id,
 )
@@ -33,11 +35,14 @@ logger = logging.getLogger(__name__)
 # 요청/페이지 간 최소 딜레이(초). 부하·IP 차단 완화. .env POLITE_DELAY_SECONDS로 오버라이드 가능.
 POLITE_DELAY_SECONDS = settings.polite_delay_seconds
 
-# asyncio.to_thread 호출 상한(초). 스레드 풀 고갈 방지.
+# 비동기 크롤 페이지 타임아웃(초).
 CRAWL_PAGE_TIMEOUT_SECONDS = 30
 
 # 본문 HTML 최대 바이트. 초과 시 해당 공지 스킵(OOM 방지).
 MAX_HTML_BYTES = 5 * 1024 * 1024
+
+# sync 경로 청크 단위 upsert 크기. commit 후 expunge_all로 세션 Identity Map 비우기(E1).
+UPSERT_CHUNK_SIZE = 50
 
 
 def _normalize_url_for_hash(url: str) -> str:
@@ -92,8 +97,8 @@ def _external_id_from_url(url: str) -> str:
         try:
             import sentry_sdk
             sentry_sdk.capture_exception(e)
-        except Exception:
-            pass
+        except Exception as sentry_err:
+            logger.warning("Sentry capture_exception failed: %s", sentry_err)
         path_only = _url_path_only_for_hash(url)
         return hashlib.sha256(path_only.encode()).hexdigest()[:32]
 
@@ -127,8 +132,8 @@ def _parse_published_at(date_str: str | None) -> datetime | None:
                 f"_parse_published_at no match (format change?): date_str={date_str[:100]!r}",
                 level="warning",
             )
-        except Exception:
-            pass
+        except Exception as sentry_err:
+            logger.warning("Sentry capture_message failed: %s", sentry_err)
     except (ValueError, AttributeError, TypeError) as e:
         logger.warning(
             "_parse_published_at failed: date_str=%r error=%s",
@@ -139,8 +144,8 @@ def _parse_published_at(date_str: str | None) -> datetime | None:
         try:
             import sentry_sdk
             sentry_sdk.capture_exception(e)
-        except Exception:
-            pass
+        except Exception as sentry_err:
+            logger.warning("Sentry capture_exception failed: %s", sentry_err)
     return None
 
 
@@ -209,9 +214,8 @@ def build_notice_payload(
 
 async def crawl_college(session: AsyncSession, college_code: str) -> int:
     """
-    단과대 1개 크롤: config에서 모듈·URL 조회 → get_*_links → (1초 딜레이 후) scrape_*_detail
-    → external_id(no 우선·URL fallback), content_hash 계산 → Repository.upsert_notice.
-    반환: upsert한 공지 개수.
+    단과대 1개 크롤 (완전 비동기). httpx.AsyncClient + get_*_links_async / scrape_*_detail_async.
+    asyncio.to_thread 제거. 반환: upsert한 공지 개수.
     """
     college = await get_college_by_external_id(session, college_code)
     if not college:
@@ -226,61 +230,122 @@ async def crawl_college(session: AsyncSession, college_code: str) -> int:
         raise ValueError(f"No crawler config or url for: {module_name}")
 
     list_url = config["url"]
-    get_links_fn, scrape_fn = get_crawler(module_name)
+    get_links_async_fn, scrape_async_fn = get_crawler_async(module_name)
+    seen: set[str] = set()
 
-    try:
-        links = await asyncio.wait_for(
-            asyncio.to_thread(get_links_fn, list_url),
-            timeout=CRAWL_PAGE_TIMEOUT_SECONDS,
-        )
-    except TimeoutError:
-        logger.warning(
-            "crawl_college get_links timeout: college_code=%s list_url=%s",
-            college_code,
-            list_url[:200] if list_url else "",
-        )
-        return 0
-
-    if not links:
-        return 0
-
-    notices: list[dict] = []
-    seen_external_ids = set() # ★ Bulk Upsert 에러 방어용 중복 체크 Set
-
-    for post in links:
-        await asyncio.sleep(POLITE_DELAY_SECONDS)
-
-        detail_url = post.get("url") or ""
+    async with httpx.AsyncClient(timeout=CRAWL_PAGE_TIMEOUT_SECONDS) as client:
         try:
-            title, date_str, html_content, images, attachments = await asyncio.wait_for(
-                asyncio.to_thread(scrape_fn, detail_url),
-                timeout=CRAWL_PAGE_TIMEOUT_SECONDS,
-            )
-        except TimeoutError:
+            links = await get_links_async_fn(client, list_url)
+        except Exception as e:
             logger.warning(
-                "crawl_college scrape timeout: url=%s",
-                detail_url[:200] if detail_url else "",
+                "crawl_college get_links error: college_code=%s list_url=%s error=%s",
+                college_code,
+                list_url[:200] if list_url else "",
+                e,
             )
-            continue
+            return 0
 
-        payload = build_notice_payload(
-            college.id, post, detail_url, title, date_str, html_content, images, attachments
+        if not links:
+            return 0
+
+        notices = await _collect_payloads_async(
+            client, links, college.id, scrape_async_fn, POLITE_DELAY_SECONDS, seen
         )
-        if payload is None:
-            continue
-
-        # ★ 중복 ID 방어 로직 (동일한 목록에 고정 공지가 여러 번 뜰 때 예방)
-        ext_id = payload["external_id"]
-        if ext_id in seen_external_ids:
-            continue
-        seen_external_ids.add(ext_id)
-
-        notices.append(payload)
 
     if not notices:
         return 0
     await upsert_notices_bulk(session, notices)
     return len(notices)
+
+
+def _collect_payloads_sync(
+    links: list[dict],
+    college_id: int,
+    scrape_fn,
+    delay_sec: float,
+    seen: set[str] | None = None,
+) -> list[dict]:
+    """
+    동기: 링크 순회 → delay → scrape_fn(url) → build_notice_payload → 중복 제거.
+    HTTP/DB 미의존. Celery 경로에서 사용.
+    """
+    if seen is None:
+        seen = set()
+    payloads: list[dict] = []
+    for post in links:
+        time.sleep(delay_sec)
+        detail_url = post.get("url") or ""
+        try:
+            title, date_str, html_content, images, attachments = scrape_fn(detail_url)
+        except (TimeoutError, OSError) as e:
+            logger.warning(
+                "scrape failed (timeout/network): url=%s error=%s",
+                detail_url[:200] if detail_url else "",
+                e,
+                exc_info=True,
+            )
+            continue
+        except Exception as e:
+            logger.warning(
+                "scrape failed (parser/other): url=%s error=%s",
+                detail_url[:200] if detail_url else "",
+                e,
+                exc_info=True,
+            )
+            continue
+        payload = build_notice_payload(
+            college_id, post, detail_url, title, date_str, html_content, images, attachments
+        )
+        if payload is None:
+            continue
+        ext_id = payload["external_id"]
+        if ext_id in seen:
+            continue
+        seen.add(ext_id)
+        payloads.append(payload)
+    return payloads
+
+
+async def _collect_payloads_async(
+    client: httpx.AsyncClient,
+    links: list[dict],
+    college_id: int,
+    scrape_async_fn,
+    delay_sec: float,
+    seen: set[str] | None = None,
+) -> list[dict]:
+    """
+    비동기: 링크 순회 → await sleep → await scrape_async_fn(client, url) → build_notice_payload → 중복 제거.
+    HTTP/DB 미의존. FastAPI 경로에서 사용.
+    """
+    if seen is None:
+        seen = set()
+    payloads: list[dict] = []
+    for post in links:
+        await asyncio.sleep(delay_sec)
+        detail_url = post.get("url") or ""
+        try:
+            title, date_str, html_content, images, attachments = await scrape_async_fn(
+                client, detail_url
+            )
+        except Exception as e:
+            logger.warning(
+                "scrape error: url=%s error=%s",
+                detail_url[:200] if detail_url else "",
+                e,
+            )
+            continue
+        payload = build_notice_payload(
+            college_id, post, detail_url, title, date_str, html_content, images, attachments
+        )
+        if payload is None:
+            continue
+        ext_id = payload["external_id"]
+        if ext_id in seen:
+            continue
+        seen.add(ext_id)
+        payloads.append(payload)
+    return payloads
 
 
 def crawl_college_sync(session: Session, college_code: str) -> tuple[int, list[int]]:
@@ -308,48 +373,18 @@ def crawl_college_sync(session: Session, college_code: str) -> tuple[int, list[i
     if not links:
         return (0, [])
 
-    notices: list[dict] = []
-    seen_external_ids = set() # ★ Bulk Upsert 에러 방어용 중복 체크 Set
-
-    for post in links:
-        time.sleep(POLITE_DELAY_SECONDS)
-
-        detail_url = post.get("url") or ""
-        try:
-            title, date_str, html_content, images, attachments = scrape_fn(detail_url)
-        except (TimeoutError, OSError) as e:
-            logger.warning(
-                "scrape failed (timeout/network): url=%s error=%s",
-                detail_url[:200] if detail_url else "",
-                e,
-                exc_info=True,
-            )
-            continue
-        except Exception as e:
-            logger.warning(
-                "scrape failed (parser/other): url=%s error=%s",
-                detail_url[:200] if detail_url else "",
-                e,
-                exc_info=True,
-            )
-            continue
-
-        payload = build_notice_payload(
-            college.id, post, detail_url, title, date_str, html_content, images, attachments
-        )
-        if payload is None:
-            continue
-
-        # ★ 중복 ID 방어 로직 (동일한 목록에 고정 공지가 여러 번 뜰 때 예방)
-        ext_id = payload["external_id"]
-        if ext_id in seen_external_ids:
-            continue
-        seen_external_ids.add(ext_id)
-
-        notices.append(payload)
+    seen: set[str] = set()
+    notices = _collect_payloads_sync(
+        links, college.id, scrape_fn, POLITE_DELAY_SECONDS, seen
+    )
 
     if not notices:
         return (0, [])
-    notice_ids_to_process = upsert_notices_bulk_sync(session, notices)
-    session.commit()
+    notice_ids_to_process: list[int] = []
+    for i in range(0, len(notices), UPSERT_CHUNK_SIZE):
+        chunk = notices[i : i + UPSERT_CHUNK_SIZE]
+        ids = upsert_notices_bulk_sync(session, chunk)
+        session.commit()
+        session.expunge_all()
+        notice_ids_to_process.extend(ids)
     return (len(notices), notice_ids_to_process)

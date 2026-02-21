@@ -4,11 +4,13 @@ import re
 from typing import Any
 from urllib.parse import urljoin
 
+import httpx
 import requests
 from bs4 import BeautifulSoup, Comment, NavigableString, Tag
 from requests.exceptions import RequestException
 
 from app.core.crawler_config import CRAWLER_HEADERS
+from app.core.crawl_http import fetch_html_async
 
 logger = logging.getLogger(__name__)
 
@@ -230,3 +232,86 @@ def get_computing_notice_links(list_url):
     except Exception:
         logger.exception("get_computing_notice_links parsing error list_url=%s", list_url)
         return []
+
+
+async def get_computing_notice_links_async(client: httpx.AsyncClient, list_url: str):
+    try:
+        text = await fetch_html_async(client, list_url, timeout=10.0)
+        soup = BeautifulSoup(text, "html.parser")
+        links = []
+        for row in soup.select("tbody tr"):
+            if not isinstance(row, Tag):
+                continue
+            cols = row.find_all("td")
+            if not cols:
+                continue
+            first_col = cols[0]
+            num_text = first_col.get_text(strip=True) if isinstance(first_col, Tag) else ""
+            if not num_text.isdigit():
+                continue
+            subject_td = row.find("td", class_="td_subject") or (cols[1] if len(cols) > 1 else None)
+            if isinstance(subject_td, Tag):
+                link_tag = subject_td.find("a")
+                if isinstance(link_tag, Tag):
+                    href_val = link_tag.get("href")
+                    href_str = href_val if isinstance(href_val, str) else (href_val[0] if isinstance(href_val, list) and href_val else "")
+                    if href_str:
+                        full_url = urljoin(list_url, href_str) if not href_str.startswith("http") else href_str
+                        links.append({"no": num_text, "url": full_url})
+        return links
+    except Exception:
+        logger.exception("get_computing_notice_links_async parsing error list_url=%s", list_url)
+        return []
+
+
+async def scrape_computing_detail_async(client: httpx.AsyncClient, url: str):
+    try:
+        text = await fetch_html_async(client, url, timeout=10.0)
+        soup = BeautifulSoup(text, "html.parser")
+        title = "제목 없음"
+        title_elem = soup.find(id="bo_v_title") or soup.find(class_="bo_v_title")
+        if isinstance(title_elem, Tag):
+            title = title_elem.get_text(strip=True)
+        date = "날짜 없음"
+        info_sec = soup.find(id="bo_v_info") or soup
+        date_match = re.search(r"\d{2,4}\s*[.-]\s*\d{1,2}\s*[.-]\s*\d{1,2}", info_sec.get_text())
+        if date_match:
+            date = normalize_date(date_match.group())
+        content_text = ""
+        images: list[dict[str, Any]] = []
+        body_tags = extract_between_comments(soup, "본문 내용 시작", "본문 내용 끝")
+        if body_tags:
+            temp_html = "".join(str(t) for t in body_tags)
+            temp_soup = BeautifulSoup(temp_html, "html.parser")
+            content_text = get_text_structurally(temp_soup)
+            content_text = re.sub(r"\n\s*\n+", "\n\n", content_text).strip()
+            for img in temp_soup.find_all("img"):
+                if not isinstance(img, Tag):
+                    continue
+                src = img.get("src", "") or ""
+                if not src or src.startswith("data:image"):
+                    continue
+                if any(x in src for x in ["icon", "btn", "blank"]):
+                    continue
+                full = "https://computing.yonsei.ac.kr" + src if src.startswith("/") else src
+                fname = os.path.basename(full.split("?")[0]) or "image.jpg"
+                if not any(d["data"] == full for d in images):
+                    images.append({"type": "url", "data": full, "name": fname})
+        else:
+            content_text = "(본문을 찾을 수 없습니다)"
+        attachments = []
+        file_tags = extract_between_comments(soup, "첨부파일 시작", "첨부파일 끝")
+        if file_tags:
+            for t in file_tags:
+                if isinstance(t, Tag):
+                    for a in t.find_all("a"):
+                        if isinstance(a, Tag):
+                            href_str = a.get("href") or ""
+                            if "download.php" in href_str:
+                                fname = a.get_text(strip=True)
+                                if fname and fname not in attachments:
+                                    attachments.append(fname)
+        return title, date, content_text, images, attachments
+    except Exception as e:
+        logger.exception("scrape_computing_detail_async error url=%s", url)
+        raise

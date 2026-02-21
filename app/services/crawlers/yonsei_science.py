@@ -4,11 +4,13 @@ import re
 import urllib.parse
 from urllib.parse import urljoin
 
+import httpx
 import requests
 from bs4 import BeautifulSoup, Comment, Tag
 from requests.exceptions import RequestException
 
 from app.core.crawler_config import CRAWLER_HEADERS
+from app.core.crawl_http import fetch_html_async
 
 logger = logging.getLogger(__name__)
 
@@ -165,3 +167,91 @@ def get_science_links(url):
     except Exception:
         logger.exception("get_science_links parsing error url=%s", url)
         return []
+
+
+async def get_science_links_async(client: httpx.AsyncClient, url: str):
+    links = []
+    try:
+        text = await fetch_html_async(client, url, timeout=10.0)
+        soup = BeautifulSoup(text, "html.parser")
+        rows = soup.select(".nxb-list-table tbody tr")
+        for row in rows:
+            if not isinstance(row, Tag):
+                continue
+            num_td = row.find("td", class_="nxb-list-table__num")
+            if not num_td or not isinstance(num_td, Tag):
+                continue
+            if num_td.find("i", class_="nxb-list-table__notice-icon"):
+                continue
+            num = num_td.get_text(strip=True)
+            if not num.isdigit():
+                continue
+            title_td = row.find("td", class_="nxb-list-table__title")
+            if title_td and isinstance(title_td, Tag):
+                a_tag = title_td.find("a")
+                if a_tag and isinstance(a_tag, Tag):
+                    href = a_tag.get("href")
+                    if href:
+                        full_url = urljoin(url, href)
+                        links.append({"no": num, "title": a_tag.get_text(strip=True), "url": full_url})
+        return links
+    except Exception:
+        logger.exception("get_science_links_async parsing error url=%s", url)
+        return []
+
+
+async def scrape_science_detail_async(client: httpx.AsyncClient, url: str):
+    try:
+        text = await fetch_html_async(client, url, timeout=10.0)
+        soup = BeautifulSoup(text, "html.parser")
+        title = "제목 없음"
+        t_tag = soup.find("h3", class_="nxb-view__header-title")
+        if t_tag:
+            title = t_tag.get_text(strip=True)
+        date = "날짜 없음"
+        for dt in soup.find_all("div", class_="nxb-view__info-dt"):
+            if "작성일" in dt.get_text():
+                dd = dt.find_next_sibling("div", class_="nxb-view__info-dd")
+                if dd:
+                    date = normalize_date(dd.get_text(strip=True))
+                    break
+        content_html = ""
+        images = []
+        temp_soup = get_body_soup(soup)
+        if temp_soup:
+            for idx, img in enumerate(temp_soup.find_all("img")):
+                src = img.get("src", "")
+                if src and not any(x in src for x in ["icon", "btn", "blank"]):
+                    if src.startswith("data:image"):
+                        try:
+                            header, encoded = src.split(",", 1)
+                            ext = "jpg" if "jpeg" in header or "jpg" in header else "png"
+                            images.append({"type": "base64", "data": encoded, "name": f"image_{idx+1}.{ext}"})
+                        except Exception:
+                            pass
+                    else:
+                        full_url = urljoin(url, src)
+                        parsed = urllib.parse.urlparse(full_url)
+                        encoded_path = urllib.parse.quote(parsed.path)
+                        safe_url = urllib.parse.urlunparse((parsed.scheme, parsed.netloc, encoded_path, parsed.params, parsed.query, parsed.fragment))
+                        fname = os.path.basename(parsed.path) or f"image_{idx+1}.jpg"
+                        if not any(d.get("data") == safe_url for d in images):
+                            images.append({"type": "url", "data": safe_url, "name": fname})
+                img.decompose()
+            for table in temp_soup.find_all("table"):
+                if not table.get("border"):
+                    table["border"] = "1"
+            content_html = temp_soup.decode_contents().strip()
+        else:
+            content_html = "(본문 영역을 찾을 수 없습니다)"
+        attachments = []
+        for fdiv in soup.find_all("div", class_="file-name-area"):
+            if not isinstance(fdiv, Tag):
+                continue
+            fname = "".join([node for node in fdiv.contents if isinstance(node, str)]).strip()
+            if fname and fname not in attachments:
+                attachments.append(fname)
+        return title, date, content_html, images, attachments
+    except Exception as e:
+        logger.exception("scrape_science_detail_async error url=%s", url)
+        raise

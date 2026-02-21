@@ -8,11 +8,12 @@ import httpx
 import jwt
 from google.auth.transport import requests as google_requests
 from google.oauth2 import id_token as google_id_token
+from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.repositories.user_repository import upsert_by_provider_uid
-from app.schemas.auth import TokenResponse
+from app.schemas.auth import GoogleTokenResponse, TokenResponse
 from app.schemas.user import UserBase
 
 logger = logging.getLogger(__name__)
@@ -24,10 +25,10 @@ class AuthError(Exception):
     pass
 
 
-async def exchange_google_code(code: str, redirect_uri: str | None) -> dict[str, Any]:
+async def exchange_google_code(code: str, redirect_uri: str | None) -> GoogleTokenResponse:
     """
     구글 OAuth Authorization Code를 액세스 토큰으로 교환.
-    반환: id_token, access_token, userinfo 등.
+    Pydantic 스키마로 검증 (cast 금지).
     """
     if not settings.google_client_id or not settings.google_client_secret:
         raise AuthError("Google OAuth not configured (GOOGLE_CLIENT_ID/SECRET)")
@@ -49,7 +50,10 @@ async def exchange_google_code(code: str, redirect_uri: str | None) -> dict[str,
         raise AuthError("Invalid or expired authorization code")
 
     data = resp.json()
-    return cast(dict[str, Any], data)
+    try:
+        return GoogleTokenResponse.model_validate(data)
+    except ValidationError as e:
+        raise AuthError("Invalid Google token response") from e
 
 
 def decode_google_id_token(id_token_str: str) -> dict[str, Any]:
@@ -77,12 +81,16 @@ def create_jwt_pair(user_id: int) -> tuple[str, str]:
     access_payload = {
         "sub": str(user_id),
         "type": "access",
+        "iss": settings.jwt_issuer or "dicee",
+        "aud": settings.jwt_audience or "dicee-api",
         "exp": now + timedelta(seconds=settings.jwt_access_expire_seconds),
         "iat": now,
     }
     refresh_payload = {
         "sub": str(user_id),
         "type": "refresh",
+        "iss": settings.jwt_issuer or "dicee",
+        "aud": settings.jwt_audience or "dicee-api",
         "exp": now + timedelta(days=settings.jwt_refresh_expire_days),
         "iat": now,
     }
@@ -112,9 +120,7 @@ async def google_login(
     4. JWT 발급
     """
     token_data = await exchange_google_code(code, redirect_uri)
-    id_token = token_data.get("id_token")
-    if not id_token:
-        raise AuthError("Google did not return id_token")
+    id_token = token_data.id_token
 
     claims = decode_google_id_token(id_token)
     provider_user_id = claims.get("sub") or ""
