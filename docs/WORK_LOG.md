@@ -4,6 +4,7 @@
 
 - [작성 규칙](#작성-규칙)
 - [작성 형식](#작성-형식)
+- [2026-02-22](#2026-02-22)
 - [2026-02-20](#2026-02-20)
 - [2026-02-18](#2026-02-18)
 - [2026-02-17](#2026-02-17)
@@ -25,6 +26,7 @@
 
 ## 2026-02-21
 
+- [문서] docs/ROADMAP.md — **테크 리드 로드맵 보완 지시** 반영. (1) **E1(OOM)**: 할 일에 **SQLAlchemy Identity Map 캐싱 방지를 위해 청크 commit 직후 반드시 session.expunge_all() 호출** 명시(리스트만 비우면 OOM 재발). (2) **S3(침묵하는 예외)**: "except Exception 금지"와 코드 불일치 해결 — **3단계 완료 전 필수 Hotfix** 블록 추가. Sentry capture 블록 내부의 except Exception을 sentry_sdk 전용 예외로 변경(Log Poisoning 방지). 미완 시 3단계 완료 선언 금지. (3) **Redis 분산 락**: 추가 검토 아이디어에 **좀비 락 방어** 제약 추가 — 타임아웃은 예상 크롤 완료 시간 + 20% 마진(예: 3~5분)으로 타이트하게, timeout=3600 금지. P1 요약에 expunge_all·Hotfix 반영.
 - [3단계 P0/P1 기술부채 구현] **P0**: (1) **S1** app/core/config.py JWT_ISSUER·JWT_AUDIENCE 추가, auth_service create_jwt_pair에 iss·aud 클레임 추가, .env.example 갱신. (2) **S5/R1** app/schemas/auth.py GoogleTokenResponse 추가, auth_service exchange_google_code를 model_validate 검증·AuthError 반환으로 변경, google_login token_data.id_token 사용. (3) **A1** app/core/crawl_http.py fetch_html_async(httpx stream), crawler_config get_crawler_async, 7개 크롤러에 get_*_links_async·scrape_*_detail_async 추가, crawl_service crawl_college에서 asyncio.to_thread 제거·httpx.AsyncClient·get_crawler_async만 사용. (4) **A2** crawl_service에 _collect_payloads_sync·_collect_payloads_async 도입, crawl_college·crawl_college_sync는 수집 로직 공통화·진입점만 주입. **P1**: (5) **E1** crawl_college_sync에서 UPSERT_CHUNK_SIZE(50) 단위 upsert 후 session.commit()·**session.expunge_all()** 호출. (6) **O2** app/api/internal.py post_trigger_crawl를 async def로 변경, apply_async는 asyncio.to_thread로 실행, 실패 시 503·logger.exception. (7) **S4** _validate_trigger_secret에 secrets.compare_digest 사용. (8) **S3** crawl_service Sentry 래핑 except Exception: pass 제거, logger.warning(sentry_err)로 구체 처리.
 - [문서] docs/ROADMAP.md — **기술 부채·품질 개선 계획** 최종 수정(계획 승인 반영). 점수·결론에 "PASS: 계획 승인 (Plan Approved)" 및 플랜 반려→재제출→승인 경과 추가. **최종 리뷰 평가 및 피드백** 섹션 추가: P0 "이제야 기본이 잡혔다"·P0 머지 전 새 기능 코드 금지, P1 "GC를 맹신하지 마라"·E1 코드 구현 검증·O2/S3 타협 없음, P2&P3 방어적 인프라·S2 requirements/CI 강제, 결론 "문서의 계획이 코드가 되기 전까지는 의미 없다"·P0 브랜치부터 작업·PR 시 코드 라인 단위 리뷰.
 - [문서] docs/ROADMAP.md — **기술 부채·품질 개선 계획** 전면 재작성(플랜 반려 피드백 반영). (1) **P0(즉시 실행)**: A1 비동기 크롤러 전환·A2 DRY 플로우 공통화(아키텍처 버그로 상향), S1 JWT iss/aud·S5·R1 구글 응답 Pydantic(Auth 대문으로 상향). (2) **S2**: 인프라 원칙(DSN 있으면 sentry-sdk 설치 보장)·코드로 덮지 말 것, 방어 코드는 선택. (3) **S3**: except Exception 금지, sentry_sdk 관련 구체 예외만 처리. (4) **E1**: 청크뿐 아니라 **참조 해제(del/스코프 분리)** 강제 명시(GC는 참조 유지 시 해제 안 함). (5) **O2**: trigger-crawl 무조건 async def + 비동기 클라이언트, 타협 없음. (6) **우선순위 요약** P0/P1/P2/P3 재조정, 플랜 반려 요지·재보고 원칙 추가.
@@ -40,6 +42,11 @@
 - [3단계 크롤러] 의과대·공과대 3건 보완 — yonsei_medicine: 링크에 no 없을 때 기본값 "Post" 부여해 KeyError 방지. yonsei_engineering: Tag|NavigableString → (Tag, NavigableString)으로 Python 3.9 호환, data-file_name 빈 문자열일 때 basename 사용하도록 수정.
 - [3단계 크롤러] 크롤러 4건 버그 수정 — yonsei_medicine·yonsei_business: clean_html_content에서 copy.copy 제거, BeautifulSoup(str(element), 'html.parser')로 깊은 복사해 본문 이미지 소실·원본 훼손 방지. yonsei_business: response.encoding을 cp949로 명시(한글 인코딩 오진 방지). yonsei_ai: body_tags를 temp_soup.append(t) 대신 문자열 결합 후 파싱해 DOM 트리 파괴 방지. yonsei_science·yonsei_glc: href 없을 때 urljoin 전 continue 추가해 TypeError 크래시 방지.
 - [3단계 크롤러] images JSONB bytes 직렬화 오류 수정 — crawl_college_task 실행 시 `TypeError: Object of type bytes is not JSON serializable` 발생. 원인: base64 인라인 이미지 처리 시 `base64.b64decode(encoded)`로 bytes를 images[].data에 넣어 JSONB 저장 시 psycopg 직렬화 실패. 6개 크롤러(yonsei_engineering, science, business, glc, medicine, underwood)에서 base64 이미지의 `data`를 **디코딩하지 않고** base64 문자열(encoded)만 저장하도록 변경. 불필요한 `import base64` 제거.
+
+## 2026-02-22
+
+- [문서] docs/ROADMAP.md — **시니어 풀스택 엔지니어 리뷰 반영** 섹션 추가. 5가지 관점(아키텍처·코드 품질·성능·보안·유지보수) + 인덱싱·이벤트 루프 블로킹·Heavy 컬럼 지연 로딩을 계획표로 정리. (1) **SRP**: crawl_service에서 url_utils/hash_utils 분리, 흐름 제어만 유지. (2) **코드 품질**: Sentry 데코레이터로 파싱 함수 순수성 유지; **CQ2 P0** 구글 토큰 검증 asyncio.to_thread로 이벤트 루프 블로킹 제거. (3) **성능**: database.py make_url로 안전한 async URL 변환, 청크 후 트랜잭션·expunge 명시; 5단계 목록 API defer(raw_html, images, attachments). (4) **보안**: global_exception_handler에 error_code·message 구조화 응답. (5) **DRY**: notice_repository _build_bulk_upsert_stmt 공통화. (6) **인덱싱**: Notice published_at/created_at B-Tree, hashtags/eligibility GIN, CrawlRun started_at. 목차에 시니어 리뷰 링크 추가.
+- [인증 핵심 결함 코드 반영] **Fail 리뷰(총점 40/100)** 4가지 지적을 실제 코드로 수정. (1) **이벤트 루프 블로킹**: auth_service.google_login에서 `decode_google_id_token` 호출을 `await asyncio.to_thread(decode_google_id_token, id_token)`으로 변경. (2) **커넥션 풀 낭비**: main.py lifespan에 `httpx.AsyncClient()` 싱글톤 생성·종료, app/core/deps.py에 get_httpx_client(Request), exchange_google_code에 client 인자·라우터 Depends(get_httpx_client)로 DI. (3) **토큰 생명주기**: User.refresh_token_version 추가(모델·alembic 007), create_jwt_pair(user_id, token_version), verify_access_token·revoke_refresh_tokens_for_user·POST /v1/auth/logout(Authorization Bearer 후 version 증가). (4) **트랜잭션 책임**: get_db에서 yield 후 commit, auth_service에서 session.commit() 제거. ROADMAP에 "인증 핵심 결함 코드 반영" 표·사용자 실행(alembic upgrade head) 안내 추가.
 
 ## 2026-02-20
 

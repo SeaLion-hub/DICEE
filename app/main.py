@@ -4,6 +4,7 @@ import asyncio
 import logging
 from contextlib import asynccontextmanager
 
+import httpx
 from fastapi import FastAPI, Request
 from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.exceptions import HTTPException, RequestValidationError
@@ -38,11 +39,13 @@ def _init_sentry() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """앱 수명 주기: Sentry 초기화, DB 연결 검증."""
+    """앱 수명 주기: Sentry, DB, HTTP 클라이언트(싱글톤)."""
     _init_sentry()
     init_db()
     await verify_db_connection()
+    app.state.httpx_client = httpx.AsyncClient()
     yield
+    await app.state.httpx_client.aclose()
     if engine is not None:
         await engine.dispose()
 

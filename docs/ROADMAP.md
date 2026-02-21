@@ -17,6 +17,7 @@
 - [6단계: Next.js 프론트 연동 및 최종 런칭](#6단계-nextjs-프론트-연동-및-최종-런칭)
 - [추가 검토 아이디어](#추가-검토-아이디어)
 - [기술 부채·품질 개선 계획 (테크 리드 리뷰 반영)](#기술-부채품질-개선-계획-테크-리드-리뷰-반영)
+  - [시니어 풀스택 엔지니어 리뷰 반영](#시니어-풀스택-엔지니어-리뷰-반영-아키텍처성능인덱싱에러-포맷)
 
 ---
 
@@ -521,7 +522,7 @@ Vercel 배포 사이트에서 프로필 설정 후 자신에게 맞는 최신 �
 |---|-----------|-----------|-------|-----------|
 | S1 | **JWT iss·aud 클레임 부재** | `create_jwt_pair`에서 `sub`, `type`, `exp`, `iat`만 사용. 토큰 탈취·재사용·다중 서비스 환경에서 발급자/대상 검증 불가. | JWT payload에 **iss**(예: `settings.jwt_issuer` 또는 API 베이스 URL), **aud**(예: `settings.jwt_audience`) 추가. 검증 미들웨어/의존성에서 decode 시 iss·aud 검사. config에 `JWT_ISSUER`, `JWT_AUDIENCE` 추가. | **P0 (즉시)** |
 | S2 | **Sentry 초기화·의존성 관리** | `main.py`의 `_init_sentry()`는 `sentry_dsn`일 때 `import sentry_sdk` 수행. DSN만 있고 패키지 미설치 시 ImportError로 서버 크래시. **단, 환경변수(SENTRY_DSN)가 주입된 환경이라면 당연히 패키지도 설치되어 있어야 하는 게 인프라의 기본이다.** 코드 레벨에서 의존성 관리 엉망을 덮지 말 것. | (1) **인프라 원칙**: SENTRY_DSN을 쓰는 배포 환경에서는 `requirements.txt`에 `sentry-sdk` 포함·설치 보장. (2) **방어적 코드(선택)**: `_init_sentry()`를 `try: ... except ImportError:`로 감싸되, 실패 시 **logger.warning**으로 "Sentry DSN set but sentry-sdk not installed" 명시 — 덮어두지 말고 인프라 점검 유도. | P1 (인프라 정합 후, 방어 코드는 선택) |
-| S3 | **침묵하는 예외 (Sentry 전송 래핑)** | `crawl_service.py`에서 `try: sentry_sdk.capture_* except Exception: pass`. Sentry 전송 실패를 삼키면 디버깅 시 "데이터 누락은 있는데 로그는 깨끗한" 상황. **최상위 Exception을 잡는 건 안티패턴** — 메모리 에러·문법 에러까지 삼키면 안 됨. | Sentry 전송 실패만 잡고 싶다면 **sentry_sdk 관련 네트워크/전송 예외만** 구체적으로 처리(예: `sentry_sdk.errors` 하위 또는 HTTP/연결 관련 예외). `except Exception` 금지. 해당 구체 예외에 한해 logger.warning. | P1 |
+| S3 | **침묵하는 예외 (Sentry 전송 래핑)** | `crawl_service.py`에서 `try: sentry_sdk.capture_* except Exception: pass`. Sentry 전송 실패를 삼키면 디버깅 시 "데이터 누락은 있는데 로그는 깨끗한" 상황. **최상위 Exception을 잡는 건 안티패턴** — 메모리 에러·문법 에러까지 삼키면 안 됨. | Sentry 전송 실패만 잡고 싶다면 **sentry_sdk 관련 네트워크/전송 예외만** 구체적으로 처리(예: `sentry_sdk.errors` 하위 또는 HTTP/연결 관련 예외). `except Exception` 금지. 해당 구체 예외에 한해 logger.warning. **[Hotfix 필수]** 코드에 `except Exception as sentry_err:` 등이 남아 있으면 **3단계 완료 선언 금지**. Sentry capture 블록 내부를 sentry_sdk 전용 예외로 변경(Log Poisoning 방지). | P1 |
 | S4 | **크롤 트리거 시크릿 문자열 비교** | `_validate_trigger_secret`에서 `provided != settings.crawl_trigger_secret`로 일반 비교. 타이밍 공격 이론적 취약. | `secrets.compare_digest(provided, settings.crawl_trigger_secret)` 사용. | P1 |
 | S5 | **Google OAuth 토큰 응답 무검증** | `exchange_google_code`가 `resp.json()`을 `cast(dict[str, Any], data)`로만 반환. 스키마 변경 시 런타임에서만 오류·보안 사고 가능. | 구글 토큰 응답용 **Pydantic 스키마** 정의(예: `id_token`, `access_token`, `token_type` 등). `model_validate(data)`로 파싱 후 반환. 파싱 실패 시 AuthError. | **P0 (즉시)** |
 
@@ -529,11 +530,11 @@ Vercel 배포 사이트에서 프로필 설정 후 자신에게 맞는 최신 �
 
 ### 3. 확장성 (20점 → 목표: 15+) — **E1: 청크 + 참조 해제 강제**
 
-리스트를 CHUNK_SIZE로 쪼개고 `session.commit()` 한다고 **메모리가 자동으로 비워지지 않는다**. 파이썬 GC는 **참조가 남아 있으면** 메모리를 해제하지 않는다. BeautifulSoup으로 파싱한 거대 DOM·임시 변수가 루프 내에 남아 있으면 청크 단위 DB 적재를 해도 워커는 뻗는다. **DB 플러시뿐 아니라 로컬 변수 참조 해제(del 또는 스코프 분리)를 계획에 명시**한다.
+리스트를 CHUNK_SIZE로 쪼개고 `session.commit()` 한다고 **메모리가 자동으로 비워지지 않는다**. 파이썬 GC는 **참조가 남아 있으면** 메모리를 해제하지 않는다. **SQLAlchemy는 세션이 살아 있는 한 객체를 Identity Map에 물고 있다** — 청크만 비우고 `chunk.clear()`만 해서는 OOM이 해소되지 않는다. 청크 commit 직후 **session.expunge_all()** 호출과, BeautifulSoup DOM·임시 변수 참조 해제(del 또는 스코프 분리)를 계획에 명시한다.
 
 | # | 지적 내용 | 현재 상태 | 할 일 | 고려 시점 |
 |---|-----------|-----------|-------|-----------|
-| E1 | **OOM 위험 (일괄 적재 + 참조 유지)** | `crawl_college_sync`가 모든 payload를 `notices`에 쌓아 한 번에 `upsert_notices_bulk_sync`로 전달. 청크만 도입해도 **BeautifulSoup DOM·임시 변수 참조가 루프에 남으면** GC가 해제하지 않아 워커 OOM. | **(1) 청크 단위 처리**: N건(예: 50건) 단위로 리스트에 모은 뒤 `upsert_notices_bulk_sync` 호출, `session.commit()`/flush. **(2) 참조 해제 강제**: 각 청크 처리 후 사용한 리스트 비우기(`chunk.clear()` 또는 새 리스트 할당). 스크래핑 루프 내에서 **파싱 결과(BeautifulSoup 객체·큰 문자열)를 즉시 payload로만 넘기고, 루프 다음 반복 전에 큰 객체에 대한 참조를 끊기**(del 또는 별도 함수 스코프로 분리해 함수 종료 시 로컬 참조 해제). MAX_HTML_BYTES 유지. | **P1 (P0 직후)** |
+| E1 | **OOM 위험 (일괄 적재 + 참조 유지)** | `crawl_college_sync`가 모든 payload를 `notices`에 쌓아 한 번에 `upsert_notices_bulk_sync`로 전달. 청크만 도입해도 **BeautifulSoup DOM·임시 변수 참조가 루프에 남으면** GC가 해제하지 않아 워커 OOM. | **(1) 청크 단위 처리**: N건(예: 50건) 단위로 리스트에 모은 뒤 `upsert_notices_bulk_sync` 호출, `session.commit()`/flush. **(2) SQLAlchemy Identity Map 캐싱 방지**: 청크 commit 직후 반드시 **session.expunge_all()** 호출. 세션이 살아 있는 한 객체를 Identity Map에 물고 있으므로, 리스트만 비우고 expunge_all을 호출하지 않으면 OOM이 재발한다. **(3) 참조 해제 강제**: 각 청크 처리 후 사용한 리스트 비우기(`chunk.clear()` 또는 새 리스트 할당). 스크래핑 루프 내에서 **파싱 결과(BeautifulSoup 객체·큰 문자열)를 즉시 payload로만 넘기고, 루프 다음 반복 전에 큰 객체에 대한 참조를 끊기**(del 또는 별도 함수 스코프로 분리해 함수 종료 시 로컬 참조 해제). MAX_HTML_BYTES 유지. | **P1 (P0 직후)** |
 | E2 | **redirect_uri 하드코딩** | `redirect_uri or "http://localhost"`. 환경별 프론트 URL 대응 불가. | `settings.oauth_redirect_uri_default` 또는 `FRONTEND_URL` + 경로를 환경변수로 두고 사용. `.env.example`·DEPLOYMENT 문서화. | P2 |
 | E3 | **동기 DB 풀 고정** | `pool_size=2`, `max_overflow=0` 고정. 워커·동시 태스크 증가 시 연결 부족. | 환경변수로 `pool_size`, `max_overflow` 오버라이드 가능하게. | P3 |
 
@@ -565,7 +566,11 @@ FastAPI에서 `def` 라우터는 스레드 풀에서 실행된다. "가벼워서
 | 우선순위 | 항목 | 비고 |
 |----------|------|------|
 | **P0 (즉시 실행)** | **A1** 비동기 크롤러 전환, **A2** DRY 플로우 공통화, **S1** JWT iss/aud, **S5**·**R1** 구글 응답 Pydantic 검증 | 아키텍처 버그·Auth 대문 수리. 3단계 계속하기 전에 선행. |
-| **P1 (P0 직후)** | **E1** notices 청크 + **참조 해제(del/스코프 분리)** 강제, **S3** Sentry 구체 예외만 처리, **S4** compare_digest, **O2** trigger-crawl async def + 비동기 클라이언트 | OOM 방어·예외·비동기 일관성. |
+| **P1 (P0 직후)** | **E1** notices 청크 + **session.expunge_all()** + 참조 해제(del/스코프 분리), **S3** Sentry 구체 예외만 처리(**[Hotfix]** except Exception 제거 후 3단계 완료 선언), **S4** compare_digest, **O2** trigger-crawl async def + 비동기 클라이언트 | OOM 방어·예외·비동기 일관성. |
+
+**3단계 완료 전 필수 Hotfix (미완 시 완료 선언 금지)**
+
+- **[Hotfix] S3 — Sentry capture 블록 내부의 except Exception을 sentry_sdk 전용 예외로 변경 (Log Poisoning 방지).** 코드에 `except Exception as sentry_err:` 등이 남아 있으면 3단계 완료 선언하지 말 것.
 | **P2** | S2 인프라 원칙(의존성 보장)·방어 코드 선택, E2 redirect_uri 설정화, R2 예외 정책 문서화 | 보안·환경·문서. |
 | **P3** | E3 DB 풀 설정화, R3 health status, O1 노이즈 파라미터 | 안정성·일관성 마무리. |
 
@@ -599,6 +604,76 @@ FastAPI에서 `def` 라우터는 스레드 풀에서 실행된다. "가벼워서
 
 ---
 
+### 시니어 풀스택 엔지니어 리뷰 반영 (아키텍처·성능·인덱싱·에러 포맷)
+
+10년 차 시니어 풀스택/오픈소스 메인테이너 관점 코드 리뷰에서 제안된 **아키텍처(SRP)·코드 품질(Sentry 분리)·성능(DB URL·트랜잭션)·보안(에러 포맷)·유지보수(DRY)·인덱싱·이벤트 루프 블로킹·Heavy 컬럼 지연 로딩**을 계획표로 정리. 기존 테크 리드 P0/P1과 병행하여 고려 시점에 맞춰 반영한다.
+
+#### 1. 아키텍처 및 디자인 패턴 (SRP)
+
+| # | 지적 내용 | 현재 상태 | 할 일 | 고려 시점 |
+|---|-----------|-----------|-------|-----------|
+| SRP1 | **crawl_service 단일 책임 위반** | crawl_service가 크롤 파이프라인 제어 외에 URL 파싱·해시 계산 등 순수 유틸이 섞여 있음. 파일 비대·테스트 어려움. | **유틸 분리**: `normalize_url_for_hash`, `extract_external_id`(또는 `_external_id_from_url`)를 **app/utils/url_utils.py**로 이동. 해시 관련은 **app/utils/hash_utils.py** 등으로 분리. crawl_service는 **흐름 제어**만 담당하고 유틸 함수를 import해 호출. | **P1 (테크 리드 P0 직후)** |
+| SRP2 | **이중 진입점·플로우 공통화** | (기존 A2와 동일) async/sync 두 벌 플로우 유지보수 부담. | 테크 리드 A2 플로우 공통화와 연계. 순수 비즈니스 로직(링크→payload)을 세션·HTTP 의존 없는 함수로 추출 후 진입점만 주입. | A2와 동시 |
+
+#### 2. 코드 퀄리티 및 가독성 (Sentry 결합도)
+
+| # | 지적 내용 | 현재 상태 | 할 일 | 고려 시점 |
+|---|-----------|-----------|-------|-----------|
+| CQ1 | **Sentry가 파싱 함수에 강결합** | `_external_id_from_url`, `_parse_published_at` 등 내부에서 Sentry 전송 로직. 순수성·테스트 용이성 저하. | **에러 트래킹 분리**: 데코레이터(예: `@track_parsing_error(fallback_val=None)`) 또는 전용 에러 핸들러 모듈로 Sentry 전송 분리. 비즈니스 로직은 순수 파싱만, 실패 시 데코레이터에서 logging + Sentry. `except Exception` 금지(테크 리드 S3 준수). | **P1** |
+| CQ2 | **구글 토큰 검증 블로킹** | `decode_google_id_token`이 동기 `google_requests.Request()`(내부적으로 requests)로 JWKS 조회 → 이벤트 루프 블로킹. | **asyncio.to_thread 래핑**: `claims = await asyncio.to_thread(decode_google_id_token, id_token)`. 구글 지연 시에도 FastAPI 전체가 멈추지 않도록. | **P0 (즉시)** |
+
+#### 3. 성능 및 최적화
+
+| # | 지적 내용 | 현재 상태 | 할 일 | 고려 시점 |
+|---|-----------|-----------|-------|-----------|
+| PERF1 | **DB URL 스킴 변환 불안전** | `_async_database_url`에서 문자열 replace로 postgresql→postgresql+asyncpg 변환. 비정상 URL에서 버그 가능. | **make_url 사용**: `from sqlalchemy.engine.url import make_url`. `parsed = make_url(url.strip())`, drivername이 postgresql/psycopg 계열일 때 `parsed.set(drivername="postgresql+asyncpg")` 후 `str(parsed)` 반환. | **P1** |
+| PERF2 | **동기 bulk 후 Identity Map** | `session.expunge_all()`을 청크 단위로 호출하나, 트랜잭션 블록 관리가 명시적이지 않으면 사이드 이펙트 가능. | 청크 단위로 **명시적 트랜잭션 블록**(with session.begin() 또는 commit 직후 expunge_all)·참조 해제(del/스코프 분리) 문서화 및 코드에 반영. (테크 리드 E1과 연계.) | P1 (E1과 동시) |
+| PERF3 | **Heavy 컬럼 목록 조회** | Notice 목록 API에서 SELECT * 시 raw_html, images, attachments 등으로 메모리·네트워크 부하. | **지연 로딩**: 목록 조회용 Repository 쿼리에 `.options(defer(Notice.raw_html), defer(Notice.images), defer(Notice.attachments))` 적용. 상세 조회에서만 전체 로드. | **5단계 (목록 API 설계 시)** |
+
+#### 4. 보안 및 예외 처리 (에러 응답 구조화)
+
+| # | 지적 내용 | 현재 상태 | 할 일 | 고려 시점 |
+|---|-----------|-----------|-------|-----------|
+| SEC1 | **에러 응답 단순** | `{"detail": "..."}` 만 반환. 프론트가 에러 코드로 분기하기 어려움. | **구조화된 에러 포맷**: `global_exception_handler`에서 HTTPException 시 `{"error_code": "BUSINESS_ERROR", "message": exc.detail}`, 그 외 500 시 `{"error_code": "INTERNAL_SERVER_ERROR", "message": "서버 내부 오류가 발생했습니다."}`. 필요 시 error_code 세분화(예: UNAUTHORIZED, NOT_FOUND). | **P1** |
+| SEC2 | **CORS·DB URL 환경변수** | 설정이 코드에 없어 정확히 확인 불가. | CORS allowed_origins·DATABASE_URL 등이 **환경변수로 주입**되는지 config·DEPLOYMENT에서 검증·문서화. | P2 (이미 원칙상 적용된 경우 점검만) |
+
+#### 5. 유지보수 및 DRY (Repository)
+
+| # | 지적 내용 | 현재 상태 | 할 일 | 고려 시점 |
+|---|-----------|-----------|-------|-----------|
+| DRY1 | **notice_repository upsert 중복** | `upsert_notices_bulk`(async)와 `upsert_notices_bulk_sync`(sync)가 Statement 생성 로직 100% 중복. 모델 변경 시 두 곳 수정. | **공통 Statement 생성**: `_build_bulk_upsert_stmt(notices)` 함수로 `insert(Notice).values(...).on_conflict_do_update(...).returning(Notice.id)` 생성 로직 분리. async/sync는 각각 `await session.execute(stmt)` / `session.execute(stmt)`만 수행. | **P1** |
+
+#### 6. 인덱싱 (DB 부하·풀 스캔 방지)
+
+| # | 지적 내용 | 현재 상태 | 할 일 | 고려 시점 |
+|---|-----------|-----------|-------|-----------|
+| IDX1 | **Notice 정렬/필터 날짜 인덱스 부재** | `ORDER BY published_at DESC` / `created_at DESC` 빈번 시 Filesort·풀 테이블 스캔. | **B-Tree 인덱스**: `published_at`, `created_at`에 `index=True` (또는 Alembic 마이그레이션으로 동일). | **3단계 DB 스키마 확정 시 또는 5단계 전** |
+| IDX2 | **JSONB 필터(eligibility, hashtags)** | eligibility·hashtags 기반 필터 시 B-Tree로는 배열 검색 불가 → 풀 스캔. | **GIN 인덱스**: `Index("ix_notices_hashtags_gin", "hashtags", postgresql_using="gin")`, `Index("ix_notices_eligibility_gin", "eligibility", postgresql_using="gin")` 추가. | **5단계 (검색·필터 API 설계 시)** |
+| IDX3 | **CrawlRun 시간 역순 조회** | `/internal/crawl-stats` 등에서 `get_recent_crawl_runs` 시 시간 역순 정렬. 해당 컬럼(예: started_at) 인덱스 없으면 풀 스캔. | CrawlRun 모델의 정렬용 컬럼(예: started_at)에 **index=True** 또는 마이그레이션으로 인덱스 추가. | **3단계 마무리 또는 internal API 사용 증가 시** |
+
+#### 반영 우선순위 요약 (시니어 리뷰)
+
+| 우선순위 | 항목 | 비고 |
+|----------|------|------|
+| **P0** | **CQ2** 구글 토큰 검증 `asyncio.to_thread` (이벤트 루프 블로킹 제거) | 테크 리드 P0와 병행. |
+| **P1** | **SRP1** url_utils/hash_utils 분리, **CQ1** Sentry 데코레이터, **PERF1** make_url, **PERF2** 트랜잭션·expunge 명시, **SEC1** 구조화된 에러 응답, **DRY1** _build_bulk_upsert_stmt | 아키텍처·성능·유지보수. |
+| **단계 연계** | **IDX1** published_at/created_at 인덱스(3단계 또는 5단계 전), **IDX2** GIN(5단계), **IDX3** CrawlRun(3단계 마무리), **PERF3** defer 목록 조회(5단계 목록 API) | 단계별 스키마·API 설계 시 반영. |
+
+#### 인증 핵심 결함 코드 반영 (Fail 리뷰 → 구현 완료)
+
+**총점 40/100, 판정 Fail** 리뷰(이벤트 루프 블로킹·커넥션 풀 낭비·토큰 생명주기·트랜잭션 책임)에 따라 **실제 코드**로 아래를 반영함. 계획서만 적고 코드로 구현하지 않는 상태를 해소.
+
+| # | 지적 내용 | 코드 반영 |
+|---|-----------|-----------|
+| 1 | **이벤트 루프 블로킹** | `auth_service.google_login`에서 `claims = await asyncio.to_thread(decode_google_id_token, id_token)` 적용. 구글 JWKS 지연 시에도 메인 스레드 블로킹 없음. |
+| 2 | **커넥션 풀(소켓) 고갈** | `main.py` lifespan에서 `app.state.httpx_client = httpx.AsyncClient()` 생성·종료 시 `aclose()`. `exchange_google_code(code, redirect_uri, client)`로 **client 인자** 받음. `app/core/deps.py`의 `get_httpx_client(request)`로 DI. 라우터에서 `Depends(get_httpx_client)` 후 서비스에 전달. |
+| 3 | **토큰 생명주기 통제 불가** | `User.refresh_token_version` 컬럼 추가(마이그레이션 007). `create_jwt_pair(user_id, token_version)`로 Refresh JWT에 `token_version` 클레임 포함. **POST /v1/auth/logout**: Authorization Bearer(access) 검증 후 해당 유저의 `refresh_token_version` 증가 → 기존 Refresh 토큰 전부 무효화. 추후 Refresh 토큰 교환 API 구현 시 payload.token_version과 User.refresh_token_version 일치 검사 필수. |
+| 4 | **트랜잭션 책임 오염** | 서비스에서 `session.commit()` 제거. `get_db()`에서 `yield` 후 **성공 시 `await session.commit()`**, 예외 시 rollback. 트랜잭션 경계는 DI(세션 생명주기)에서만 관리. |
+
+**사용자 직접 실행**: DB 마이그레이션 적용 — `alembic upgrade head` (007_add_user_refresh_token_version 적용). 적용 후 서버 재시작.
+
+---
+
 ## 추가 검토 아이디어
 
 - 새로 떠오른 기능·변경은 **여기에만** 적고, 현재 단계가 끝날 때까지 로드맵 본문은 유지.
@@ -612,7 +687,7 @@ FastAPI에서 `def` 라우터는 스레드 풀에서 실행된다. "가벼워서
 - **3단계 마무리** — **워커 기동 시 DB 초기화**: `app/worker.py`에서 워커 기동 시 `init_sync_db()` 호출. 연결 실패를 빨리 감지.
 - **3단계 마무리** — **trigger-crawl delay() 예외 처리**: POST /internal/trigger-crawl에서 `crawl_college_task.delay()` 실패(Redis/broker 오류) 시 503 + 로그.
 - **크롤러 정리 시** — **공통 HTTP 래퍼**: timeout·RequestException 정책을 한 곳에서 적용하는 유틸 도입 시 7개 모듈 유지보수 완화. 파싱 실패 시 로깅 보강(URL/날짜 파싱 fallback 시 debug 로그).
-- **3단계 마무리 또는 4단계** — **Redis 분산 락 (Crawl 동시성 제어)**: 동일 college_code에 대해 동시에 두 크롤이 돌지 않도록 `redis.lock(f"crawl_lock:{college_code}")` 형태로 분산 락 적용. Celery 태스크 진입 시 락 획득, 종료 시 해제. Race/데드락 이슈 보고 시 우선 적용.
+- **3단계 마무리 또는 4단계** — **Redis 분산 락 (Crawl 동시성 제어)**: 동일 college_code에 대해 동시에 두 크롤이 돌지 않도록 `redis.lock(f"crawl_lock:{college_code}")` 형태로 분산 락 적용. Celery 태스크 진입 시 락 획득, 종료 시 해제. **워커 급사(Crash) 시 무한 락(Zombie Lock) 방지를 위해 타임아웃은 예상 크롤링 완료 시간 + 20% 마진(예: 3~5분)으로 매우 짧고 타이트하게 설정.** `timeout=3600` 같은 값은 금지 — 시스템이 1시간 동안 마비될 수 있음. Race/데드락 이슈 보고 시 우선 적용.
 
 **시니어·QA·인프라 피드백 (추가 검토)**
 

@@ -107,13 +107,17 @@ async def verify_db_connection() -> None:
 
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
-    """FastAPI Depends용 비동기 DB 세션 생성기."""
+    """
+    FastAPI Depends용 비동기 DB 세션 생성기.
+    트랜잭션 경계: 성공 시 commit, 예외 시 rollback. 서비스 레이어는 commit 호출하지 않음.
+    """
     if not async_session_maker:
         raise RuntimeError("Database not initialized. Set DATABASE_URL.")
 
     async with async_session_maker() as session:
         try:
             yield session
+            await session.commit()
         except Exception:
             await session.rollback()
             raise

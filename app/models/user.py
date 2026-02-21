@@ -31,6 +31,9 @@ class User(Base):
     profile_json: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     # 예: {"major": "컴퓨터공학", "grade": 3, "military_served": true, "gpa": 3.5}
 
+    # 로그아웃/탈취 시 서버에서 Refresh 토큰 무효화. JWT refresh payload의 token_version과 일치해야 유효.
+    refresh_token_version: Mapped[int] = mapped_column(default=0, nullable=False)
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(UTC),
