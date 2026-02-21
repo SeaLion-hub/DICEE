@@ -55,6 +55,18 @@ def init_db() -> None:
         logger.warning("DATABASE_URL not set. DB features disabled.")
         return
 
+    # 배포 환경 디버깅: 앱이 실제로 쓰는 호스트만 로그 (비밀번호·user 제외)
+    try:
+        parsed = make_url(settings.database_url.strip())
+        logger.info(
+            "DB connect: host=%s port=%s dbname=%s (DATABASE_URL set)",
+            parsed.host or "(none)",
+            parsed.port or 5432,
+            (parsed.database or "/").lstrip("/") or "(default)",
+        )
+    except Exception as e:
+        logger.warning("DB URL parse check failed: %s", e)
+
     _db_holder.engine = create_async_engine(
         _async_database_url(settings.database_url),
         echo=False,

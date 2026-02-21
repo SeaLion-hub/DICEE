@@ -94,9 +94,13 @@ CORS: `ALLOWED_ORIGINS`에 프론트 도메인 등록. credentials: 프론트가
 **PostgreSQL (2단계)**
 
 - **+ New** → **Database** → **PostgreSQL** 선택.
-- DB 서비스 **Variables** 탭에서 연결 정보 확인.
-- **웹 서비스** Variables에 `DATABASE_URL` 추가.  
-  URL 스킴만 `postgresql+asyncpg://` 로 바꿔서 넣기.
+- **웹 서비스** Variables에 **변수 이름** `DATABASE_URL`(고정, 앱이 이 이름만 읽음)으로 다음 중 하나 설정.
+  - **권장: 변수 참조**  
+    값: `${{Postgres.DATABASE_URL}}` (Postgres 서비스 이름이 다르면 해당 이름으로. 예: `${{PostgreSQL.DATABASE_URL}}`)  
+    Railway 최신 Postgres에서는 **Postgres 서비스의 `DATABASE_URL`이 내부(private) URL**이다. **`DATABASE_PUBLIC_URL`을 참조하면 안 됨** — 공개 URL 참조 시 내부에서 인증 실패가 날 수 있음.
+  - **직접 입력**  
+    DB 서비스 **Variables** 또는 **Connect** 탭에서 **내부 연결 URL**(호스트가 `postgres.railway.internal`인 것) 전체를 복사한 뒤, 스킴만 `postgresql://` → `postgresql+asyncpg://` 로 바꿔 넣기. 비밀번호에 특수문자(`@`, `#`, `%`, `:` 등)가 있으면 URL 인코딩(`%40`, `%23`, `%25`, `%3A` 등) 필요.
+- **Railway가 부여한 user/비밀번호를 그대로 사용해야 함.** 로컬용 `postgres:postgres` 등을 넣으면 `password authentication failed for user "postgres"` 로 기동 실패.
 
 **Redis (3단계)**
 
@@ -130,6 +134,30 @@ CORS: `ALLOWED_ORIGINS`에 프론트 도메인 등록. credentials: 프론트가
 | 기타 | Gemini API 키 등 | 해당 기능 단계 |
 
 (나중에 카카오 등 추가 시 `KAKAO_CLIENT_ID` 등 동일 방식으로 Variables + `.env.example`에 추가.)
+
+**트러블슈팅: `password authentication failed for user "postgres"`**
+
+- 이 메시지는 **앱이 사용하는 `DATABASE_URL`의 user/비밀번호가 Railway PostgreSQL과 일치하지 않을 때** 발생한다.
+- **확인 1 — 변수 이름:** 웹 서비스 Variables에 **이름이 정확히 `DATABASE_URL`** 인지 확인. (`DATABASE_PUBLIC_URL` 등 다른 이름이면 앱이 읽지 않음.)
+- **확인 2 — 변수 참조 사용 시:**  
+  값이 `${{Postgres.DATABASE_URL}}`(또는 `${{PostgreSQL.DATABASE_URL}}` 등 **내부 URL 변수**)인지 확인.  
+  **`${{Postgres.DATABASE_PUBLIC_URL}}`로 되어 있으면 공개 URL이 주입되어 내부에서 인증 실패가 날 수 있음.** → 참조를 **내부 URL**(Postgres 서비스의 `DATABASE_URL`)로 바꾼 뒤 재배포.
+- **확인 3 — 직접 입력 시:**  
+  Railway **PostgreSQL 서비스** → **Variables** 또는 **Connect** 탭에서 **내부 연결 URL**(호스트 `postgres.railway.internal`) 전체를 복사해 웹 서비스 `DATABASE_URL`에 넣고, 스킴만 `postgresql+asyncpg://` 로 변경. 비밀번호에 `@`, `#`, `%` 등이 있으면 퍼센트 인코딩 필요.
+- 로컬용·예시용 URL(`postgres:postgres` 등)을 넣으면 이 오류가 난다. **반드시 Railway Postgres 서비스에 나온 값 또는 내부 URL 변수 참조를 사용**한다.
+- **다른 원인 (변수·URL이 맞는데도 실패할 때):**
+  - **참조 서비스 이름 불일치:** `${{Postgres.DATABASE_URL}}`에서 **Postgres**는 대시보드에 보이는 **PostgreSQL 서비스 이름**과 정확히 같아야 한다. (예: 서비스 이름이 `PostgreSQL`이면 `${{PostgreSQL.DATABASE_URL}}`.) 참조가 해석되지 않으면 빈 값이나 잘못된 값이 들어갈 수 있다.
+  - **비밀번호 재설정:** Railway PostgreSQL 서비스에서 **Settings → Reset database password** 후, 웹 서비스 Variables의 `DATABASE_URL`을 **새 내부 URL**로 다시 설정(참조면 참조 유지, 직접 입력이면 새 URL 복사 후 스킴만 `postgresql+asyncpg://`로 변경).
+  - **공개 URL로 시도:** 일부 환경에서는 내부 URL 대신 **공개 URL** 참조(`${{Postgres.DATABASE_PUBLIC_URL}}`)로 연결되는 경우가 있다. 내부로만 실패하면 한 번 시도해 볼 것.
+  - **실제 사용 값 확인:** 앱 기동 시 로그에 `DB connect: host=... port=... dbname=...`가 찍힌다. `host`가 `postgres.railway.internal`이면 내부 URL이 쓰인 것이고, 다른 호스트면 다른 URL이 주입된 것이다. Railway 로그에서 이 한 줄을 확인하면 원인 추적에 도움이 된다.
+
+**트러블슈팅: `Can't locate revision identified by '011'` (Alembic)**
+
+- **원인:** DB의 `alembic_version` 테이블에는 리비전 `011`이 기록되어 있는데, **배포된 코드(main 등)에 해당 마이그레이션 파일이 없을 때** 발생한다. (예: 로컬/다른 브랜치에서 `alembic upgrade head`로 011까지 적용한 뒤, 011이 없는 브랜치로 배포.)
+- **조치:**  
+  1. **리비전 011 파일이 포함된 브랜치를 main에 머지**한 뒤 푸시하여 재배포한다. (`alembic/versions/011_add_crawl_runs_celery_task_id_unique.py` 등이 main에 있어야 함.)  
+  2. 또는 DB를 011 이전으로 되돌리고 싶다면, **로컬에서** 공개 DB URL로 `alembic downgrade 010` 실행 후, 그 다음 main으로 배포한다. (011에서 추가된 스키마/인덱스가 있다면 수동 정리 필요.)
+- **원칙:** 배포 브랜치에 포함된 마이그레이션 파일이 DB에 기록된 리비전과 일치해야 한다.
 
 **크롤 운영 정책:** FastAPI 내 크롤 트리거(POST /internal/trigger-crawl 또는 동기 호출)는 **개발·소량 테스트용**이다. **프로덕션 정기 크롤은 Celery 워커만 사용**한다. Cron이 6시간마다 trigger-crawl을 호출하면 Celery 태스크가 enqueue되고 워커가 실행한다.
 
