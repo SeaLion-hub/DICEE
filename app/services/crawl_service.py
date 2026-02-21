@@ -9,6 +9,7 @@ import logging
 import re
 import time
 from datetime import UTC, datetime
+from urllib.error import URLError
 from urllib.parse import parse_qs, urlparse, urlunparse
 
 from bs4 import BeautifulSoup
@@ -97,7 +98,7 @@ def _external_id_from_url(url: str) -> str:
         try:
             import sentry_sdk
             sentry_sdk.capture_exception(e)
-        except Exception as sentry_err:
+        except (OSError, URLError) as sentry_err:
             logger.warning("Sentry capture_exception failed: %s", sentry_err)
         path_only = _url_path_only_for_hash(url)
         return hashlib.sha256(path_only.encode()).hexdigest()[:32]
@@ -132,7 +133,7 @@ def _parse_published_at(date_str: str | None) -> datetime | None:
                 f"_parse_published_at no match (format change?): date_str={date_str[:100]!r}",
                 level="warning",
             )
-        except Exception as sentry_err:
+        except (OSError, URLError) as sentry_err:
             logger.warning("Sentry capture_message failed: %s", sentry_err)
     except (ValueError, AttributeError, TypeError) as e:
         logger.warning(
@@ -144,7 +145,7 @@ def _parse_published_at(date_str: str | None) -> datetime | None:
         try:
             import sentry_sdk
             sentry_sdk.capture_exception(e)
-        except Exception as sentry_err:
+        except (OSError, URLError) as sentry_err:
             logger.warning("Sentry capture_exception failed: %s", sentry_err)
     return None
 
