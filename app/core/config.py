@@ -22,14 +22,14 @@ class Settings(BaseSettings):
     db_connect_retries: int = Field(5, ge=1, le=20)  # 연결 실패 시 재시도 횟수.
     db_connect_retry_interval_sec: float = Field(2.0, ge=0.5, le=60.0)  # 재시도 간격(초).
 
-    # 2단계 Auth (필수: 기본값 없음 → 부팅 시점 Fail-fast)
-    jwt_secret: SecretStr
+    # 2단계 Auth (워커·Cron 등은 미설정 가능. production 시 validator에서 필수 검사)
+    jwt_secret: SecretStr = SecretStr("")
     jwt_issuer: str = "dicee"  # JWT iss 클레임 (발급자). 검증 시 사용.
     jwt_audience: str = "dicee-api"  # JWT aud 클레임 (대상). 검증 시 사용.
     jwt_access_expire_seconds: int = Field(600, ge=60, le=86400)  # Access 토큰 만료(초). 1분~24시간.
     jwt_refresh_expire_days: int = Field(7, ge=1, le=90)  # Refresh 토큰 만료(일).
-    google_client_id: str  # 필수. 기본값 없음.
-    google_client_secret: SecretStr  # 필수. 기본값 없음.
+    google_client_id: str = ""
+    google_client_secret: SecretStr = SecretStr("")
     # 허용 redirect_uri 목록(쉼표 구분). 비어 있으면 검사 생략. 예: http://localhost:3000/callback,https://app.example.com/callback
     google_redirect_uris: str = ""
 
@@ -55,7 +55,7 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def fail_fast_production(self: "Settings") -> "Settings":
-        """프로덕션 환경 시 필수 변수 누락이면 부팅 거부(Fail-Fast)."""
+        """프로덕션 환경 시 공통 필수 변수만 검사. JWT/Google은 워커에서 불필요하므로 여기서는 요구하지 않음."""
         if (self.environment or "").strip().lower() != "production":
             return self
         missing: list[str] = []
@@ -63,12 +63,6 @@ class Settings(BaseSettings):
             missing.append("DATABASE_URL")
         if not (self.redis_url or "").strip():
             missing.append("REDIS_URL")
-        if not (self.jwt_secret.get_secret_value() or "").strip():
-            missing.append("JWT_SECRET")
-        if not (self.google_client_id or "").strip():
-            missing.append("GOOGLE_CLIENT_ID")
-        if not (self.google_client_secret.get_secret_value() or "").strip():
-            missing.append("GOOGLE_CLIENT_SECRET")
         if missing:
             raise ValueError(
                 f"Production environment requires these variables to be set: {', '.join(missing)}. "
