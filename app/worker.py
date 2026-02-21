@@ -53,13 +53,13 @@ if settings.sentry_dsn:
         from sentry_sdk.integrations.logging import LoggingIntegration
 
         sentry_sdk.init(
-            dsn=settings.sentry_dsn,
+            dsn=settings.sentry_dsn.get_secret_value(),
             integrations=[
                 CeleryIntegration(),
                 LoggingIntegration(level=logging.INFO, event_level=logging.ERROR),
             ],
             traces_sample_rate=0.1,
-            environment="production",
+            environment=settings.environment,
         )
         logger.info("Sentry initialized for worker")
     except ImportError:

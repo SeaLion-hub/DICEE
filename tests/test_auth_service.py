@@ -1,8 +1,10 @@
 """Auth Service 단위 테스트. DB/Google 호출 없이 검증."""
 
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
+from pydantic import SecretStr
+
 from app.services.auth_service import AuthError, create_jwt_pair, decode_google_id_token
 
 
@@ -17,21 +19,30 @@ def test_create_jwt_pair_returns_two_tokens() -> None:
 
 
 def test_create_jwt_pair_raises_without_secret(monkeypatch: pytest.MonkeyPatch) -> None:
-    """create_jwt_pair: JWT_SECRET 없으면 AuthError."""
-    monkeypatch.setattr("app.services.auth_service.settings.jwt_secret", "")
+    """create_jwt_pair: JWT_SECRET 비어 있으면 AuthError."""
+    monkeypatch.setattr(
+        "app.services.auth_service.settings.jwt_secret",
+        SecretStr(""),
+    )
     with pytest.raises(AuthError):
         create_jwt_pair(user_id=1)
 
 
-@patch("app.services.auth_service.google_id_token.verify_oauth2_token")
-def test_decode_google_id_token_valid(
-    mock_verify: object, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """decode_google_id_token: verify_oauth2_token mock 시 claims 반환."""
-    monkeypatch.setattr(
-        "app.services.auth_service.settings.google_client_id", "test-client-id"
-    )
-    mock_verify.return_value = {"sub": "123", "email": "a@b.com", "name": "Test"}
-    result = decode_google_id_token("fake-id-token")
-    assert result["sub"] == "123"
-    assert result["email"] == "a@b.com"
+@pytest.mark.asyncio
+async def test_decode_google_id_token_valid() -> None:
+    """decode_google_id_token: JWKS get_key + jwt.decode mock 시 claims 반환."""
+    mock_fetcher = AsyncMock()
+    mock_fetcher.get_key = AsyncMock(return_value={"key": "dummy-key-for-test"})
+    with (
+        patch(
+            "app.services.auth_service._get_google_key_fetcher",
+            return_value=mock_fetcher,
+        ),
+        patch(
+            "app.services.auth_service.jwt.decode",
+            return_value={"sub": "123", "email": "a@b.com", "name": "Test"},
+        ),
+    ):
+        result = await decode_google_id_token("fake-id-token")
+        assert result["sub"] == "123"
+        assert result["email"] == "a@b.com"

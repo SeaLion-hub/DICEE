@@ -3,8 +3,10 @@
 import asyncio
 import logging
 from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 
 from sqlalchemy import text
+from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.core.config import settings
@@ -16,17 +18,8 @@ async_session_maker = None
 
 
 def _async_database_url(url: str) -> str:
-    """FastAPI용: 동기 스킴을 asyncpg 스킴으로 변환. postgresql:// → postgresql+asyncpg://."""
-    u = url.strip()
-    if "postgresql+asyncpg" in u:
-        return u
-    if u.startswith("postgresql+psycopg2://"):
-        return u.replace("postgresql+psycopg2://", "postgresql+asyncpg://", 1)
-    if u.startswith("postgresql+psycopg://"):
-        return u.replace("postgresql+psycopg://", "postgresql+asyncpg://", 1)
-    if u.startswith("postgresql://"):
-        return u.replace("postgresql://", "postgresql+asyncpg://", 1)
-    return u
+    """FastAPI용: 스킴만 asyncpg로 안전하게 변환. SQLAlchemy make_url 사용."""
+    return str(make_url(url.strip()).set(drivername="postgresql+asyncpg"))
 
 
 def init_db() -> None:
@@ -82,8 +75,6 @@ async def verify_db_connection() -> None:
             else:
                 break
 
-    import sys
-
     try:
         import sentry_sdk
 
@@ -103,13 +94,28 @@ async def verify_db_connection() -> None:
         last_exc,
         exc_info=True,
     )
-    sys.exit(1)
+    raise RuntimeError(
+        "Database connection failed after %d attempts: %s" % (retries, last_exc)
+    ) from last_exc
 
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
     """
-    FastAPI Depends용 비동기 DB 세션 생성기.
-    트랜잭션 경계: 성공 시 commit, 예외 시 rollback. 서비스 레이어는 commit 호출하지 않음.
+    FastAPI Depends용 비동기 DB 세션 생성기. 읽기 전용/단일 쿼리용.
+    트랜잭션 경계는 서비스 레이어의 transaction() 컨텍스트 매니저에서만 제어한다.
+    """
+    if not async_session_maker:
+        raise RuntimeError("Database not initialized. Set DATABASE_URL.")
+
+    async with async_session_maker() as session:
+        yield session
+
+
+@asynccontextmanager
+async def transaction() -> AsyncGenerator[AsyncSession, None]:
+    """
+    서비스 레이어용 트랜잭션 컨텍스트 매니저. 성공 시 commit, 예외 시 rollback.
+    비즈니스 로직은 이 안에서만 DB 쓰기 시 수행한다.
     """
     if not async_session_maker:
         raise RuntimeError("Database not initialized. Set DATABASE_URL.")

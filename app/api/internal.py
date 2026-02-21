@@ -37,7 +37,8 @@ def _validate_trigger_secret(
         or (authorization and authorization.startswith("Bearer ") and authorization[7:].strip())
         or secret
     ) or ""
-    if not secrets.compare_digest(provided, settings.crawl_trigger_secret or ""):
+    expected = settings.crawl_trigger_secret.get_secret_value()
+    if not secrets.compare_digest(provided, expected):
         raise HTTPException(status_code=401, detail="Invalid or missing crawl trigger secret")
 
 

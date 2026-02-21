@@ -20,20 +20,20 @@ logger = logging.getLogger(__name__)
 
 
 def _init_sentry() -> None:
-    """SENTRY_DSN이 있으면 Sentry 초기화."""
+    """SENTRY_DSN이 있으면 Sentry 초기화. environment는 설정에서 로드(스테이징/로컬 구분)."""
     if settings.sentry_dsn:
         import sentry_sdk
         from sentry_sdk.integrations.fastapi import FastApiIntegration
         from sentry_sdk.integrations.logging import LoggingIntegration
 
         sentry_sdk.init(
-            dsn=settings.sentry_dsn,
+            dsn=settings.sentry_dsn.get_secret_value(),
             integrations=[
                 FastApiIntegration(),
                 LoggingIntegration(level=logging.INFO, event_level=logging.ERROR),
             ],
             traces_sample_rate=0.1,
-            environment="production",
+            environment=settings.environment,
         )
 
 

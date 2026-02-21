@@ -1,31 +1,30 @@
 """Auth API. 구글 OAuth + JWT."""
 
 import httpx
-from fastapi import APIRouter, Depends, Header, HTTPException
-from sqlalchemy.ext.asyncio import AsyncSession
+from fastapi import APIRouter, Depends, HTTPException
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from app.core.database import get_db
 from app.core.deps import get_httpx_client
 from app.schemas.auth import TokenPayload, TokenResponse
 from app.services.auth_service import (
     AuthError,
     google_login,
-    revoke_refresh_tokens_for_user,
+    logout_user,
     verify_access_token,
 )
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+security = HTTPBearer(auto_error=False)
 
 
 def get_current_user_id(
-    authorization: str | None = Header(None, alias="Authorization"),
+    credentials: HTTPAuthorizationCredentials | None = Depends(security),
 ) -> int:
-    """Authorization Bearer에서 Access JWT 검증 후 user_id 반환. 로그아웃·인가용."""
-    if not authorization or not authorization.startswith("Bearer "):
+    """Authorization Bearer에서 Access JWT 검증 후 user_id 반환. Swagger Authorize 정상 동작."""
+    if not credentials:
         raise HTTPException(status_code=401, detail="Missing or invalid Authorization")
-    token = authorization[7:].strip()
     try:
-        payload = verify_access_token(token)
+        payload = verify_access_token(credentials.credentials)
         return int(payload["sub"])
     except AuthError:
         raise HTTPException(status_code=401, detail="Invalid or expired token") from None
@@ -34,7 +33,6 @@ def get_current_user_id(
 @router.post("/google", response_model=TokenResponse)
 async def post_google_auth(
     payload: TokenPayload,
-    session: AsyncSession = Depends(get_db),
     http_client: httpx.AsyncClient = Depends(get_httpx_client),
 ) -> TokenResponse:
     """
@@ -43,7 +41,6 @@ async def post_google_auth(
     """
     try:
         return await google_login(
-            session,
             code=payload.code,
             redirect_uri=payload.redirect_uri,
             http_client=http_client,
@@ -54,11 +51,10 @@ async def post_google_auth(
 
 @router.post("/logout")
 async def post_logout(
-    session: AsyncSession = Depends(get_db),
     user_id: int = Depends(get_current_user_id),
 ) -> None:
     """
     로그아웃. 해당 유저의 refresh_token_version 증가 → 기존 Refresh 토큰 전부 무효화.
     Authorization: Bearer <access_token> 필요.
     """
-    await revoke_refresh_tokens_for_user(session, user_id)
+    await logout_user(user_id)
