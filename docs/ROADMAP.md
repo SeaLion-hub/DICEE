@@ -672,6 +672,20 @@ FastAPI에서 `def` 라우터는 스레드 풀에서 실행된다. "가벼워서
 
 **사용자 직접 실행**: DB 마이그레이션 적용 — `alembic upgrade head` (007_add_user_refresh_token_version 적용). 적용 후 서버 재시작.
 
+#### 크롤링 청킹·인덱스·User 레이스·Defer 코드 반영 (Fail 리뷰 → 구현 완료)
+
+| # | 지적 내용 | 코드 반영 |
+|---|-----------|-----------|
+| 1 | **반쪽짜리 청킹/OOM** | `_collect_payloads_sync`를 **Generator**(yield 1건씩)로 변경. `crawl_college_sync`는 for payload in ... 로 청크 누적 후 UPSERT_CHUNK_SIZE마다 upsert·commit·expunge_all, **루프 종료 후 if chunk: 동일 처리**(잔여 데이터 flush). |
+| 2 | **비동기 청킹 누락** | `_collect_payloads_async`를 **Async Generator**(yield 1건씩)로 변경. `crawl_college`는 async for payload in ... 로 청크 누적 후 청크마다 `await upsert_notices_bulk`, **if chunk: 동일 처리**. |
+| 3 | **무지성 except Exception** | _collect_payloads_sync/async 루프 내 **구체 예외만** catch: 네트워크(TimeoutError, OSError, ConnectionError, RequestException / httpx.HTTPError, httpx.TimeoutException), 파서(ValueError, KeyError, AttributeError, TypeError). Exception 블록 제거. get_links는 httpx/네트워크 예외만 catch 후 return 0. |
+| 4 | **워커 Sentry 침묵** | app/worker.py에서 ImportError 시 `logger.error("Sentry is enabled (SENTRY_DSN set) but sentry_sdk is missing. Install sentry-sdk.")` 추가. |
+| 5 | **인덱스 누락** | Notice: published_at, created_at에 index=True. __table_args__에 GIN(hashtags, eligibility). CrawlRun: started_at에 index=True. Alembic 008로 B-Tree·GIN 인덱스 생성( GIN은 op.execute로 수동 생성). |
+| 6 | **User 레이스 컨디션** | user_repository.upsert_by_provider_uid를 **INSERT ... ON CONFLICT (uq_user_provider_uid) DO UPDATE** 단일 쿼리로 재작성. RETURNING User.id 후 session.get(User, id)로 반환. |
+| 7 | **Heavy column defer** | notice_repository에 NOTICE_LIST_DEFER_OPTIONS(defer raw_html, images, attachments) 상수 및 모듈 docstring에 목록 조회 시 .options(*NOTICE_LIST_DEFER_OPTIONS) 필수 명시. 5단계 목록 API에서 사용. |
+
+**사용자 직접 실행**: `alembic upgrade head` (008_notice_indexes_and_gin 적용). 동시 로그인 검증 시 비동기로 동일 계정 10회 동시 요청 등 레이스 테스트 권장.
+
 ---
 
 ## 추가 검토 아이디어

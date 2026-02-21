@@ -8,11 +8,13 @@ import hashlib
 import logging
 import re
 import time
+from collections.abc import Iterator
 from datetime import UTC, datetime
 from urllib.error import URLError
 from urllib.parse import parse_qs, urlparse, urlunparse
 
 from bs4 import BeautifulSoup
+from requests.exceptions import RequestException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
@@ -237,26 +239,33 @@ async def crawl_college(session: AsyncSession, college_code: str) -> int:
     async with httpx.AsyncClient(timeout=CRAWL_PAGE_TIMEOUT_SECONDS) as client:
         try:
             links = await get_links_async_fn(client, list_url)
-        except Exception as e:
+        except (httpx.HTTPError, httpx.TimeoutException, TimeoutError, OSError, ConnectionError) as e:
             logger.warning(
                 "crawl_college get_links error: college_code=%s list_url=%s error=%s",
                 college_code,
                 list_url[:200] if list_url else "",
                 e,
+                exc_info=True,
             )
             return 0
 
         if not links:
             return 0
 
-        notices = await _collect_payloads_async(
+        total_count = 0
+        chunk: list[dict] = []
+        async for payload in _collect_payloads_async(
             client, links, college.id, scrape_async_fn, POLITE_DELAY_SECONDS, seen
-        )
-
-    if not notices:
-        return 0
-    await upsert_notices_bulk(session, notices)
-    return len(notices)
+        ):
+            chunk.append(payload)
+            if len(chunk) >= UPSERT_CHUNK_SIZE:
+                ids = await upsert_notices_bulk(session, chunk)
+                total_count += len(ids)
+                chunk.clear()
+        if chunk:
+            ids = await upsert_notices_bulk(session, chunk)
+            total_count += len(ids)
+    return total_count
 
 
 def _collect_payloads_sync(
@@ -265,20 +274,19 @@ def _collect_payloads_sync(
     scrape_fn,
     delay_sec: float,
     seen: set[str] | None = None,
-) -> list[dict]:
+) -> Iterator[dict]:
     """
     동기: 링크 순회 → delay → scrape_fn(url) → build_notice_payload → 중복 제거.
-    HTTP/DB 미의존. Celery 경로에서 사용.
+    한 건씩 yield하여 메모리 상에 전체 리스트를 쌓지 않음. HTTP/DB 미의존.
     """
     if seen is None:
         seen = set()
-    payloads: list[dict] = []
     for post in links:
         time.sleep(delay_sec)
         detail_url = post.get("url") or ""
         try:
             title, date_str, html_content, images, attachments = scrape_fn(detail_url)
-        except (TimeoutError, OSError) as e:
+        except (TimeoutError, OSError, ConnectionError, RequestException) as e:
             logger.warning(
                 "scrape failed (timeout/network): url=%s error=%s",
                 detail_url[:200] if detail_url else "",
@@ -286,9 +294,9 @@ def _collect_payloads_sync(
                 exc_info=True,
             )
             continue
-        except Exception as e:
+        except (ValueError, KeyError, AttributeError, TypeError) as e:
             logger.warning(
-                "scrape failed (parser/other): url=%s error=%s",
+                "scrape failed (parser): url=%s error=%s",
                 detail_url[:200] if detail_url else "",
                 e,
                 exc_info=True,
@@ -303,8 +311,7 @@ def _collect_payloads_sync(
         if ext_id in seen:
             continue
         seen.add(ext_id)
-        payloads.append(payload)
-    return payloads
+        yield payload
 
 
 async def _collect_payloads_async(
@@ -314,14 +321,13 @@ async def _collect_payloads_async(
     scrape_async_fn,
     delay_sec: float,
     seen: set[str] | None = None,
-) -> list[dict]:
+):
     """
     비동기: 링크 순회 → await sleep → await scrape_async_fn(client, url) → build_notice_payload → 중복 제거.
-    HTTP/DB 미의존. FastAPI 경로에서 사용.
+    한 건씩 yield하여 메모리 상에 전체 리스트를 쌓지 않음. HTTP/DB 미의존.
     """
     if seen is None:
         seen = set()
-    payloads: list[dict] = []
     for post in links:
         await asyncio.sleep(delay_sec)
         detail_url = post.get("url") or ""
@@ -329,11 +335,20 @@ async def _collect_payloads_async(
             title, date_str, html_content, images, attachments = await scrape_async_fn(
                 client, detail_url
             )
-        except Exception as e:
+        except (httpx.HTTPError, httpx.TimeoutException, TimeoutError, OSError, ConnectionError) as e:
             logger.warning(
-                "scrape error: url=%s error=%s",
+                "scrape failed (network/timeout): url=%s error=%s",
                 detail_url[:200] if detail_url else "",
                 e,
+                exc_info=True,
+            )
+            continue
+        except (ValueError, KeyError, AttributeError, TypeError) as e:
+            logger.warning(
+                "scrape failed (parser): url=%s error=%s",
+                detail_url[:200] if detail_url else "",
+                e,
+                exc_info=True,
             )
             continue
         payload = build_notice_payload(
@@ -345,8 +360,7 @@ async def _collect_payloads_async(
         if ext_id in seen:
             continue
         seen.add(ext_id)
-        payloads.append(payload)
-    return payloads
+        yield payload
 
 
 def crawl_college_sync(session: Session, college_code: str) -> tuple[int, list[int]]:
@@ -375,17 +389,21 @@ def crawl_college_sync(session: Session, college_code: str) -> tuple[int, list[i
         return (0, [])
 
     seen: set[str] = set()
-    notices = _collect_payloads_sync(
-        links, college.id, scrape_fn, POLITE_DELAY_SECONDS, seen
-    )
-
-    if not notices:
-        return (0, [])
     notice_ids_to_process: list[int] = []
-    for i in range(0, len(notices), UPSERT_CHUNK_SIZE):
-        chunk = notices[i : i + UPSERT_CHUNK_SIZE]
+    chunk: list[dict] = []
+    for payload in _collect_payloads_sync(
+        links, college.id, scrape_fn, POLITE_DELAY_SECONDS, seen
+    ):
+        chunk.append(payload)
+        if len(chunk) >= UPSERT_CHUNK_SIZE:
+            ids = upsert_notices_bulk_sync(session, chunk)
+            session.commit()
+            session.expunge_all()
+            notice_ids_to_process.extend(ids)
+            chunk.clear()
+    if chunk:
         ids = upsert_notices_bulk_sync(session, chunk)
         session.commit()
         session.expunge_all()
         notice_ids_to_process.extend(ids)
-    return (len(notices), notice_ids_to_process)
+    return (len(notice_ids_to_process), notice_ids_to_process)

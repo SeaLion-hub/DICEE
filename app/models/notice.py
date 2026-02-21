@@ -9,7 +9,7 @@ if TYPE_CHECKING:
     from app.models.college import College
     from app.models.user_calendar_event import UserCalendarEvent
 
-from sqlalchemy import DateTime, ForeignKey, String, Text, UniqueConstraint
+from sqlalchemy import DateTime, ForeignKey, Index, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -18,14 +18,20 @@ from app.models.base import Base
 
 class Notice(Base):
     __tablename__ = "notices"
-    __table_args__ = (UniqueConstraint("college_id", "external_id", name="uq_notice_college_external"),)
+    __table_args__ = (
+        UniqueConstraint("college_id", "external_id", name="uq_notice_college_external"),
+        Index("ix_notices_hashtags_gin", "hashtags", postgresql_using="gin"),
+        Index("ix_notices_eligibility_gin", "eligibility", postgresql_using="gin"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     college_id: Mapped[int] = mapped_column(ForeignKey("colleges.id"), nullable=False, index=True)
     external_id: Mapped[str] = mapped_column(String(512), nullable=False, index=True)
     title: Mapped[str] = mapped_column(String(512), nullable=False)
     url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
-    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    published_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
 
     # 1. 원본 데이터 보존
     raw_html: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -47,7 +53,9 @@ class Notice(Base):
     content_hash: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     is_manual_edited: Mapped[bool] = mapped_column(default=False, nullable=False)
 
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), index=True
+    )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(UTC),

@@ -18,7 +18,9 @@ class CrawlRun(Base):
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     college_id: Mapped[int] = mapped_column(ForeignKey("colleges.id"), nullable=False, index=True)
     celery_task_id: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
-    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False)  # running | success | failed
     notices_upserted: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

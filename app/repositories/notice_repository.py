@@ -1,4 +1,8 @@
-"""Notice Repository. DB 쿼리만 수행. 크롤 결과 upsert."""
+"""Notice Repository. DB 쿼리만 수행. 크롤 결과 upsert.
+
+목록 조회(Pagination) 시 raw_html·images·attachments는 반드시 지연 로딩.
+쓰려면 select(Notice).options(*NOTICE_LIST_DEFER_OPTIONS) 형태로 사용.
+"""
 
 from datetime import UTC, datetime
 from typing import Any
@@ -6,9 +10,16 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, defer
 
 from app.models.notice import Notice
+
+# 목록 조회 시 Heavy column 지연 로딩 (메모리·대역폭 방지). 5단계 목록 API에서 필수.
+NOTICE_LIST_DEFER_OPTIONS = (
+    defer(Notice.raw_html),
+    defer(Notice.images),
+    defer(Notice.attachments),
+)
 
 
 def get_by_id_sync(session: Session, notice_id: int) -> Notice | None:
