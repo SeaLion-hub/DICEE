@@ -95,7 +95,7 @@ async def validation_exception_handler(
 
 @app.exception_handler(httpx.HTTPError)
 async def httpx_error_handler(request: Request, exc: httpx.HTTPError) -> JSONResponse:
-    """외부 HTTP 클라이언트(구글 OAuth 등) 지연/타임아웃 시 503. 500 전파 방지."""
+    """Auth 외 다른 경로에서 httpx 예외가 누락되었을 때 503 폴백. Auth는 AuthServiceUnavailableError → 라우터에서 503."""
     logger.warning("External HTTP error: %s", exc, exc_info=True)
     return JSONResponse(
         status_code=503,

@@ -9,6 +9,7 @@ from app.core.deps import get_google_key_fetcher, get_httpx_client, get_redis_bl
 from app.schemas.auth import TokenPayload, TokenResponse
 from app.services.auth_service import (
     AuthError,
+    AuthServiceUnavailableError,
     google_login,
     logout_user,
     verify_access_token,
@@ -63,6 +64,7 @@ async def post_google_auth(
     """
     구글 OAuth Authorization Code로 로그인.
     code를 받아 검증 후 Access/Refresh JWT 반환.
+    외부 API 장애(타임아웃 등) → 503, 클라이언트 인증 오류 → 400.
     """
     try:
         return await google_login(
@@ -71,6 +73,8 @@ async def post_google_auth(
             http_client=http_client,
             key_fetcher=key_fetcher,
         )
+    except AuthServiceUnavailableError as e:
+        raise HTTPException(status_code=503, detail=str(e)) from e
     except AuthError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
 

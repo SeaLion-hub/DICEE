@@ -22,7 +22,13 @@ logger = logging.getLogger(__name__)
 
 
 class AuthError(Exception):
-    """Auth 관련 예외. Router에서 HTTPException으로 변환."""
+    """클라이언트 인증/권한 오류. Router에서 400 또는 401로 변환."""
+
+    pass
+
+
+class AuthServiceUnavailableError(Exception):
+    """외부 인증 제공자(구글 등) 일시 불가. Router에서 503 Service Unavailable로 변환."""
 
     pass
 
@@ -34,7 +40,7 @@ async def exchange_google_code(
 ) -> GoogleTokenResponse:
     """
     구글 OAuth Authorization Code를 액세스 토큰으로 교환.
-    Pydantic 스키마로 검증. 네트워크 예외(Timeout, Connect) 시 AuthError로 변환(500 전파 방지).
+    Pydantic 스키마로 검증. 네트워크 예외(Timeout, Connect) 시 AuthServiceUnavailableError(503)로 변환.
     """
     client_secret = settings.google_client_secret.get_secret_value()
     try:
@@ -55,7 +61,7 @@ async def exchange_google_code(
         httpx.RemoteProtocolError,
     ) as e:
         logger.warning("Google token exchange network error: %s", e, exc_info=True)
-        raise AuthError("Google auth temporarily unavailable") from e
+        raise AuthServiceUnavailableError("Google auth temporarily unavailable") from e
     if resp.status_code != 200:
         logger.warning("Google token exchange failed: %s %s", resp.status_code, resp.text)
         raise AuthError("Invalid or expired authorization code")
