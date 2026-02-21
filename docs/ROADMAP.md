@@ -16,6 +16,7 @@
 - [5단계: 검색·프로필 매칭 API 완성](#5단계-검색프로필-매칭-api-완성)
 - [6단계: Next.js 프론트 연동 및 최종 런칭](#6단계-nextjs-프론트-연동-및-최종-런칭)
 - [추가 검토 아이디어](#추가-검토-아이디어)
+- [기술 부채·품질 개선 계획 (테크 리드 리뷰 반영)](#기술-부채품질-개선-계획-테크-리드-리뷰-반영)
 
 ---
 
@@ -485,6 +486,116 @@ Swagger UI에서 임의 프로필 입력 시 지원 가능한 공지만 필터�
 ### 마일스톤
 
 Vercel 배포 사이트에서 프로필 설정 후 자신에게 맞는 최신 공지를 에러 없이 확인 가능. **서비스 내부 달력**에서 추출된 일정(마감·행사) 확인 및 "내 달력에 추가" 가능. **.ics 내보내기**로 외부 달력에 저장 가능 → 베타 런칭 완료.
+
+---
+
+## 기술 부채·품질 개선 계획 (테크 리드 리뷰 반영)
+
+실리콘밸리 테크 리드 관점 코드 리뷰(아키텍처·보안·확장성·코드 가독성)에서 지적된 항목을 **계획표**로 정리. **플랜 반려(Planning Rejected)** 피드백 반영: 우선순위 산정과 해결 방안의 깊이를 전면 재조정. "고려 시점"을 잘못 두면 3단계 마무리 전에 기술 부채에 짓눌려 코드를 전부 갈아엎게 된다는 판단에 따라, **아키텍처 결함(A1, A2)과 핵심 보안/검증(S1, S5)을 P0(즉시 실행)**으로 끌어올리고, 메모리·예외·비동기 정책을 코어 레벨에서 명확히 한다.
+
+### 점수·결론 (리뷰 시점)
+
+- **총점**: 33/100 (아키텍처 8/30, 보안 10/30, 확장성 6/20, 코드 가독성 9/20)
+- **머지 판정**: Fail — 위 항목들이 수정·검증된 뒤에만 프로덕션 머지 권장.
+- **플랜 반려 → 재제출 → 최종 판정**: 초안은 타임라인 잘못으로 반려. P0 전면 재조정·해결 방안 깊이 보강 후 재제출. **PASS: 계획 승인 (Plan Approved)**. DICEE 연세대 공지 매칭 백엔드가 실제 트래픽을 견디려면 이 정도의 치열한 타임라인은 선택이 아니라 필수.
+
+---
+
+### 1. 아키텍처 (30점 → 목표: 25+) — **P0: 즉시 실행**
+
+비동기 루프 안에서 블로킹 I/O를 발생시키는 건 **개선 사항이 아니라 버그**다. 대학 공지 수집 특성상 스케줄러 도는 순간 이벤트 루프 전체가 멈추고 API 응답 지연으로 직결된다. 잘못된 아키텍처 위에서 코드를 계속 짜면 나중에 뜯어고칠 비용이 10배로 든다. **당장 모든 작업을 멈추고 P0로 비동기 I/O 구조부터 완전히 분리**한다.
+
+| # | 지적 내용 | 현재 상태 | 할 일 | 고려 시점 |
+|---|-----------|-----------|-------|-----------|
+| A1 | **asyncio.to_thread 남용 (버그)** | `crawl_college` 내부에서 동기 `requests` 크롤러를 `asyncio.to_thread(get_links_fn, ...)`, `asyncio.to_thread(scrape_fn, ...)`로 호출. I/O 바운드 네트워크 작업을 스레드 풀에 던져 동시 요청 시 스레드 풀 고갈·이벤트 루프 블로킹. | **비동기 크롤러로 전환**: `httpx.AsyncClient` 또는 `aiohttp` 사용. 크롤러 모듈에 `get_*_links_async`, `scrape_*_detail_async` 추가(또는 기존 함수를 async로 래핑). `crawl_college`에서는 `await`만 사용하고 `asyncio.to_thread` 제거. | **P0 (즉시)** |
+| A2 | **DRY 위반 (crawl_college vs crawl_college_sync)** | config 조회·링크 순회·딜레이·스크래핑·중복 제거·리스트 적재·bulk upsert까지 **플로우**가 async/sync 두 벌. 이중 유지보수·동작 불일치 위험. | **플로우 공통화**: (1) 순수 비즈니스 로직(링크 목록 → payload 목록)을 **세션·HTTP 의존 없는 함수**로 추출(예: `collect_notices_from_links(links, college_id, get_detail_fn)`). (2) async 경로: `get_detail_fn` = async scrape, DB = AsyncSession. (3) sync 경로(Celery): `get_detail_fn` = sync scrape, DB = Session. 진입점은 "세션 타입 + 스크래퍼 호출 방식"만 주입. | **P0 (즉시)** |
+| A3 | **이중 진입점 일관성** | FastAPI(to_thread)와 Celery(sync)로 같은 로직을 두 경로로 실행. 한쪽만 수정되면 동작 불일치. | A2 플로우 공통화로 해소. 단일 "수집 로직" 정의 후 진입점만 나눔. | A2와 동시 |
+
+---
+
+### 2. 보안 (30점 → 목표: 25+) — **S1, S5: P0 (즉시)**
+
+사용자 인증(Auth)은 **시스템의 대문**이다. JWT 취약점·구글 응답 무검증은 당장 내일이라도 보안 사고로 이어질 수 있다. **P0로 끌어올려 즉시 실행**한다.
+
+| # | 지적 내용 | 현재 상태 | 할 일 | 고려 시점 |
+|---|-----------|-----------|-------|-----------|
+| S1 | **JWT iss·aud 클레임 부재** | `create_jwt_pair`에서 `sub`, `type`, `exp`, `iat`만 사용. 토큰 탈취·재사용·다중 서비스 환경에서 발급자/대상 검증 불가. | JWT payload에 **iss**(예: `settings.jwt_issuer` 또는 API 베이스 URL), **aud**(예: `settings.jwt_audience`) 추가. 검증 미들웨어/의존성에서 decode 시 iss·aud 검사. config에 `JWT_ISSUER`, `JWT_AUDIENCE` 추가. | **P0 (즉시)** |
+| S2 | **Sentry 초기화·의존성 관리** | `main.py`의 `_init_sentry()`는 `sentry_dsn`일 때 `import sentry_sdk` 수행. DSN만 있고 패키지 미설치 시 ImportError로 서버 크래시. **단, 환경변수(SENTRY_DSN)가 주입된 환경이라면 당연히 패키지도 설치되어 있어야 하는 게 인프라의 기본이다.** 코드 레벨에서 의존성 관리 엉망을 덮지 말 것. | (1) **인프라 원칙**: SENTRY_DSN을 쓰는 배포 환경에서는 `requirements.txt`에 `sentry-sdk` 포함·설치 보장. (2) **방어적 코드(선택)**: `_init_sentry()`를 `try: ... except ImportError:`로 감싸되, 실패 시 **logger.warning**으로 "Sentry DSN set but sentry-sdk not installed" 명시 — 덮어두지 말고 인프라 점검 유도. | P1 (인프라 정합 후, 방어 코드는 선택) |
+| S3 | **침묵하는 예외 (Sentry 전송 래핑)** | `crawl_service.py`에서 `try: sentry_sdk.capture_* except Exception: pass`. Sentry 전송 실패를 삼키면 디버깅 시 "데이터 누락은 있는데 로그는 깨끗한" 상황. **최상위 Exception을 잡는 건 안티패턴** — 메모리 에러·문법 에러까지 삼키면 안 됨. | Sentry 전송 실패만 잡고 싶다면 **sentry_sdk 관련 네트워크/전송 예외만** 구체적으로 처리(예: `sentry_sdk.errors` 하위 또는 HTTP/연결 관련 예외). `except Exception` 금지. 해당 구체 예외에 한해 logger.warning. | P1 |
+| S4 | **크롤 트리거 시크릿 문자열 비교** | `_validate_trigger_secret`에서 `provided != settings.crawl_trigger_secret`로 일반 비교. 타이밍 공격 이론적 취약. | `secrets.compare_digest(provided, settings.crawl_trigger_secret)` 사용. | P1 |
+| S5 | **Google OAuth 토큰 응답 무검증** | `exchange_google_code`가 `resp.json()`을 `cast(dict[str, Any], data)`로만 반환. 스키마 변경 시 런타임에서만 오류·보안 사고 가능. | 구글 토큰 응답용 **Pydantic 스키마** 정의(예: `id_token`, `access_token`, `token_type` 등). `model_validate(data)`로 파싱 후 반환. 파싱 실패 시 AuthError. | **P0 (즉시)** |
+
+---
+
+### 3. 확장성 (20점 → 목표: 15+) — **E1: 청크 + 참조 해제 강제**
+
+리스트를 CHUNK_SIZE로 쪼개고 `session.commit()` 한다고 **메모리가 자동으로 비워지지 않는다**. 파이썬 GC는 **참조가 남아 있으면** 메모리를 해제하지 않는다. BeautifulSoup으로 파싱한 거대 DOM·임시 변수가 루프 내에 남아 있으면 청크 단위 DB 적재를 해도 워커는 뻗는다. **DB 플러시뿐 아니라 로컬 변수 참조 해제(del 또는 스코프 분리)를 계획에 명시**한다.
+
+| # | 지적 내용 | 현재 상태 | 할 일 | 고려 시점 |
+|---|-----------|-----------|-------|-----------|
+| E1 | **OOM 위험 (일괄 적재 + 참조 유지)** | `crawl_college_sync`가 모든 payload를 `notices`에 쌓아 한 번에 `upsert_notices_bulk_sync`로 전달. 청크만 도입해도 **BeautifulSoup DOM·임시 변수 참조가 루프에 남으면** GC가 해제하지 않아 워커 OOM. | **(1) 청크 단위 처리**: N건(예: 50건) 단위로 리스트에 모은 뒤 `upsert_notices_bulk_sync` 호출, `session.commit()`/flush. **(2) 참조 해제 강제**: 각 청크 처리 후 사용한 리스트 비우기(`chunk.clear()` 또는 새 리스트 할당). 스크래핑 루프 내에서 **파싱 결과(BeautifulSoup 객체·큰 문자열)를 즉시 payload로만 넘기고, 루프 다음 반복 전에 큰 객체에 대한 참조를 끊기**(del 또는 별도 함수 스코프로 분리해 함수 종료 시 로컬 참조 해제). MAX_HTML_BYTES 유지. | **P1 (P0 직후)** |
+| E2 | **redirect_uri 하드코딩** | `redirect_uri or "http://localhost"`. 환경별 프론트 URL 대응 불가. | `settings.oauth_redirect_uri_default` 또는 `FRONTEND_URL` + 경로를 환경변수로 두고 사용. `.env.example`·DEPLOYMENT 문서화. | P2 |
+| E3 | **동기 DB 풀 고정** | `pool_size=2`, `max_overflow=0` 고정. 워커·동시 태스크 증가 시 연결 부족. | 환경변수로 `pool_size`, `max_overflow` 오버라이드 가능하게. | P3 |
+
+---
+
+### 4. 코드 가독성 (20점 → 목표: 15+)
+
+| # | 지적 내용 | 현재 상태 | 할 일 | 고려 시점 |
+|---|-----------|-----------|-------|-----------|
+| R1 | **구글 응답 cast(dict) 무검증** | `exchange_google_code` 반환을 `cast(dict[str, Any], data)`로만 처리. | S5와 동일: 구글 토큰 응답 Pydantic 모델, `model_validate(data)`. | **P0 (S5와 동시)** |
+| R2 | **예외 처리 정책 불일치** | Sentry 실패는 삼키고, DB 실패는 sys.exit(1). 정책이 제각각. | 문서화: "Sentry/모니터링 실패 시 앱 계속 동작·로그 유지" vs "DB 연결 실패 시 기동 중단" 원칙을 ROADMAP/CAUTIONS에 명시. S3 적용으로 Sentry 래핑은 구체 예외만 처리. | P2 |
+| R3 | **health status 값** | `status`가 "ok"/"degraded"만 사용, "error" 미사용. | 규칙 정리·문서화 또는 현재 스펙 명시. | P3 |
+
+---
+
+### 5. 기타 — **O2: 타협 없음**
+
+FastAPI에서 `def` 라우터는 스레드 풀에서 실행된다. "가벼워서 괜찮다"는 안일한 예외가 쌓이면 **스레드 풀 병목**이 된다. Redis·Celery 연동이 있는 라우터는 **무조건 async def + 비동기 클라이언트**로 통일한다.
+
+| # | 지적 내용 | 현재 상태 | 할 일 | 고려 시점 |
+|---|-----------|-----------|-------|-----------|
+| O1 | **_normalize_url_for_hash 노이즈 파라미터** | `startswith` 기반 필터. 선택적 개선. | 필요 시 정규식·화이트리스트로 정교화. | P3 |
+| O2 | **trigger-crawl 라우터 동기 def** | `post_trigger_crawl`이 동기 `def` → 스레드 풀 사용. Redis/Celery 연동이 있으면 **타협 없이** async화. | **async def**로 변경하고, Celery/Redis 호출은 **비동기 클라이언트** 또는 `run_in_executor` 등으로 이벤트 루프를 블로킹하지 않도록 처리. "가벼우니까 괜찮다"는 예외 허용하지 않음. | **P1** |
+
+---
+
+### 반영 우선순위 요약 (재조정)
+
+| 우선순위 | 항목 | 비고 |
+|----------|------|------|
+| **P0 (즉시 실행)** | **A1** 비동기 크롤러 전환, **A2** DRY 플로우 공통화, **S1** JWT iss/aud, **S5**·**R1** 구글 응답 Pydantic 검증 | 아키텍처 버그·Auth 대문 수리. 3단계 계속하기 전에 선행. |
+| **P1 (P0 직후)** | **E1** notices 청크 + **참조 해제(del/스코프 분리)** 강제, **S3** Sentry 구체 예외만 처리, **S4** compare_digest, **O2** trigger-crawl async def + 비동기 클라이언트 | OOM 방어·예외·비동기 일관성. |
+| **P2** | S2 인프라 원칙(의존성 보장)·방어 코드 선택, E2 redirect_uri 설정화, R2 예외 정책 문서화 | 보안·환경·문서. |
+| **P3** | E3 DB 풀 설정화, R3 health status, O1 노이즈 파라미터 | 안정성·일관성 마무리. |
+
+---
+
+### 최종 리뷰 평가 및 피드백 (Plan Approved)
+
+비판을 수용하고 문제를 코어 레벨에서 파악해 타임라인을 전면 재조정한 것을 높게 평가. 계획표 자체는 **프로덕션 레벨을 노려볼 만한 수준**으로 인정.
+
+**P0 (아키텍처 & 인증) — "이제야 기본이 잡혔다"**
+
+- asyncio.to_thread 남용(A1)·DRY 위반(A2)을 즉시 수정하겠다고 한 것은 정답.
+- 구글 토큰 Pydantic 검증(S5)·JWT 클레임 추가(S1)는 시스템의 대문을 고치는 일.
+- **P0 작업이 머지(Merge)되기 전까지는 단 한 줄의 새로운 기능 코드도 작성하지 말 것.**
+
+**P1 (OOM 방어 및 메모리 관리) — "GC를 맹신하지 마라"**
+
+- 파이썬이라고 GC만 믿고 던져두면 워커는 반드시 죽는다. C에서 다룬 메모리 감각을 백엔드에도 동일히 적용할 것.
+- E1 계획에서 del·별도 함수 스코프 분리로 큰 객체 참조를 확실히 끊겠다고 명시한 부분은 훌륭함. **코드로 완벽하게 구현되는지 지켜볼 것.**
+- 라우터 async def 강제(O2)·무지성 Exception 포집 금지(S3)는 타협 없이 진행할 것.
+
+**P2 & P3 (인프라 및 설정) — "방어적 인프라"**
+
+- Sentry SDK 의존성(S2)을 인프라 레벨 원칙으로 접근한 태도 인정. 코드로 인프라 구멍을 덮지 말고, **배포 파이프라인(requirements.txt, CI/CD)에서 패키지 설치를 강제**하도록 구성할 것.
+- 하드코딩 제거(E2)·커넥션 풀 설정화(E3)는 배포 전에 마무리만 잘 지을 것.
+
+**결론 (Verdict)**
+
+- **PASS: 계획 승인 (Plan Approved).**
+- 단, **문서에 적힌 계획이 실제 동작하는 코드가 되기 전까지는 아무 의미가 없다.** 당장 에디터 켜고 **P0 브랜치부터 파서 작업 시작**할 것. 코드가 완성되면 PR 올리고, 그때는 **코드 라인 단위로 더 철저하게 리뷰**할 것.
 
 ---
 
