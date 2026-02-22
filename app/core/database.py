@@ -58,11 +58,16 @@ def init_db() -> None:
     # 배포 환경 디버깅: 앱이 실제로 쓰는 호스트만 로그 (비밀번호·user 제외). warning으로 해야 Railway stderr에 출력됨.
     try:
         parsed = make_url(settings.database_url.strip())
+        # password 인증 실패 시: URL에 password가 파싱됐는지 확인 (특수문자 미인코딩 시 비어 있을 수 있음)
+        has_username = bool(parsed.username)
+        has_password = bool(parsed.password)
         logger.warning(
-            "DB connect: host=%s port=%s dbname=%s (DATABASE_URL set)",
+            "DB connect: host=%s port=%s dbname=%s user_set=%s password_set=%s (DATABASE_URL set)",
             parsed.host or "(none)",
             parsed.port or 5432,
             (parsed.database or "/").lstrip("/") or "(default)",
+            has_username,
+            has_password,
         )
     except Exception as e:
         logger.warning("DB URL parse check failed: %s", e)

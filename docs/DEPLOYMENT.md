@@ -149,7 +149,7 @@ CORS: `ALLOWED_ORIGINS`에 프론트 도메인 등록. credentials: 프론트가
   - **참조 서비스 이름 불일치:** `${{Postgres.DATABASE_URL}}`에서 **Postgres**는 대시보드에 보이는 **PostgreSQL 서비스 이름**과 정확히 같아야 한다. (예: 서비스 이름이 `PostgreSQL`이면 `${{PostgreSQL.DATABASE_URL}}`.) 참조가 해석되지 않으면 빈 값이나 잘못된 값이 들어갈 수 있다.
   - **비밀번호 재설정:** Railway PostgreSQL 서비스에서 **Settings → Reset database password** 후, 웹 서비스 Variables의 `DATABASE_URL`을 **새 내부 URL**로 다시 설정(참조면 참조 유지, 직접 입력이면 새 URL 복사 후 스킴만 `postgresql+asyncpg://`로 변경).
   - **공개 URL로 시도:** 일부 환경에서는 내부 URL 대신 **공개 URL** 참조(`${{Postgres.DATABASE_PUBLIC_URL}}`)로 연결되는 경우가 있다. 내부로만 실패하면 한 번 시도해 볼 것.
-  - **실제 사용 값 확인:** 앱 기동 시 로그에 `DB connect: host=... port=... dbname=...`가 찍힌다. `host`가 `postgres.railway.internal`이면 내부 URL이 쓰인 것이고, 다른 호스트면 다른 URL이 주입된 것이다. Railway 로그에서 이 한 줄을 확인하면 원인 추적에 도움이 된다.
+  - **실제 사용 값 확인:** 앱 기동 시 로그에 `DB connect: host=... port=... dbname=... user_set=... password_set=...`가 찍힌다. `password_set=False`이면 URL 파싱 시 비밀번호가 빠진 것(특수문자 미인코딩 등)일 수 있다. `host`가 `postgres.railway.internal`이면 내부 URL이 쓰인 것이고, 다른 호스트면 다른 URL이 주입된 것이다.
 
 **트러블슈팅: `Can't locate revision identified by '011'` (Alembic)**
 
