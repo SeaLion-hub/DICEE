@@ -37,7 +37,8 @@
 - **`architecture.mdc`**: Router→Service→Repository 관심사 분리, 호출 방향 엄수, 예외는 Router/전역 핸들러에서만 HTTP로 변환
 - **`integrations.mdc`**: Gemini Structured Output만 사용, Celery `rate_limit`·`asyncio.run` 래핑, Playwright 옵션·concurrency 제한
 - **`user-actions.mdc`**: **사용자(나)가 직접 해야 할 설정/실행은 항상 명시**하고, **다음 단계로 넘어가기 전에 사용자 확인** 요청
-- **`workflow.mdc`**: 작업 시작 전 docs/rules/·CAUTIONS 참조, DoD·Composer 시 @todo.md, 품질 검사(테스트·엣지 케이스 질문), 완료 시 Found/Fixed/Reason 표 보고
+- **`workflow.mdc`**: 작업 시작 전 docs/rules/·CAUTIONS 참조, DoD·Composer 시 @todo.md, 품질 검사(테스트·엣지 케이스 질문), 완료 시 Found/Fixed/Reason 표 보고. **DoD 6절**: 완료 선언 전 pytest 결과 첨부·alembic 확인·docs/decisions 충돌 없음·리마인더 4문항.
+- **`crawlers-trigger.mdc`**: **app/services/crawlers/** 수정 시만 적용(Globs). 크롤링 로직 수정 전 **반드시** @docs/rules/error-handling.md 재시도·타임아웃 복기, CAUTIONS 크롤러 확인. "매뉴얼 3번 확인했어?" 후 코드 작성.
 
 ---
 

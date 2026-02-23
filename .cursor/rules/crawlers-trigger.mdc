@@ -1,0 +1,17 @@
+---
+description: app/services/crawlers/ 수정 시 크롤링 매뉴얼·재시도·타임아웃 강제 복기
+globs:
+  - "app/services/crawlers/**"
+  - "**/crawlers/**/*.py"
+alwaysApply: false
+---
+
+# 크롤러 수정 전 필수 트리거 (한 줄이라도 쓰기 전에)
+
+**이 파일(crawlers/ 내)을 수정하기 전에, 코드를 한 줄이라도 쓰기 전에 반드시 아래를 수행하라.**
+
+1. **@docs/rules/error-handling.md**를 열어 **"크롤러: 재시도·타임아웃"** 섹션과 **재시도 전략·타임아웃 설정**을 복기하라.
+2. **docs/CAUTIONS.md**의 "6. 크롤러·워커"·"배포 직전 10초 체크리스트"(크롤러 timeout 누락 여부)를 확인했는가?
+3. 스스로에게 묻고 **Yes일 때만** 코드 작성에 들어가라: **"매뉴얼 3번 확인했어? — error-handling 재시도/타임아웃, CAUTIONS 크롤러/Playwright, 현재 크롤러 패턴(get_*_links, scrape_*_detail, fetch_html, published_at 등)을 확인했는가?"**
+
+가이드를 '읽을 수 있는' 수준이 아니라, **크롤링 로직 수정 전 반드시 위 매뉴얼을 복기하라**는 강제 명령이다. 이 순서를 건너뛰지 마라.
