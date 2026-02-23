@@ -1,5 +1,6 @@
 """User 관련 Pydantic 스키마."""
 
+import uuid
 from datetime import datetime
 from typing import Any
 
@@ -35,7 +36,7 @@ class UserResponse(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
-    id: int
+    id: uuid.UUID
     provider: str
     provider_user_id: str
     email: str | None = None

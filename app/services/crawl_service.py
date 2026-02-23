@@ -9,6 +9,7 @@ import logging
 import re
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
 from urllib.error import URLError
@@ -22,6 +23,7 @@ from sqlalchemy.orm import Session
 import httpx
 
 from app.core.config import settings
+from app.core.constants import CrawlRunStatus
 from app.core.crawl_http import HtmlTooLargeError
 from app.core.crawl_rate_limit import HostRateLimiter, host_from_url
 from app.core.crawler_config import COLLEGE_CODE_TO_MODULE, CRAWLER_CONFIG, get_crawler, get_crawler_async
@@ -54,6 +56,9 @@ MAX_HTML_BYTES = 5 * 1024 * 1024
 
 # sync 경로 청크 단위 upsert 크기. commit 후 expunge_all로 세션 Identity Map 비우기(E1).
 UPSERT_CHUNK_SIZE = 50
+
+# 상세 페이지 병렬 수집 시 최대 워커 수 (rate limit은 메인 스레드에서만 적용).
+COLLECT_PAYLOADS_MAX_WORKERS = 5
 
 # 파서/구조 예외 임계치: 초과 시 태스크 실패(raise). 정책 B.
 PARSER_FAILURE_RATIO_THRESHOLD = 0.3  # 시도 대비 파서 실패 비율 상한
@@ -107,13 +112,20 @@ def _external_id_from_url(url: str) -> str:
         return hashlib.sha256(path_only.encode()).hexdigest()[:32]
 
 
-def _content_hash_from_title_and_html(title: str, content_html: str | None) -> str:
-    """제목 + 순수 본문 텍스트(get_text())만으로 sha256."""
-    body_text = ""
-    if content_html:
-        soup = BeautifulSoup(content_html, "html.parser")
-        body_text = soup.get_text(separator="\n", strip=True)
-    raw = f"{title}\n{body_text}"
+def _content_hash_from_title_and_html(
+    title: str,
+    content_html: str | None,
+    body_text: str | None = None,
+) -> str:
+    """제목 + 순수 본문 텍스트만으로 sha256. body_text가 있으면 파싱 생략."""
+    if body_text is not None:
+        text_for_hash = body_text
+    else:
+        text_for_hash = ""
+        if content_html:
+            soup = BeautifulSoup(content_html, "html.parser")
+            text_for_hash = soup.get_text(separator="\n", strip=True)
+    raw = f"{title}\n{text_for_hash}"
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
@@ -175,10 +187,12 @@ def build_notice_payload(
     html_content: str | None,
     images: list | None,
     attachments: list | None,
+    body_text_for_hash: str | None = None,
 ) -> dict | None:
     """
     한 건 공지 스크랩 결과 → upsert용 payload dict. 스킵 시 None(로깅 후 반환).
     순수 함수: HTTP/DB 미의존. crawl_college / crawl_college_sync 공통.
+    body_text_for_hash가 있으면 해시 계산 시 HTML 재파싱 생략.
     """
     if not title:
         return None
@@ -200,7 +214,9 @@ def build_notice_payload(
         )
         return None
     external_id = post.get("no") or _external_id_from_url(detail_url)
-    content_hash = _content_hash_from_title_and_html(title, html_content)
+    content_hash = _content_hash_from_title_and_html(
+        title, html_content, body_text_for_hash
+    )
     published_at = _parse_published_at(date_str)
     att_dicts = _attachments_to_dicts(attachments or [])
     content_url = upload_notice_html(
@@ -265,15 +281,27 @@ async def crawl_college(session: AsyncSession, college_code: str) -> int:
     return total_count
 
 
+def _scrape_one_sync(
+    post: dict, scrape_fn: Callable
+) -> tuple[dict, str, tuple | None, BaseException | None]:
+    """워커용: scrape_fn(detail_url) 호출. (post, detail_url, data, exc) 반환. data는 (title, date_str, html_content, images, attachments) 또는 None."""
+    detail_url = post.get("url") or ""
+    try:
+        data = scrape_fn(detail_url)
+        return (post, detail_url, data, None)
+    except BaseException as e:
+        return (post, detail_url, None, e)
+
+
 def _collect_payloads_sync(
     links: list[dict],
     college_id: uuid.UUID,
-    scrape_fn,
+    scrape_fn: Callable,
     delay_sec: float,
     seen: set[str] | None = None,
 ) -> Iterator[dict]:
     """
-    동기: 링크 순회 → delay → scrape_fn(url) → build_notice_payload → 중복 제거.
+    동기: 링크 순회 → delay → ThreadPoolExecutor로 scrape_fn(url) 병렬 실행 → build_notice_payload → 중복 제거.
     파서/구조 예외는 수집·임계치 초과 시 CrawlThresholdExceeded raise. HTTP/DB 미의존.
     """
     if seen is None:
@@ -282,64 +310,86 @@ def _collect_payloads_sync(
     attempted = 0
     parser_failures = 0
     consecutive_parser_failures = 0
-    for post in links:
-        detail_url = post.get("url") or ""
-        rate_limiter.wait_sync(host_from_url(detail_url) or "_")
-        attempted += 1
-        try:
-            title, date_str, html_content, images, attachments = scrape_fn(detail_url)
-        except (TimeoutError, OSError, ConnectionError, RequestException) as e:
-            logger.warning(
-                "scrape failed (timeout/network): url=%s error=%s",
-                detail_url[:200] if detail_url else "",
-                e,
-                exc_info=True,
-            )
+
+    with ThreadPoolExecutor(max_workers=COLLECT_PAYLOADS_MAX_WORKERS) as executor:
+        futures = []
+        for post in links:
+            rate_limiter.wait_sync(host_from_url(post.get("url") or "") or "_")
+            futures.append(executor.submit(_scrape_one_sync, post, scrape_fn))
+
+        for fut in as_completed(futures):
+            post, detail_url, data, exc = fut.result()
+            attempted += 1
+            if exc is not None:
+                if isinstance(
+                    exc, (TimeoutError, OSError, ConnectionError, RequestException)
+                ):
+                    logger.warning(
+                        "scrape failed (timeout/network): url=%s error=%s",
+                        detail_url[:200] if detail_url else "",
+                        exc,
+                        exc_info=True,
+                    )
+                    consecutive_parser_failures = 0
+                    continue
+                if isinstance(exc, HtmlTooLargeError):
+                    logger.warning(
+                        "scrape skipped (body too large): url=%s %s",
+                        detail_url[:200] if detail_url else "",
+                        exc,
+                    )
+                    consecutive_parser_failures = 0
+                    continue
+                if isinstance(exc, (ValueError, KeyError, AttributeError, TypeError)):
+                    parser_failures += 1
+                    consecutive_parser_failures += 1
+                    logger.warning(
+                        "scrape failed (parser): url=%s error=%s",
+                        detail_url[:200] if detail_url else "",
+                        exc,
+                        exc_info=True,
+                    )
+                    if consecutive_parser_failures >= PARSER_CONSECUTIVE_FAILURES_THRESHOLD:
+                        raise CrawlThresholdExceeded(
+                            f"consecutive parser failures {consecutive_parser_failures} >= {PARSER_CONSECUTIVE_FAILURES_THRESHOLD}",
+                            attempted=attempted,
+                            parser_failures=parser_failures,
+                            consecutive=consecutive_parser_failures,
+                        )
+                    if attempted >= 3 and (parser_failures / attempted) > PARSER_FAILURE_RATIO_THRESHOLD:
+                        raise CrawlThresholdExceeded(
+                            f"parser failure ratio {parser_failures}/{attempted} > {PARSER_FAILURE_RATIO_THRESHOLD}",
+                            attempted=attempted,
+                            parser_failures=parser_failures,
+                            consecutive=consecutive_parser_failures,
+                        )
+                    continue
+                raise exc
             consecutive_parser_failures = 0
-            continue
-        except HtmlTooLargeError as e:
-            logger.warning(
-                "scrape skipped (body too large): url=%s %s",
-                detail_url[:200] if detail_url else "",
-                e,
+            title, date_str, html_content, images, attachments = data
+            body_text_for_hash = ""
+            if html_content:
+                body_text_for_hash = BeautifulSoup(
+                    html_content, "html.parser"
+                ).get_text(separator="\n", strip=True)
+            payload = build_notice_payload(
+                college_id,
+                post,
+                detail_url,
+                title,
+                date_str,
+                html_content,
+                images,
+                attachments,
+                body_text_for_hash=body_text_for_hash or None,
             )
-            consecutive_parser_failures = 0
-            continue
-        except (ValueError, KeyError, AttributeError, TypeError) as e:
-            parser_failures += 1
-            consecutive_parser_failures += 1
-            logger.warning(
-                "scrape failed (parser): url=%s error=%s",
-                detail_url[:200] if detail_url else "",
-                e,
-                exc_info=True,
-            )
-            if consecutive_parser_failures >= PARSER_CONSECUTIVE_FAILURES_THRESHOLD:
-                raise CrawlThresholdExceeded(
-                    f"consecutive parser failures {consecutive_parser_failures} >= {PARSER_CONSECUTIVE_FAILURES_THRESHOLD}",
-                    attempted=attempted,
-                    parser_failures=parser_failures,
-                    consecutive=consecutive_parser_failures,
-                )
-            if attempted >= 3 and (parser_failures / attempted) > PARSER_FAILURE_RATIO_THRESHOLD:
-                raise CrawlThresholdExceeded(
-                    f"parser failure ratio {parser_failures}/{attempted} > {PARSER_FAILURE_RATIO_THRESHOLD}",
-                    attempted=attempted,
-                    parser_failures=parser_failures,
-                    consecutive=consecutive_parser_failures,
-                )
-            continue
-        consecutive_parser_failures = 0
-        payload = build_notice_payload(
-            college_id, post, detail_url, title, date_str, html_content, images, attachments
-        )
-        if payload is None:
-            continue
-        ext_id = payload["external_id"]
-        if ext_id in seen:
-            continue
-        seen.add(ext_id)
-        yield payload
+            if payload is None:
+                continue
+            ext_id = payload["external_id"]
+            if ext_id in seen:
+                continue
+            seen.add(ext_id)
+            yield payload
 
 
 async def _collect_payloads_async(
@@ -410,8 +460,21 @@ async def _collect_payloads_async(
                 )
             continue
         consecutive_parser_failures = 0
+        body_text_for_hash = ""
+        if html_content:
+            body_text_for_hash = BeautifulSoup(
+                html_content, "html.parser"
+            ).get_text(separator="\n", strip=True)
         payload = build_notice_payload(
-            college_id, post, detail_url, title, date_str, html_content, images, attachments
+            college_id,
+            post,
+            detail_url,
+            title,
+            date_str,
+            html_content,
+            images,
+            attachments,
+            body_text_for_hash=body_text_for_hash or None,
         )
         if payload is None:
             continue
@@ -510,7 +573,7 @@ def run_crawl_job_sync(
             session,
             task_id,
             finished_at=datetime.now(UTC),
-            status="success",
+            status=CrawlRunStatus.SUCCESS.value,
             notices_upserted=count,
         )
         session.commit()
@@ -520,7 +583,7 @@ def run_crawl_job_sync(
             session,
             task_id,
             finished_at=datetime.now(UTC),
-            status="failed",
+            status=CrawlRunStatus.FAILED.value,
             error_message=(str(e))[:2000],
         )
         session.commit()

@@ -90,6 +90,7 @@ async def add_access_to_blocklist(
         await client.set(key, "1", ex=ttl_seconds)
     except Exception as e:
         logger.warning("Blocklist add failed (jti=%s): %s", jti, e, exc_info=True)
+        raise
 
 
 async def acquire_trigger_lock(client: Any, college_code: str) -> tuple[bool, str | None]:

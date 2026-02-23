@@ -61,7 +61,7 @@ async def upsert_by_provider_uid(
         updated_at=now,
     )
     stmt = base.on_conflict_do_update(
-        constraint="uq_user_provider_uid",
+        constraint="uq_users_provider_uid",
         set_={
             User.email: func.coalesce(base.excluded.email, User.email),
             User.name: func.coalesce(base.excluded.name, User.name),

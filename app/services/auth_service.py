@@ -65,7 +65,13 @@ async def exchange_google_code(
         logger.warning("Google token exchange network error: %s", e, exc_info=True)
         raise AuthServiceUnavailableError("Google auth temporarily unavailable") from e
     if resp.status_code != 200:
-        logger.warning("Google token exchange failed: %s %s", resp.status_code, resp.text)
+        body_preview = (resp.text[:100] + "…") if len(resp.text) > 100 else resp.text
+        logger.warning(
+            "Google token exchange failed: status=%s body_len=%d body_preview=%s",
+            resp.status_code,
+            len(resp.text),
+            body_preview,
+        )
         raise AuthError("Invalid or expired authorization code")
 
     data = resp.json()
@@ -91,6 +97,11 @@ async def decode_google_id_token(
     except jwt.InvalidTokenError as e:
         logger.warning("Invalid id_token: %s", e)
         raise AuthError("Invalid id_token") from e
+    except Exception as e:
+        logger.warning("ID token verification failed (JWKS/network): %s", e, exc_info=True)
+        raise AuthServiceUnavailableError(
+            "ID token verification temporarily unavailable"
+        ) from e
 
 
 def create_jwt_pair(user_id: uuid.UUID, token_version: int = 0) -> tuple[str, str]:
@@ -150,7 +161,7 @@ async def verify_access_token(
             algorithms=["HS256"],
             issuer=settings.jwt_issuer,
             audience=settings.jwt_audience,
-            options={"require": ["exp", "iat", "sub", "type"]},
+            options={"require": ["exp", "iat", "sub", "type", "jti"]},
         )
         if payload.get("type") != "access":
             raise AuthError("Invalid token type")

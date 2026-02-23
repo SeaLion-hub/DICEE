@@ -165,7 +165,7 @@ def scrape_yonsei_engineering_precise(url):
                     })
 
         # 첨부파일
-        attachment_names = []
+        attachment_names_set: set[str] = set()
         attach_labels = soup.find_all(string=re.compile("첨부"))
         for label in attach_labels:
             parent_row = label.find_parent(['tr', 'li', 'div', 'dl', 'dt', 'dd'])
@@ -181,10 +181,10 @@ def scrape_yonsei_engineering_precise(url):
                     raw_href = link.get('href', '')
                     href = raw_href if isinstance(raw_href, str) else ''
                     if href and not href.startswith('#') and 'javascript' not in href:
-                         if file_name and file_name not in attachment_names:
-                             attachment_names.append(file_name)
+                        if file_name and file_name not in attachment_names_set:
+                            attachment_names_set.add(file_name)
 
-        return title, date, content_text, images_data, attachment_names
+        return title, date, content_text, images_data, list(attachment_names_set)
 
     except RequestException:
         raise

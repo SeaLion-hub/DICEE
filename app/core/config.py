@@ -76,6 +76,8 @@ class Settings(BaseSettings):
             missing.append("DATABASE_URL")
         if not (self.redis_url or "").strip():
             missing.append("REDIS_URL")
+        if not (self.jwt_secret.get_secret_value() or "").strip():
+            missing.append("JWT_SECRET")
         if missing:
             raise ValueError(
                 f"Production environment requires these variables to be set: {', '.join(missing)}. "

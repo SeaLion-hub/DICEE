@@ -9,6 +9,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
+from app.core.constants import CrawlRunStatus
 from app.models.college import College
 from app.models.crawl_run import CrawlRun
 
@@ -20,31 +21,37 @@ def create_crawl_run_sync(
 ) -> CrawlRun:
     """크롤 시작 시 1건 생성 또는 갱신(upsert). 재시도 시 동일 task_id로 상태 단일화."""
     now = datetime.now(UTC)
-    stmt = insert(CrawlRun).values(
-        college_id=college_id,
-        celery_task_id=celery_task_id,
-        started_at=now,
-        status="running",
-        notices_upserted=0,
-        finished_at=None,
-        error_message=None,
-    ).on_conflict_do_update(
-        index_elements=["celery_task_id"],
-        set_={
-            "started_at": now,
-            "status": "running",
-            "notices_upserted": 0,
-            "finished_at": None,
-            "error_message": None,
-        },
+    stmt = (
+        insert(CrawlRun)
+        .values(
+            college_id=college_id,
+            celery_task_id=celery_task_id,
+            started_at=now,
+            status=CrawlRunStatus.RUNNING.value,
+            notices_upserted=0,
+            finished_at=None,
+            error_message=None,
+        )
+        .on_conflict_do_update(
+            index_elements=["celery_task_id"],
+            set_={
+                "started_at": now,
+                "status": CrawlRunStatus.RUNNING.value,
+                "notices_upserted": 0,
+                "finished_at": None,
+                "error_message": None,
+            },
+        )
+        .returning(CrawlRun.id, CrawlRun.started_at)
     )
-    session.execute(stmt)
+    result = session.execute(stmt)
+    row = result.one()
+    id_val, _started_at_val = row[0], row[1]
     session.flush()
-    row = session.execute(
-        select(CrawlRun).where(CrawlRun.celery_task_id == celery_task_id).limit(1)
-    ).scalar_one()
-    session.refresh(row)
-    return row
+    run = session.get(CrawlRun, id_val)
+    if run is None:
+        raise RuntimeError("CrawlRun not found after insert")
+    return run
 
 
 def update_crawl_run_sync(

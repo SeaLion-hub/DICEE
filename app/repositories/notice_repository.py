@@ -115,7 +115,7 @@ async def upsert_notices_bulk(
     notice_rows = [_notice_values_no_content(p) for p in notices]
     base = insert(Notice).values(notice_rows)
     stmt = base.on_conflict_do_update(
-        constraint="uq_notice_college_external",
+        constraint="uq_notices_college_external",
         set_=_notice_upsert_set_excluded(base),
         where=Notice.content_hash.is_distinct_from(base.excluded.content_hash),
     ).returning(Notice.id, Notice.college_id, Notice.external_id)
@@ -148,7 +148,7 @@ def upsert_notices_bulk_sync(
     notice_rows = [_notice_values_no_content(p) for p in notices]
     base = insert(Notice).values(notice_rows)
     stmt = base.on_conflict_do_update(
-        constraint="uq_notice_college_external",
+        constraint="uq_notices_college_external",
         set_=_notice_upsert_set_excluded(base),
         where=Notice.content_hash.is_distinct_from(base.excluded.content_hash),
     ).returning(Notice.id, Notice.college_id, Notice.external_id)
