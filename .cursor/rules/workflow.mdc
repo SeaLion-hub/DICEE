@@ -19,7 +19,7 @@ ROADMAP·ROADMAP_PHASES·WORK_LOG 관련 내용은 기존 `roadmap-and-worklog.m
 ## 2. Composer·작업 기억 (todo.md 3단계)
 
 - Composer(Cmd+I)로 작업할 때는 **@todo.md**를 반드시 포함해 컨텍스트를 유지하라. todo.md **상단의 [Current Session Context]**에 "현재 수정 중·발생 중인 이슈·주의 사항"을 명시하고, **매 프롬프트마다 이 단기 맥락을 상기**하라. 그 아래 [Plan], [Context], [Checklist] 3섹션을 갱신한다.
-- **큰 기능**은 한 번에 구현하지 말고, 먼저 **todo.md [Plan]**에 계획을 적고(필요 시 @docs/decisions/001-notice-schedule-schema.md 등 참조) 사용자 승인을 받은 뒤, **한 번에 1~2개 파일만** 수정하라.
+- **큰 기능**은 한 번에 구현하지 말고, 먼저 **todo.md [Plan]**에 계획을 적고(필요 시 @docs/decisions/database-spec.md 등 참조) 사용자 승인을 받은 뒤, **한 번에 1~2개 파일만** 수정하라.
 - **진행 중인 파일·스키마**는 **todo.md [Context]**에 요약해 두고, 수정할 때마다 갱신하라. (예: 현재 크롤러의 필수 필드·에러 처리 패턴)
 - 수정이 끝나면 **todo.md [Checklist]**에서 완료된 항목을 하나씩 체크하고 보고한 뒤, 다음 단계로 넘어가라.
 - **점진적 지시**: "모든 대학 크롤러 다 만들어줘"가 아니라, "베이스 클래스 상속 확인 → 로그인 로직 → 파싱 로직" 순으로 끊어서 지시하고, 그때마다 todo.md를 업데이트하게 하라.
@@ -43,7 +43,7 @@ ROADMAP·ROADMAP_PHASES·WORK_LOG 관련 내용은 기존 `roadmap-and-worklog.m
 - **오류 발생 시** 스스로 로그를 분석하여 **1차 수정을 진행한 뒤** 결과를 보고할 것. "테스트 실패했습니다"에서 멈추지 말고 원인 추정·수정 시도까지 수행하라.
 - 수정을 완료한 뒤 **변경된 파일 목록**, **요약(한 줄)**, **영향 범위**(어떤 API/기능에 영향)를 짧게 기록해 달라고 요청받을 수 있다.
 - **셀프 체크 리마인더**: 작업 완료 직후 아래를 스스로 확인하고, 필요 시 @로 스키마·리포지토리를 다시 확인하라.
-  - **크롤러 작성/수정 시**: "방금 만든 크롤러에 `published_at`, `external_id`, `title`, `url`, `raw_html` 등 필수 필드가 누락되지는 않았나요? @app/models/notice.py 스키마를 다시 확인하세요."
+  - **크롤러 작성/수정 시**: "방금 만든 크롤러에 `published_at`, `external_id`, `title`, `url`, `raw_html` 등 필수 필드가 누락되지는 않았나요? @docs/decisions/database-spec.md 및 @app/models/ 스키마를 다시 확인하세요."
   - **API·DB 접근 변경 시**: "인덱스·쿼리 패턴이 기존 리포지토리와 맞나요? @app/repositories/ 관련 파일을 확인하세요."
 - 코드 생성·수정 후에는 **이 로직에서 발생할 수 있는 엣지 케이스 3가지**를 스스로 검토하고, 사용자에게 **"추가로 고려할 사항이 있나요?"**라고 물어라.
 

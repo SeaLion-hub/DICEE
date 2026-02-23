@@ -22,7 +22,7 @@ Composer(Cmd+I) 사용 시 **@todo.md**를 반드시 포함해 세션 컨텍스�
 
 작업 시작 전 또는 사용자 지시에 따라 여기에 **계획**을 적어 둔다. 새 크롤러·새 API·스키마 변경 시 관련 결정 문서를 참조해 작성한다.
 
-- **예시(새 대학 크롤러)**: @docs/decisions/001-notice-schedule-schema.md를 참고해 Notice 스키마·필수 필드(published_at, external_id 등)를 확인한 뒤, 베이스/기존 크롤러 패턴을 따라 단계별 계획을 적는다.
+- **예시(새 대학 크롤러)**: @docs/decisions/database-spec.md를 참고해 Notice 스키마·필수 필드(published_at, external_id, title, url 등)를 확인한 뒤, 베이스/기존 크롤러 패턴을 따라 단계별 계획을 적는다.
 - 한 번에 "모든 크롤러 다 만들어줘"라고 하지 말고, **"베이스 클래스 상속 확인 → 로그인/세션 로직 → 파싱 로직"**처럼 끊어서 지시하고, 그때마다 이 [Plan]과 [Checklist]를 갱신하게 하라.
 
 (현재 계획을 여기에 적기)
@@ -52,6 +52,6 @@ Composer(Cmd+I) 사용 시 **@todo.md**를 반드시 포함해 세션 컨텍스�
 ---
 
 **사용 예시 (새 크롤러 추가 시)**  
-1. "@docs/decisions/001-notice-schedule-schema.md를 참고하여 [Plan]을 todo.md에 작성해."  
+1. "@docs/decisions/database-spec.md를 참고하여 [Plan]을 todo.md에 작성해."  
 2. "현재 진행 중인 파일들(@yonsei_ai.py 등)의 [Context]를 요약해."  
 3. 수정 후 "방금 한 변경으로 [Checklist]에서 완료된 항목을 체크하고, 다음 단계만 남겨."
