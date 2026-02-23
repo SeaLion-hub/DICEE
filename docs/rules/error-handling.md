@@ -32,3 +32,19 @@
 - **재시도**: 네트워크/일시 오류 시 즉시 재시도만 하지 말 것. Celery 태스크는 **지수 백오프**(retry_backoff=True, retry_backoff_max). Gemini 호출 시 429 대응 동일.
 - **Polite crawling**: 요청/페이지 간 **1초 딜레이**. 여러 단과대 순차(concurrency=1 또는 순차 enqueue). IP 차단 방지.
 - **Playwright**: `--no-sandbox`, `--disable-dev-shm-usage` 필수. Celery concurrency 1~2.
+
+---
+
+## 크롤 에러 정책 (B) — 예외 전파·임계치 중단
+
+- **크롤러**: `get_*_links` / `get_*_links_async`·`scrape_*_detail` 실패 시 **예외 전파(raise)**. "목록이 비어 있음"과 "에러"는 구분: 정상적으로 빈 목록이면 `[]` 반환, 에러면 raise.
+- **서비스 레이어**: scrape/get_links에서 올라온 **파서·구조 예외**를 수집하고, **임계치 기반** 판단 — 실패 비율(`PARSER_FAILURE_RATIO_THRESHOLD`) 또는 연속 실패 횟수(`PARSER_CONSECUTIVE_FAILURES_THRESHOLD`) 초과 시 **태스크 실패(raise)**하여 Celery가 failed로 기록·Sentry로 조기 발견.
+- **네트워크/타임아웃**: 재시도 후 스킵 가능(로그 + continue). **파서/구조 예외**는 수집·비율 계산·임계치 초과 시 즉시 `CrawlThresholdExceeded` raise.
+
+---
+
+## 크롤 트랜잭션: college 단위 원자성
+
+- **crawl_college_sync** 내부에서는 **college 단위 1 commit**만 수행. 청크별 `session.commit()`·`expunge_all()`은 사용하지 않음.
+- 한 college 크롤이 끝날 때 한 번만 `session.commit()`. 중간에 예외가 나면 **전체 롤백**되어 해당 college 공지 데이터가 부분만 저장되는 일이 없음.
+- `run_crawl_job_sync`의 crawl_run 생성/갱신용 commit은 유지(작업 상태 기록).

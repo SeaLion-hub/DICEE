@@ -50,6 +50,19 @@ class Settings(BaseSettings):
     # 요청/페이지 간 최소 딜레이(초). 대상 서버 부하·IP 차단 완화용.
     polite_delay_seconds: float = Field(1.0, ge=0.1, le=60.0)
 
+    # 본문 스토리지 (S3 또는 로컬). 명세: 본문은 DB가 아닌 오브젝트 스토리지, DB에는 content_url만.
+    content_storage_type: str = "local"  # "s3" | "local"
+    s3_bucket: str | None = None
+    s3_region: str = "ap-northeast-2"
+    s3_content_prefix: str = "notice-contents"
+    # 로컬 스토리지 시 디렉터리 및 URL 접두사 (개발용)
+    content_storage_local_path: str = "storage/contents"
+    content_storage_base_url: str = ""  # 예: https://api.example.com/content
+
+    # IP HMAC (명세 3.2): 평문 IP 저장 금지. DB에는 ip_hmac, ip_hmac_key_version만 저장.
+    ip_hmac_key: SecretStr = SecretStr("")
+    ip_hmac_key_version: str = "v1"
+
     # 6단계 CORS
     allowed_origins: str = ""
 

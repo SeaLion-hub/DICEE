@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import uuid
 from typing import TYPE_CHECKING
 
-from sqlalchemy import String
+from sqlalchemy import String, text
+from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base
@@ -18,7 +20,11 @@ class College(Base):
 
     __tablename__ = "colleges"
 
-    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        primary_key=True,
+        server_default=text("uuid_generate_v7()"),
+    )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     external_id: Mapped[str] = mapped_column(String(255), unique=True, nullable=False, index=True)
 

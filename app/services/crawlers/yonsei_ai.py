@@ -188,9 +188,9 @@ def get_computing_notice_links(list_url):
             text = fetch_html(list_url, timeout=10)
         except HtmlTooLargeError as e:
             logger.warning("get_computing_notice_links body too large list_url=%s: %s", list_url, e)
-            return []
+            raise RequestException from e
         except RequestException:
-            return []
+            raise
         soup = BeautifulSoup(text, "html.parser")
         links = []
 
@@ -244,9 +244,9 @@ def get_computing_notice_links(list_url):
 
     except RequestException:
         raise
-    except Exception:
+    except Exception as e:
         logger.exception("get_computing_notice_links parsing error list_url=%s", list_url)
-        return []
+        raise
 
 
 async def get_computing_notice_links_async(client: httpx.AsyncClient, list_url: str):
@@ -276,7 +276,7 @@ async def get_computing_notice_links_async(client: httpx.AsyncClient, list_url: 
         return links
     except Exception:
         logger.exception("get_computing_notice_links_async parsing error list_url=%s", list_url)
-        return []
+        raise
 
 
 async def scrape_computing_detail_async(client: httpx.AsyncClient, url: str):

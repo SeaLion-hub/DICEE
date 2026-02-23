@@ -8,6 +8,7 @@ import hashlib
 import logging
 import re
 import time
+import uuid
 from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
 from urllib.error import URLError
@@ -22,7 +23,9 @@ import httpx
 
 from app.core.config import settings
 from app.core.crawl_http import HtmlTooLargeError
+from app.core.crawl_rate_limit import HostRateLimiter, host_from_url
 from app.core.crawler_config import COLLEGE_CODE_TO_MODULE, CRAWLER_CONFIG, get_crawler, get_crawler_async
+from app.core.storage import upload_notice_html
 from app.repositories.college_repository import (
     get_by_external_id as get_college_by_external_id,
 )
@@ -51,6 +54,19 @@ MAX_HTML_BYTES = 5 * 1024 * 1024
 
 # sync 경로 청크 단위 upsert 크기. commit 후 expunge_all로 세션 Identity Map 비우기(E1).
 UPSERT_CHUNK_SIZE = 50
+
+# 파서/구조 예외 임계치: 초과 시 태스크 실패(raise). 정책 B.
+PARSER_FAILURE_RATIO_THRESHOLD = 0.3  # 시도 대비 파서 실패 비율 상한
+PARSER_CONSECUTIVE_FAILURES_THRESHOLD = 5  # 연속 파서 실패 횟수 상한
+
+
+class CrawlThresholdExceeded(Exception):
+    """파서 실패 비율 또는 연속 실패 횟수가 임계치를 초과함. 태스크 실패 처리."""
+    def __init__(self, message: str, attempted: int, parser_failures: int, consecutive: int):
+        super().__init__(message)
+        self.attempted = attempted
+        self.parser_failures = parser_failures
+        self.consecutive = consecutive
 
 
 def _url_path_only_for_hash(url: str) -> str:
@@ -151,7 +167,7 @@ def _attachments_to_dicts(attachments: list) -> list[dict]:
 
 
 def build_notice_payload(
-    college_id: int,
+    college_id: uuid.UUID,
     post: dict,
     detail_url: str,
     title: str,
@@ -187,12 +203,18 @@ def build_notice_payload(
     content_hash = _content_hash_from_title_and_html(title, html_content)
     published_at = _parse_published_at(date_str)
     att_dicts = _attachments_to_dicts(attachments or [])
+    content_url = upload_notice_html(
+        html_content,
+        college_id=college_id,
+        external_id=external_id,
+        content_hash=content_hash,
+    )
     return {
         "college_id": college_id,
         "external_id": external_id,
         "title": title,
         "url": detail_url or None,
-        "raw_html": html_content,
+        "content_url": content_url,
         "images": images,
         "attachments": att_dicts,
         "content_hash": content_hash,
@@ -222,17 +244,7 @@ async def crawl_college(session: AsyncSession, college_code: str) -> int:
     seen: set[str] = set()
 
     async with httpx.AsyncClient(timeout=CRAWL_PAGE_TIMEOUT_SECONDS) as client:
-        try:
-            links = await get_links_async_fn(client, list_url)
-        except (httpx.HTTPError, httpx.TimeoutException, TimeoutError, OSError, ConnectionError) as e:
-            logger.warning(
-                "crawl_college get_links error: college_code=%s list_url=%s error=%s",
-                college_code,
-                list_url[:200] if list_url else "",
-                e,
-                exc_info=True,
-            )
-            return 0
+        links = await get_links_async_fn(client, list_url)
 
         if not links:
             return 0
@@ -255,20 +267,25 @@ async def crawl_college(session: AsyncSession, college_code: str) -> int:
 
 def _collect_payloads_sync(
     links: list[dict],
-    college_id: int,
+    college_id: uuid.UUID,
     scrape_fn,
     delay_sec: float,
     seen: set[str] | None = None,
 ) -> Iterator[dict]:
     """
     동기: 링크 순회 → delay → scrape_fn(url) → build_notice_payload → 중복 제거.
-    한 건씩 yield하여 메모리 상에 전체 리스트를 쌓지 않음. HTTP/DB 미의존.
+    파서/구조 예외는 수집·임계치 초과 시 CrawlThresholdExceeded raise. HTTP/DB 미의존.
     """
     if seen is None:
         seen = set()
+    rate_limiter = HostRateLimiter(delay_sec)
+    attempted = 0
+    parser_failures = 0
+    consecutive_parser_failures = 0
     for post in links:
-        time.sleep(delay_sec)
         detail_url = post.get("url") or ""
+        rate_limiter.wait_sync(host_from_url(detail_url) or "_")
+        attempted += 1
         try:
             title, date_str, html_content, images, attachments = scrape_fn(detail_url)
         except (TimeoutError, OSError, ConnectionError, RequestException) as e:
@@ -278,6 +295,7 @@ def _collect_payloads_sync(
                 e,
                 exc_info=True,
             )
+            consecutive_parser_failures = 0
             continue
         except HtmlTooLargeError as e:
             logger.warning(
@@ -285,15 +303,33 @@ def _collect_payloads_sync(
                 detail_url[:200] if detail_url else "",
                 e,
             )
+            consecutive_parser_failures = 0
             continue
         except (ValueError, KeyError, AttributeError, TypeError) as e:
+            parser_failures += 1
+            consecutive_parser_failures += 1
             logger.warning(
                 "scrape failed (parser): url=%s error=%s",
                 detail_url[:200] if detail_url else "",
                 e,
                 exc_info=True,
             )
+            if consecutive_parser_failures >= PARSER_CONSECUTIVE_FAILURES_THRESHOLD:
+                raise CrawlThresholdExceeded(
+                    f"consecutive parser failures {consecutive_parser_failures} >= {PARSER_CONSECUTIVE_FAILURES_THRESHOLD}",
+                    attempted=attempted,
+                    parser_failures=parser_failures,
+                    consecutive=consecutive_parser_failures,
+                )
+            if attempted >= 3 and (parser_failures / attempted) > PARSER_FAILURE_RATIO_THRESHOLD:
+                raise CrawlThresholdExceeded(
+                    f"parser failure ratio {parser_failures}/{attempted} > {PARSER_FAILURE_RATIO_THRESHOLD}",
+                    attempted=attempted,
+                    parser_failures=parser_failures,
+                    consecutive=consecutive_parser_failures,
+                )
             continue
+        consecutive_parser_failures = 0
         payload = build_notice_payload(
             college_id, post, detail_url, title, date_str, html_content, images, attachments
         )
@@ -309,20 +345,25 @@ def _collect_payloads_sync(
 async def _collect_payloads_async(
     client: httpx.AsyncClient,
     links: list[dict],
-    college_id: int,
+    college_id: uuid.UUID,
     scrape_async_fn,
     delay_sec: float,
     seen: set[str] | None = None,
 ):
     """
     비동기: 링크 순회 → await sleep → await scrape_async_fn(client, url) → build_notice_payload → 중복 제거.
-    한 건씩 yield하여 메모리 상에 전체 리스트를 쌓지 않음. HTTP/DB 미의존.
+    파서/구조 예외는 수집·임계치 초과 시 CrawlThresholdExceeded raise. HTTP/DB 미의존.
     """
     if seen is None:
         seen = set()
+    rate_limiter = HostRateLimiter(delay_sec)
+    attempted = 0
+    parser_failures = 0
+    consecutive_parser_failures = 0
     for post in links:
-        await asyncio.sleep(delay_sec)
         detail_url = post.get("url") or ""
+        await rate_limiter.wait_async(host_from_url(detail_url) or "_")
+        attempted += 1
         try:
             title, date_str, html_content, images, attachments = await scrape_async_fn(
                 client, detail_url
@@ -334,6 +375,7 @@ async def _collect_payloads_async(
                 e,
                 exc_info=True,
             )
+            consecutive_parser_failures = 0
             continue
         except HtmlTooLargeError as e:
             logger.warning(
@@ -341,15 +383,33 @@ async def _collect_payloads_async(
                 detail_url[:200] if detail_url else "",
                 e,
             )
+            consecutive_parser_failures = 0
             continue
         except (ValueError, KeyError, AttributeError, TypeError) as e:
+            parser_failures += 1
+            consecutive_parser_failures += 1
             logger.warning(
                 "scrape failed (parser): url=%s error=%s",
                 detail_url[:200] if detail_url else "",
                 e,
                 exc_info=True,
             )
+            if consecutive_parser_failures >= PARSER_CONSECUTIVE_FAILURES_THRESHOLD:
+                raise CrawlThresholdExceeded(
+                    f"consecutive parser failures {consecutive_parser_failures} >= {PARSER_CONSECUTIVE_FAILURES_THRESHOLD}",
+                    attempted=attempted,
+                    parser_failures=parser_failures,
+                    consecutive=consecutive_parser_failures,
+                )
+            if attempted >= 3 and (parser_failures / attempted) > PARSER_FAILURE_RATIO_THRESHOLD:
+                raise CrawlThresholdExceeded(
+                    f"parser failure ratio {parser_failures}/{attempted} > {PARSER_FAILURE_RATIO_THRESHOLD}",
+                    attempted=attempted,
+                    parser_failures=parser_failures,
+                    consecutive=consecutive_parser_failures,
+                )
             continue
+        consecutive_parser_failures = 0
         payload = build_notice_payload(
             college_id, post, detail_url, title, date_str, html_content, images, attachments
         )
@@ -366,8 +426,8 @@ def crawl_college_sync(
     session: Session,
     college_code: str,
     *,
-    on_chunk_processed: Callable[[list[int]], None] | None = None,
-) -> tuple[int, list[int]]:
+    on_chunk_processed: Callable[[list[uuid.UUID]], None] | None = None,
+) -> tuple[int, list[uuid.UUID]]:
     """
     단과대 1개 크롤 (동기, Celery 워커 전용). 동기 DB 세션·Repository 사용.
     get_*_links / (1초 sleep) / scrape_*_detail → upsert_notice_sync.
@@ -394,7 +454,7 @@ def crawl_college_sync(
         return (0, [])
 
     seen: set[str] = set()
-    notice_ids_to_process: list[int] = []
+    notice_ids_to_process: list[uuid.UUID] = []
     total_upserted = 0
     chunk: list[dict] = []
     for payload in _collect_payloads_sync(
@@ -403,8 +463,6 @@ def crawl_college_sync(
         chunk.append(payload)
         if len(chunk) >= UPSERT_CHUNK_SIZE:
             ids = upsert_notices_bulk_sync(session, chunk)
-            session.commit()
-            session.expunge_all()
             total_upserted += len(ids)
             if on_chunk_processed is not None:
                 on_chunk_processed(ids)
@@ -413,13 +471,14 @@ def crawl_college_sync(
             chunk.clear()
     if chunk:
         ids = upsert_notices_bulk_sync(session, chunk)
-        session.commit()
-        session.expunge_all()
         total_upserted += len(ids)
         if on_chunk_processed is not None:
             on_chunk_processed(ids)
         else:
             notice_ids_to_process.extend(ids)
+    # college 단위 1 commit. 중간 예외 시 전체 롤백.
+    session.commit()
+    session.expunge_all()
     if on_chunk_processed is not None:
         return (total_upserted, [])
     return (total_upserted, notice_ids_to_process)
@@ -429,7 +488,7 @@ def run_crawl_job_sync(
     session: Session,
     college_code: str,
     task_id: str,
-    on_chunk_processed: Callable[[list[int]], None],
+    on_chunk_processed: Callable[[list[uuid.UUID]], None],
 ) -> tuple[int, int]:
     """
     크롤 작업 한 건 실행 (college 조회 + crawl_run 생성/갱신 + crawl_college_sync).

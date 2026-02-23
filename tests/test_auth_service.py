@@ -1,5 +1,6 @@
 """Auth Service 단위 테스트. DB/Google 호출 없이 검증."""
 
+import uuid
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -10,7 +11,8 @@ from app.services.auth_service import AuthError, create_jwt_pair, decode_google_
 
 def test_create_jwt_pair_returns_two_tokens() -> None:
     """create_jwt_pair: JWT_SECRET 설정 시 access, refresh 두 토큰 반환."""
-    access, refresh = create_jwt_pair(user_id=1)
+    user_uuid = uuid.UUID("00000000-0000-7000-8000-000000000001")
+    access, refresh = create_jwt_pair(user_id=user_uuid)
     assert isinstance(access, str)
     assert isinstance(refresh, str)
     assert len(access) > 0
@@ -25,7 +27,7 @@ def test_create_jwt_pair_raises_without_secret(monkeypatch: pytest.MonkeyPatch) 
         SecretStr(""),
     )
     with pytest.raises(AuthError):
-        create_jwt_pair(user_id=1)
+        create_jwt_pair(user_id=uuid.UUID("00000000-0000-7000-8000-000000000001"))
 
 
 @pytest.mark.asyncio

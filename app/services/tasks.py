@@ -43,9 +43,9 @@ def crawl_college_task(college_code: str, lock_token: str | None = None):
     count = 0
     enqueued_ai = 0
     try:
-        def on_chunk(ids: list[int]) -> None:
+        def on_chunk(ids: list) -> None:
             for nid in ids:
-                process_notice_ai_task.delay(nid)
+                process_notice_ai_task.delay(str(nid))
 
         with get_sync_session() as session:
             count, enqueued_ai = run_crawl_job_sync(
@@ -69,15 +69,18 @@ def crawl_college_task(college_code: str, lock_token: str | None = None):
     retry_backoff_max=600,
     rate_limit="10/m",
 )
-def process_notice_ai_task(self, notice_id: int):
+def process_notice_ai_task(self, notice_id: str):
     """
     AI 처리 태스크. FOR UPDATE SKIP LOCKED + ai_status 선점으로 동시 워커 중복 처리 방지.
     선점 실패(이미 처리 중/완료) 시 스킵. 4단계에서 Gemini 호출 구현 시 여기서 호출 후 update_ai_result_sync.
+    notice_id: UUID 문자열 (Celery 직렬화용).
     """
+    import uuid as uuid_mod
+    notice_uuid = uuid_mod.UUID(notice_id)
     task_id = getattr(self.request, "id", None) or ""
     _set_task_context(str(task_id) if task_id else None)
     with get_sync_session() as session:
-        notice = get_notice_for_ai_sync(session, notice_id)
+        notice = get_notice_for_ai_sync(session, notice_uuid)
         if not notice:
             logger.debug(
                 "process_notice_ai_task: notice_id=%s not available (already processing/done or not found), skipping",
@@ -86,4 +89,4 @@ def process_notice_ai_task(self, notice_id: int):
             return
         # 4단계: Gemini 호출 후 ai_extracted_json 생성. 현재는 스텁으로 done + 빈 결과 저장.
         logger.info("process_notice_ai_task: task_id=%s notice_id=%s (stub)", task_id, notice_id)
-        update_ai_result_sync(session, notice_id, {})
+        update_ai_result_sync(session, notice_uuid, {})

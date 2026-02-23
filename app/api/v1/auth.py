@@ -1,7 +1,7 @@
 """Auth API. 구글 OAuth + JWT."""
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app.core.config import settings
@@ -22,8 +22,9 @@ security = HTTPBearer(auto_error=False)
 async def get_current_user_id(
     credentials: HTTPAuthorizationCredentials | None = Depends(security),
     redis_blocklist=Depends(get_redis_blocklist),
-) -> int:
-    """Authorization Bearer에서 Access JWT 검증 후 user_id 반환. Blocklist·Redis 장애 정책 적용."""
+):
+    """Authorization Bearer에서 Access JWT 검증 후 user_id(UUID) 반환. Blocklist·Redis 장애 정책 적용."""
+    import uuid as uuid_mod
     if not credentials:
         raise HTTPException(status_code=401, detail="Missing or invalid Authorization")
     try:
@@ -32,16 +33,17 @@ async def get_current_user_id(
             redis_blocklist,
             fail_closed=settings.redis_blocklist_fail_closed,
         )
-        return int(payload["sub"])
-    except AuthError:
+        return uuid_mod.UUID(payload["sub"])
+    except (AuthError, ValueError):
         raise HTTPException(status_code=401, detail="Invalid or expired token") from None
 
 
 async def get_current_user_id_and_jti(
     credentials: HTTPAuthorizationCredentials | None = Depends(security),
     redis_blocklist=Depends(get_redis_blocklist),
-) -> tuple[int, str | None]:
-    """Access JWT 검증 후 (user_id, jti) 반환. 로그아웃 시 Blocklist 등록용."""
+):
+    """Access JWT 검증 후 (user_id UUID, jti) 반환. 로그아웃 시 Blocklist 등록용."""
+    import uuid as uuid_mod
     if not credentials:
         raise HTTPException(status_code=401, detail="Missing or invalid Authorization")
     try:
@@ -50,13 +52,24 @@ async def get_current_user_id_and_jti(
             redis_blocklist,
             fail_closed=settings.redis_blocklist_fail_closed,
         )
-        return int(payload["sub"]), payload.get("jti")
-    except AuthError:
+        return uuid_mod.UUID(payload["sub"]), payload.get("jti")
+    except (AuthError, ValueError):
         raise HTTPException(status_code=401, detail="Invalid or expired token") from None
+
+
+def _client_ip_from_request(request: Request) -> str | None:
+    """X-Forwarded-For 또는 request.client.host. 명세 3.2: 평문은 DB에 저장하지 않고 ip_hmac만 저장."""
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    if request.client:
+        return request.client.host
+    return None
 
 
 @router.post("/google", response_model=TokenResponse)
 async def post_google_auth(
+    request: Request,
     payload: TokenPayload,
     http_client: httpx.AsyncClient = Depends(get_httpx_client),
     key_fetcher=Depends(get_google_key_fetcher),
@@ -72,6 +85,7 @@ async def post_google_auth(
             redirect_uri=payload.redirect_uri,
             http_client=http_client,
             key_fetcher=key_fetcher,
+            client_ip=_client_ip_from_request(request),
         )
     except AuthServiceUnavailableError as e:
         raise HTTPException(status_code=503, detail=str(e)) from e
@@ -81,7 +95,7 @@ async def post_google_auth(
 
 @router.post("/logout", status_code=204)
 async def post_logout(
-    user_id_and_jti: tuple[int, str | None] = Depends(get_current_user_id_and_jti),
+    user_id_and_jti=Depends(get_current_user_id_and_jti),
     redis_blocklist=Depends(get_redis_blocklist),
 ) -> None:
     """

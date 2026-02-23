@@ -13,7 +13,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.database import transaction
+from app.core.ip_hmac import compute_ip_hmac
 from app.core.redis import add_access_to_blocklist, is_access_blocked
+from app.repositories.login_audit_repository import create_login_audit
 from app.repositories.user_repository import increment_refresh_token_version, upsert_by_provider_uid
 from app.schemas.auth import GoogleTokenResponse, TokenResponse
 from app.schemas.user import UserBase
@@ -91,7 +93,7 @@ async def decode_google_id_token(
         raise AuthError("Invalid id_token") from e
 
 
-def create_jwt_pair(user_id: int, token_version: int = 0) -> tuple[str, str]:
+def create_jwt_pair(user_id: uuid.UUID, token_version: int = 0) -> tuple[str, str]:
     """
     Access + Refresh JWT 생성. Access에는 jti 포함(Blocklist 무효화용).
     token_version: 로그아웃/탈취 시 서버에서 무효화하기 위해 User.refresh_token_version과 연동.
@@ -168,7 +170,7 @@ async def verify_access_token(
 
 
 async def revoke_refresh_tokens_for_user(
-    session: AsyncSession, user_id: int
+    session: AsyncSession, user_id: uuid.UUID
 ) -> None:
     """해당 유저의 refresh_token_version 증가 → 기존 Refresh 토큰 전부 무효화."""
     await increment_refresh_token_version(session, user_id)
@@ -188,6 +190,7 @@ async def google_login(
     *,
     http_client: httpx.AsyncClient,
     key_fetcher: AsyncKeyFetcher,
+    client_ip: str | None = None,
 ) -> TokenResponse:
     """
     구글 OAuth code로 로그인. redirect_uri allowlist·sub 클레임 필수 검증(Fail-fast).
@@ -224,6 +227,16 @@ async def google_login(
         await session.flush()
         await session.refresh(user)
 
+        if client_ip:
+            ip_hmac_val, ip_hmac_key_version = compute_ip_hmac(client_ip)
+            await create_login_audit(
+                session,
+                ip_hmac=ip_hmac_val,
+                ip_hmac_key_version=ip_hmac_key_version,
+                user_id=user.id,
+                provider="google",
+            )
+
         version = getattr(user, "refresh_token_version", 0)
         access_token, refresh_token = create_jwt_pair(user.id, token_version=version)
         return TokenResponse(
@@ -235,7 +248,7 @@ async def google_login(
 
 
 async def logout_user(
-    user_id: int,
+    user_id: uuid.UUID,
     *,
     access_jti: str | None = None,
     ttl_seconds: int | None = None,

@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
+import uuid
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from app.models.login_audit import LoginAudit
     from app.models.user_calendar_event import UserCalendarEvent
 
-from sqlalchemy import DateTime, String, UniqueConstraint
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import DateTime, String, UniqueConstraint, text
+from sqlalchemy.dialects.postgresql import JSONB, UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base
@@ -21,7 +23,11 @@ class User(Base):
     __tablename__ = "users"
     __table_args__ = (UniqueConstraint("provider", "provider_user_id", name="uq_user_provider_uid"),)
 
-    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        primary_key=True,
+        server_default=text("uuid_generate_v7()"),
+    )
     provider: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
     provider_user_id: Mapped[str] = mapped_column(String(256), nullable=False, index=True)
     email: Mapped[str | None] = mapped_column(String(256), nullable=True)
@@ -46,4 +52,7 @@ class User(Base):
 
     user_calendar_events: Mapped[list["UserCalendarEvent"]] = relationship(
         "UserCalendarEvent", back_populates="user"
+    )
+    login_audits: Mapped[list["LoginAudit"]] = relationship(
+        "LoginAudit", back_populates="user"
     )

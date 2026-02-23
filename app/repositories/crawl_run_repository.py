@@ -1,5 +1,6 @@
 """CrawlRun Repository. 크롤 실행 이력 기록·조회."""
 
+import uuid
 from datetime import UTC, datetime
 from typing import Any
 
@@ -14,7 +15,7 @@ from app.models.crawl_run import CrawlRun
 
 def create_crawl_run_sync(
     session: Session,
-    college_id: int,
+    college_id: uuid.UUID,
     celery_task_id: str,
 ) -> CrawlRun:
     """크롤 시작 시 1건 생성 또는 갱신(upsert). 재시도 시 동일 task_id로 상태 단일화."""

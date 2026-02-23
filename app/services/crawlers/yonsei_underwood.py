@@ -51,9 +51,9 @@ def get_uic_links(url):
             text = fetch_html(url, timeout=10)
         except HtmlTooLargeError as e:
             logger.warning("get_uic_links body too large url=%s: %s", url, e)
-            return []
+            raise RequestException from e
         except RequestException:
-            return []
+            raise
         soup = BeautifulSoup(text, "html.parser")
         # 사진에서 확인한 3개의 half box 모두 찾기
         half_boxes = soup.find_all('div', class_='divbox_half_news')
@@ -105,7 +105,7 @@ def get_uic_links(url):
         raise
     except Exception:
         logger.exception("get_uic_links parsing error url=%s", url)
-        return []
+        raise
 
 # ================================================================================
 # [3] UIC 상세 페이지 크롤링 엔진 (기존 로직 유지)
@@ -234,7 +234,7 @@ async def get_uic_links_async(client: httpx.AsyncClient, url: str):
         return links
     except Exception:
         logger.exception("get_uic_links_async parsing error url=%s", url)
-        return []
+        raise
 
 
 async def scrape_uic_detail_async(client: httpx.AsyncClient, url: str):

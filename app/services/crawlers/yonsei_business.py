@@ -66,9 +66,9 @@ def get_business_notice_links(list_url):
             text = fetch_html(list_url, timeout=10, encoding="cp949")
         except HtmlTooLargeError as e:
             logger.warning("get_business_notice_links body too large list_url=%s: %s", list_url, e)
-            return []
+            raise RequestException from e
         except RequestException:
-            return []
+            raise
         soup = BeautifulSoup(text, "html.parser")
         links: list[dict[str, Any]] = []
         seen_urls: set[str] = set()
@@ -121,7 +121,7 @@ def get_business_notice_links(list_url):
         raise
     except Exception:
         logger.exception("get_business_notice_links parsing error list_url=%s", list_url)
-        return []
+        raise
 
 # ==============================================================================
 # [3] 상세 페이지 수집 엔진 (Detail Crawler) - app5.py 로직 계승
@@ -257,10 +257,10 @@ async def get_business_notice_links_async(client: httpx.AsyncClient, list_url: s
         return links
     except HtmlTooLargeError as e:
         logger.warning("get_business_notice_links_async body too large list_url=%s: %s", list_url, e)
-        return []
+        raise
     except Exception:
         logger.exception("get_business_notice_links_async parsing error list_url=%s", list_url)
-        return []
+        raise
 
 
 async def scrape_business_detail_async(client: httpx.AsyncClient, url: str):

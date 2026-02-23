@@ -2,15 +2,17 @@
 
 from __future__ import annotations
 
+import uuid
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from app.models.college import College
+    from app.models.notice_content import NoticeContent
     from app.models.user_calendar_event import UserCalendarEvent
 
-from sqlalchemy import DateTime, ForeignKey, Index, String, Text, UniqueConstraint
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import DateTime, ForeignKey, Index, String, UniqueConstraint, text
+from sqlalchemy.dialects.postgresql import JSONB, UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base
@@ -24,8 +26,14 @@ class Notice(Base):
         Index("ix_notices_eligibility_gin", "eligibility", postgresql_using="gin"),
     )
 
-    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    college_id: Mapped[int] = mapped_column(ForeignKey("colleges.id"), nullable=False, index=True)
+    id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        primary_key=True,
+        server_default=text("uuid_generate_v7()"),
+    )
+    college_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("colleges.id"), nullable=False, index=True
+    )
     external_id: Mapped[str] = mapped_column(String(512), nullable=False, index=True)
     title: Mapped[str] = mapped_column(String(512), nullable=False)
     url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
@@ -33,8 +41,7 @@ class Notice(Base):
         DateTime(timezone=True), nullable=True, index=True
     )
 
-    # 1. 원본 데이터 보존
-    raw_html: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # 1. 원본 데이터 보존 (본문은 notice_contents.content_url로 S3 등에 분리 저장)
     images: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB, nullable=True)
     attachments: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB, nullable=True)
 
@@ -65,4 +72,7 @@ class Notice(Base):
     )
 
     college: Mapped["College"] = relationship("College", back_populates="notices")
+    notice_content: Mapped["NoticeContent | None"] = relationship(
+        "NoticeContent", back_populates="notice", uselist=False, cascade="all, delete-orphan"
+    )
     user_calendar_events: Mapped[list["UserCalendarEvent"]] = relationship("UserCalendarEvent", back_populates="notice")

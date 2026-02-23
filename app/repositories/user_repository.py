@@ -1,5 +1,6 @@
 """User Repository. DB 쿼리만 수행."""
 
+import uuid
 from datetime import UTC, datetime
 
 from sqlalchemy import select, update
@@ -11,14 +12,14 @@ from app.models.user import User
 from app.schemas.user import UserBase
 
 
-async def get_by_id(session: AsyncSession, user_id: int) -> User | None:
+async def get_by_id(session: AsyncSession, user_id: uuid.UUID) -> User | None:
     """id로 유저 조회."""
     result = await session.execute(select(User).where(User.id == user_id))
     return result.scalars().one_or_none()
 
 
 async def increment_refresh_token_version(
-    session: AsyncSession, user_id: int
+    session: AsyncSession, user_id: uuid.UUID
 ) -> None:
     """로그아웃/탈취 시 해당 유저의 모든 Refresh 토큰 무효화."""
     await session.execute(

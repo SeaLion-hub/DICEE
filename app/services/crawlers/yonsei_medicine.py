@@ -65,9 +65,9 @@ def get_medicine_notice_links(list_url):
             text = fetch_html(list_url, timeout=10)
         except HtmlTooLargeError as e:
             logger.warning("get_medicine_notice_links body too large list_url=%s: %s", list_url, e)
-            return []
+            raise RequestException from e
         except RequestException:
-            return []
+            raise
         soup = BeautifulSoup(text, "html.parser")
         links: list[dict[str, Any]] = []
 
@@ -118,7 +118,7 @@ def get_medicine_notice_links(list_url):
         raise
     except Exception:
         logger.exception("get_medicine_notice_links parsing error list_url=%s", list_url)
-        return []
+        raise
 
 # ==============================================================================
 # [3] 상세 페이지 수집 엔진 (Detail Crawler) - 기존 유지
@@ -270,7 +270,7 @@ async def get_medicine_notice_links_async(client: httpx.AsyncClient, list_url: s
         return links
     except Exception:
         logger.exception("get_medicine_notice_links_async parsing error list_url=%s", list_url)
-        return []
+        raise
 
 
 async def scrape_medicine_detail_async(client: httpx.AsyncClient, url: str):

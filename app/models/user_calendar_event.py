@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import uuid
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
@@ -10,6 +11,7 @@ if TYPE_CHECKING:
     from app.models.user import User
 
 from sqlalchemy import DateTime, ForeignKey, String, UniqueConstraint
+from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base
@@ -22,8 +24,12 @@ class UserCalendarEvent(Base):
     __table_args__ = (UniqueConstraint("user_id", "notice_id", name="uq_user_calendar_user_notice"),)
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
-    notice_id: Mapped[int] = mapped_column(ForeignKey("notices.id"), nullable=False, index=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True
+    )
+    notice_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("notices.id"), nullable=False, index=True
+    )
 
     # 표시용 제목·시작·종료
     title: Mapped[str] = mapped_column(String(512), nullable=False)

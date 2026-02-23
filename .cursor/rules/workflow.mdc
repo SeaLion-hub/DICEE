@@ -13,6 +13,7 @@ ROADMAP·ROADMAP_PHASES·WORK_LOG 관련 내용은 기존 `roadmap-and-worklog.m
 
 - 작업을 **시작하기 전에** **매뉴얼은 docs/rules/**에서, **규칙은 .cursor/rules/**에서만 참조하라. (경로 혼용 금지. 규칙 파일은 .cursor/rules/*.mdc, 매뉴얼은 docs/rules/*.md.)
 - `docs/rules/`와 `docs/CAUTIONS.md`에서 이번 작업과 관련된 매뉴얼이 있는지 확인하고, 있으면 **@docs/rules/파일명.md**로 참조한 뒤 **계획을 세우고**, 승인 또는 맥락이 잡힌 후 구현에 들어가라.
+- **아키텍처 품질**은 **CI 린트/정적 분석**으로 강제하며, 수동 체크리스트로 대체하지 않는다. CI에서 PK·명세 준수 검사(pytest 포함) 통과 시에만 merge.
 
 ---
 

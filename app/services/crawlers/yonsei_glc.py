@@ -74,14 +74,14 @@ def get_glc_links(url):
                         "url": full_url
                     })
         return links
-    except HtmlTooLargeError:
+    except HtmlTooLargeError as e:
         logger.warning("get_glc_links HTML too large: url=%s", url[:200] if url else "")
-        return []
+        raise RequestException from e
     except RequestException:
         raise
     except Exception:
         logger.exception("get_glc_links parsing error url=%s", url)
-        return []
+        raise
 
 # ================================================================================
 # [3] GLC 상세 페이지 크롤링 엔진 (기존 로직 유지)
@@ -201,7 +201,7 @@ async def get_glc_links_async(client: httpx.AsyncClient, url: str):
         return links
     except Exception:
         logger.exception("get_glc_links_async parsing error url=%s", url)
-        return []
+        raise
 
 
 async def scrape_glc_detail_async(client: httpx.AsyncClient, url: str):

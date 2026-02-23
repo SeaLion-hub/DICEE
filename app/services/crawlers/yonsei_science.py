@@ -143,9 +143,9 @@ def get_science_links(url):
             text = fetch_html(url, timeout=10)
         except HtmlTooLargeError as e:
             logger.warning("get_science_links body too large url=%s: %s", url, e)
-            return []
+            raise RequestException from e
         except RequestException:
-            return []
+            raise
         soup = BeautifulSoup(text, "html.parser")
 
         rows = soup.select('.nxb-list-table tbody tr')
@@ -181,7 +181,7 @@ def get_science_links(url):
         raise
     except Exception:
         logger.exception("get_science_links parsing error url=%s", url)
-        return []
+        raise
 
 
 async def get_science_links_async(client: httpx.AsyncClient, url: str):
@@ -212,7 +212,7 @@ async def get_science_links_async(client: httpx.AsyncClient, url: str):
         return links
     except Exception:
         logger.exception("get_science_links_async parsing error url=%s", url)
-        return []
+        raise
 
 
 async def scrape_science_detail_async(client: httpx.AsyncClient, url: str):
