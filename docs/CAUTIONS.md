@@ -30,9 +30,9 @@
 
 ## Cursor 코딩 규칙
 
-바이브 코딩 시 **작업 시작 전**에는 프로젝트 루트 **`.cursorrules`**(Master Rule)를 따른다. 여기서 "관련 매뉴얼(docs/rules/, CAUTIONS) 확인 → 규칙 @ 참조 → 계획 후 구현" 순서를 강제한다. 자동 적용 규칙은 `.cursor/rules/`에 있으며, 매뉴얼은 [docs/rules/](./rules/)에서 주제별로 참고한다(api-style, error-handling 등).
+바이브 코딩 시 **작업 시작 전**에는 프로젝트 루트 **`.cursorrules`**(Master Rule)를 따른다. 여기서 "관련 매뉴얼(docs/rules/, CAUTIONS) 확인 → 규칙 @ 참조 → 계획 후 구현" 순서를 강제한다. **경로 통일**: 규칙(자동 적용)은 **.cursor/rules/** 전용, 매뉴얼(참조용 문서)은 **docs/rules/** 전용. 두 경로를 혼용하지 말 것. [docs/rules/](./rules/)에서 api-style, error-handling 등 매뉴얼을 참고한다.
 
-- **`.cursorrules`**: 작업 시작 전 **필수** — docs/rules/·CAUTIONS·.cursor/rules/ 참조 후 계획 수립. 트리거 없이 AI가 스스로 매뉴얼을 찾지 않으므로 이 순서를 건너뛰지 말 것.
+- **`.cursorrules`**: 작업 시작 전 **필수** — 경로 통일(규칙=.cursor/rules/, 매뉴얼=docs/rules/), 참조 후 계획 수립. **하단 강제**: DoD(pytest·alembic·docs/decisions·에러핸들링), 보안 취약점 3가지 셀프 체크(SSRF·Secret·인젝션), 완료 보고 시 Found/Fixed/Reason 표 필수. "다 했습니다"만으로 완료 보고 금지.
 - **`tech-stack.mdc`**: SQLAlchemy 2.0(비동기)·Pydantic v2·Depends 강제, async 라우터에서 sync 블로킹 금지
 - **`architecture.mdc`**: Router→Service→Repository 관심사 분리, 호출 방향 엄수, 예외는 Router/전역 핸들러에서만 HTTP로 변환
 - **`integrations.mdc`**: Gemini Structured Output만 사용, Celery `rate_limit`·`asyncio.run` 래핑, Playwright 옵션·concurrency 제한
