@@ -30,12 +30,13 @@
 
 ## Cursor 코딩 규칙
 
-바이브 코딩 시 자동 적용되는 규칙은 `.cursor/rules/`에 있다. 문법·계층·연동 실수를 줄이려면 코드 생성 전에 한 번 확인한다.
+바이브 코딩 시 자동 적용되는 규칙은 `.cursor/rules/`에 있다. 문법·계층·연동 실수를 줄이려면 코드 생성 전에 한 번 확인한다. 작업 시작 전 **매뉴얼**은 [docs/rules/](./rules/)에서 주제별로 참고한다(api-style, error-handling 등).
 
 - **`tech-stack.mdc`**: SQLAlchemy 2.0(비동기)·Pydantic v2·Depends 강제, async 라우터에서 sync 블로킹 금지
 - **`architecture.mdc`**: Router→Service→Repository 관심사 분리, 호출 방향 엄수, 예외는 Router/전역 핸들러에서만 HTTP로 변환
 - **`integrations.mdc`**: Gemini Structured Output만 사용, Celery `rate_limit`·`asyncio.run` 래핑, Playwright 옵션·concurrency 제한
 - **`user-actions.mdc`**: **사용자(나)가 직접 해야 할 설정/실행은 항상 명시**하고, **다음 단계로 넘어가기 전에 사용자 확인** 요청
+- **`workflow.mdc`**: 작업 시작 전 docs/rules/·CAUTIONS 참조, DoD·Composer 시 @todo.md, 품질 검사(테스트·엣지 케이스 질문), 완료 시 Found/Fixed/Reason 표 보고
 
 ---
 

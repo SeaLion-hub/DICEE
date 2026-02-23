@@ -4,6 +4,7 @@
 
 - [작성 규칙](#작성-규칙)
 - [작성 형식](#작성-형식)
+- [2026-02-23](#2026-02-23)
 - [2026-02-22](#2026-02-22)
 - [2026-02-20](#2026-02-20)
 - [2026-02-18](#2026-02-18)
@@ -21,6 +22,12 @@
 ## 작성 형식
 
 - `- [단계 또는 영역] 무엇을 했는지 (어떤 파일/기능). 왜 또는 결과 한 줄.`
+
+---
+
+## 2026-02-23
+
+- [Cursor 워크플로·매뉴얼] Claude Code 기반 4가지 시스템을 Cursor에 맞게 적용. (1) **docs/rules/** 생성 — api-style.md, error-handling.md 매뉴얼 추가(CAUTIONS·아키텍처 요약). (2) **루트 todo.md** — 현재 목표/완료한 것/다음에 할 일/블로킹 템플릿. (3) **.cursor/rules/workflow.mdc** — 작업 시작 전 docs/rules/·CAUTIONS 참조, DoD(에러핸들링·스타일·보안 자가검토), Composer 시 @todo.md·1~2파일씩 수정·todo 갱신, 품질(수정 요약·pytest·엣지 케이스 3가지 질문), 완료 시 Found/Fixed/Reason 표 보고. ROADMAP·ROADMAP_PHASES 내용은 유지, roadmap-and-worklog.mdc 참조. (4) **docs/CAUTIONS.md** — Cursor 코딩 규칙에 docs/rules/ 링크 및 workflow.mdc 설명 추가.
 
 ---
 
