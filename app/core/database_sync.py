@@ -39,12 +39,32 @@ def init_sync_db() -> None:
     if not url:
         logger.warning("DATABASE_URL not set. Sync DB features disabled.")
         return
+
+    from app.core.config import check_pool_budget
+
+    within_budget, peak_conn, app_budget = check_pool_budget()
+    if not within_budget and peak_conn > 0 and app_budget >= 0:
+        msg = (
+            f"Pool budget exceeded: peak_conn={peak_conn} > app_budget={app_budget}. "
+            "Adjust pool sizes or DB_MAX_CONNECTIONS. See DEPLOYMENT.md."
+        )
+        if settings.db_pool_strict_budget:
+            raise ValueError(msg)
+        logger.warning(msg)
+
+    pool_kw: dict = {
+        "pool_size": settings.db_pool_size_sync,
+        "max_overflow": settings.db_pool_max_overflow_sync,
+        "pool_timeout": settings.db_pool_timeout_sync,
+    }
+    if settings.db_pool_recycle_sync >= 0:
+        pool_kw["pool_recycle"] = settings.db_pool_recycle_sync
+
     sync_engine = create_engine(
         url,
         echo=False,
         pool_pre_ping=True,
-        pool_size=2,
-        max_overflow=0,
+        **pool_kw,
     )
     sync_session_factory = sessionmaker(
         bind=sync_engine,

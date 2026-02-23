@@ -22,6 +22,25 @@ class Settings(BaseSettings):
     db_connect_retries: int = Field(5, ge=1, le=20)  # 연결 실패 시 재시도 횟수.
     db_connect_retry_interval_sec: float = Field(2.0, ge=0.5, le=60.0)  # 재시도 간격(초).
 
+    # DB 풀 (용량 계획: DEPLOYMENT.md 참고). 미설정 시 아래 기본값 사용.
+    db_pool_size_async: int = Field(5, ge=1, le=20, description="Async API 풀 크기(프로세스당).")
+    db_pool_max_overflow_async: int = Field(10, ge=0, le=20, description="Async API 풀 오버플로(프로세스당).")
+    db_pool_timeout_async: float = Field(30.0, ge=5.0, le=120.0, description="Async 풀 대기 타임아웃(초).")
+    db_pool_size_sync: int = Field(2, ge=1, le=10, description="Celery Sync 풀 크기(워커·자식당).")
+    db_pool_max_overflow_sync: int = Field(0, ge=0, le=5, description="Celery Sync 풀 오버플로.")
+    db_pool_timeout_sync: float = Field(30.0, ge=5.0, le=120.0, description="Sync 풀 대기 타임아웃(초).")
+    db_pool_recycle_sync: int = Field(300, ge=-1, le=86400, description="Sync 풀 유휴 연결 재활용 주기(초). -1이면 미설정.")
+    # 용량 검사용(선택). 설정 시 부팅 시 Peak_pool_conn vs App_budget 검사. DB_MAX_CONNECTIONS/DB_RESERVED.
+    db_max_connections: int | None = Field(None, ge=1, le=1000, description="DB max_connections(검사용). 미설정 시 검사 생략.")
+    db_reserved: int = Field(3, ge=0, le=20, description="DB 예약 연결 수(슈퍼유저/관리). App_budget=(max-Reserved)*0.7.")
+    db_pool_strict_budget: bool = Field(False, description="True면 예산 초과 시 부팅 실패.")
+    deploy_surge_factor: float = Field(2.0, ge=1.0, le=4.0, description="롤링/스케일 시 피크 배수. Peak=Total*이값.")
+    # 예산 검사용(선택). DEPLOYMENT.md 용량 계획과 동일한 의미. 기본 1.
+    db_api_instances: int = Field(1, ge=1, le=100, description="API 서비스 인스턴스 수(검사용).")
+    db_uvicorn_workers: int = Field(1, ge=1, le=32, description="uvicorn 워커 수(검사용).")
+    db_worker_instances: int = Field(1, ge=1, le=100, description="Celery 워커 인스턴스 수(검사용).")
+    db_celery_concurrency: int = Field(1, ge=1, le=32, description="Celery concurrency(검사용, prefork 시 자식 수).")
+
     # 2단계 Auth (워커·Cron 등은 미설정 가능. production 시 validator에서 필수 검사)
     jwt_secret: SecretStr = SecretStr("")
     jwt_issuer: str = "dicee"  # JWT iss 클레임 (발급자). 검증 시 사용.
@@ -84,6 +103,30 @@ class Settings(BaseSettings):
                 "Set them in Secret Manager or environment before boot."
             )
         return self
+
+
+def check_pool_budget() -> tuple[bool, int, int]:
+    """
+    풀 예산 검사. DB_MAX_CONNECTIONS 미설정 시 검사 생략(True 반환).
+    반환: (within_budget, peak_conn, app_budget).
+    """
+    max_conn = settings.db_max_connections
+    if max_conn is None:
+        return True, 0, 0
+    api_conn = (
+        settings.db_api_instances
+        * settings.db_uvicorn_workers
+        * (settings.db_pool_size_async + settings.db_pool_max_overflow_async)
+    )
+    worker_conn = (
+        settings.db_worker_instances
+        * settings.db_celery_concurrency
+        * (settings.db_pool_size_sync + settings.db_pool_max_overflow_sync)
+    )
+    total = api_conn + worker_conn
+    peak = int(total * settings.deploy_surge_factor)
+    app_budget = int((max_conn - settings.db_reserved) * 0.7)
+    return peak <= app_budget, peak, app_budget
 
 
 settings = Settings()

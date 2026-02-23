@@ -1,6 +1,6 @@
 """Initial v7 schema (database-spec). Single migration for fresh DB.
 
-Creates: uuid v7 extension, set_updated_at trigger, all tables per database-spec,
+Creates: set_updated_at trigger, all tables per database-spec (PK DEFAULT gen_random_uuid()),
 partial unique indexes, CHECK constraints, GIN indexes, partitioned crawl_runs/crawl_logs,
 crawl_run_tasks lookup, materialized view, pg_trgm and title trigram index.
 
@@ -44,8 +44,7 @@ def _attach_updated_at_trigger(conn, table: str):
 def upgrade() -> None:
     conn = op.get_bind()
 
-    # 1. Extensions
-    op.execute(sa.text('CREATE EXTENSION IF NOT EXISTS "pg_uuidv7";'))
+    # 1. Extensions (gen_random_uuid is built-in; pg_trgm for trigram search)
     op.execute(sa.text('CREATE EXTENSION IF NOT EXISTS "pg_trgm";'))
 
     # 2. Trigger function for updated_at
@@ -54,7 +53,7 @@ def upgrade() -> None:
     # 3. colleges
     op.create_table(
         "colleges",
-        sa.Column("id", postgresql.UUID(as_uuid=True), server_default=sa.text("uuid_generate_v7()"), nullable=False),
+        sa.Column("id", postgresql.UUID(as_uuid=True), server_default=sa.text("gen_random_uuid()"), nullable=False),
         sa.Column("name", sa.String(255), nullable=False),
         sa.Column("external_id", sa.String(255), nullable=False),
         sa.Column("is_crawl_enabled", sa.Boolean(), nullable=False, server_default="true"),
@@ -69,7 +68,7 @@ def upgrade() -> None:
     # 4. notices
     op.create_table(
         "notices",
-        sa.Column("id", postgresql.UUID(as_uuid=True), server_default=sa.text("uuid_generate_v7()"), nullable=False),
+        sa.Column("id", postgresql.UUID(as_uuid=True), server_default=sa.text("gen_random_uuid()"), nullable=False),
         sa.Column("college_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("external_id", sa.String(512), nullable=False),
         sa.Column("title", sa.String(512), nullable=False),
@@ -131,7 +130,7 @@ def upgrade() -> None:
     # 6. notice_schedules
     op.create_table(
         "notice_schedules",
-        sa.Column("id", postgresql.UUID(as_uuid=True), server_default=sa.text("uuid_generate_v7()"), nullable=False),
+        sa.Column("id", postgresql.UUID(as_uuid=True), server_default=sa.text("gen_random_uuid()"), nullable=False),
         sa.Column("notice_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("schedule_type", sa.String(32), nullable=False),
         sa.Column("start_at", sa.DateTime(timezone=True), nullable=True),
@@ -154,7 +153,7 @@ def upgrade() -> None:
     # 7. users
     op.create_table(
         "users",
-        sa.Column("id", postgresql.UUID(as_uuid=True), server_default=sa.text("uuid_generate_v7()"), nullable=False),
+        sa.Column("id", postgresql.UUID(as_uuid=True), server_default=sa.text("gen_random_uuid()"), nullable=False),
         sa.Column("provider", sa.String(32), nullable=False),
         sa.Column("provider_user_id", sa.String(256), nullable=False),
         sa.Column("email", sa.String(256), nullable=True),
@@ -189,7 +188,7 @@ def upgrade() -> None:
     # 9. user_calendar_events
     op.create_table(
         "user_calendar_events",
-        sa.Column("id", postgresql.UUID(as_uuid=True), server_default=sa.text("uuid_generate_v7()"), nullable=False),
+        sa.Column("id", postgresql.UUID(as_uuid=True), server_default=sa.text("gen_random_uuid()"), nullable=False),
         sa.Column("user_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("notice_schedule_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("custom_title", sa.String(512), nullable=True),
@@ -205,7 +204,7 @@ def upgrade() -> None:
     # 10. keyword_subscriptions
     op.create_table(
         "keyword_subscriptions",
-        sa.Column("id", postgresql.UUID(as_uuid=True), server_default=sa.text("uuid_generate_v7()"), nullable=False),
+        sa.Column("id", postgresql.UUID(as_uuid=True), server_default=sa.text("gen_random_uuid()"), nullable=False),
         sa.Column("user_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("keyword_hash", sa.String(64), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")),
@@ -229,7 +228,7 @@ def upgrade() -> None:
     # 12. crawl_runs (partitioned) - parent table
     op.create_table(
         "crawl_runs",
-        sa.Column("id", postgresql.UUID(as_uuid=True), server_default=sa.text("uuid_generate_v7()"), nullable=False),
+        sa.Column("id", postgresql.UUID(as_uuid=True), server_default=sa.text("gen_random_uuid()"), nullable=False),
         sa.Column("started_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("college_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("finished_at", sa.DateTime(timezone=True), nullable=True),
@@ -251,7 +250,7 @@ def upgrade() -> None:
     # 13. crawl_logs (partitioned)
     op.create_table(
         "crawl_logs",
-        sa.Column("id", postgresql.UUID(as_uuid=True), server_default=sa.text("uuid_generate_v7()"), nullable=False),
+        sa.Column("id", postgresql.UUID(as_uuid=True), server_default=sa.text("gen_random_uuid()"), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("run_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("severity", sa.String(16), nullable=False),
@@ -313,4 +312,3 @@ def downgrade() -> None:
 
     conn.execute(sa.text("DROP FUNCTION IF EXISTS set_updated_at() CASCADE"))
     op.execute(sa.text('DROP EXTENSION IF EXISTS "pg_trgm"'))
-    op.execute(sa.text('DROP EXTENSION IF EXISTS "pg_uuidv7"'))

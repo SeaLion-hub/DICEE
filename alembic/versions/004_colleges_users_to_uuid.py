@@ -4,7 +4,7 @@ Revision ID: 004_colleges_users_uuid
 Revises: 003_notice_contents
 Create Date: 2026-02-24
 
-pg_uuidv7 확장 사용. 이미 UUID인 경우 스킵.
+gen_random_uuid() 사용. 이미 UUID인 경우 스킵.
 """
 
 from typing import Sequence, Union
@@ -33,12 +33,11 @@ def _col_type(conn, table: str, column: str) -> str | None:
 
 def upgrade() -> None:
     conn = op.get_bind()
-    op.execute(sa.text('CREATE EXTENSION IF NOT EXISTS "pg_uuidv7";'))
 
     # 1. colleges.id -> UUID (id_uuid 추가, 자식 백필, 자식 FK/컬럼 전환, colleges PK 전환, FK 재생성)
     if _col_type(conn, "colleges", "id") not in ("uuid", "USER-DEFINED"):
         op.add_column("colleges", sa.Column("id_uuid", postgresql.UUID(as_uuid=True), nullable=True))
-        op.execute(sa.text("UPDATE colleges SET id_uuid = uuid_generate_v7() WHERE id_uuid IS NULL"))
+        op.execute(sa.text("UPDATE colleges SET id_uuid = gen_random_uuid() WHERE id_uuid IS NULL"))
         op.add_column("notices", sa.Column("college_id_uuid", postgresql.UUID(as_uuid=True), nullable=True))
         op.execute(
             sa.text("UPDATE notices n SET college_id_uuid = c.id_uuid FROM colleges c WHERE c.id = n.college_id")
@@ -68,7 +67,7 @@ def upgrade() -> None:
     # 2. users.id -> UUID
     if _col_type(conn, "users", "id") not in ("uuid", "USER-DEFINED"):
         op.add_column("users", sa.Column("id_uuid", postgresql.UUID(as_uuid=True), nullable=True))
-        op.execute(sa.text("UPDATE users SET id_uuid = uuid_generate_v7() WHERE id_uuid IS NULL"))
+        op.execute(sa.text("UPDATE users SET id_uuid = gen_random_uuid() WHERE id_uuid IS NULL"))
         op.add_column("user_calendar_events", sa.Column("user_id_uuid", postgresql.UUID(as_uuid=True), nullable=True))
         op.execute(
             sa.text("UPDATE user_calendar_events uce SET user_id_uuid = u.id_uuid FROM users u WHERE u.id = uce.user_id")

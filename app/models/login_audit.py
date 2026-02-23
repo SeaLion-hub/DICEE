@@ -24,7 +24,7 @@ class LoginAudit(Base):
     id: Mapped[uuid.UUID] = mapped_column(
         PG_UUID(as_uuid=True),
         primary_key=True,
-        server_default=text("uuid_generate_v7()"),
+        server_default=text("gen_random_uuid()"),
     )
     ip_hmac: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     ip_hmac_key_version: Mapped[str] = mapped_column(String(32), nullable=False)

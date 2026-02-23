@@ -4,7 +4,7 @@ Revision ID: 002_notice_uuid
 Revises: v7_001
 Create Date: 2026-02-24
 
-기존 Integer PK/FK를 UUID로 변환. pg_uuidv7 확장 사용.
+기존 Integer PK/FK를 UUID로 변환. gen_random_uuid() 사용.
 이미 notices.id가 UUID인 경우(001 적용 DB) 스킵.
 """
 from typing import Sequence, Union
@@ -33,7 +33,6 @@ def _notices_id_is_uuid(conn) -> bool:
 
 def upgrade() -> None:
     conn = op.get_bind()
-    op.execute(sa.text('CREATE EXTENSION IF NOT EXISTS "pg_uuidv7";'))
 
     if _notices_id_is_uuid(conn):
         return
@@ -43,7 +42,7 @@ def upgrade() -> None:
         "notices",
         sa.Column("id_uuid", postgresql.UUID(as_uuid=True), nullable=True),
     )
-    op.execute(sa.text("UPDATE notices SET id_uuid = uuid_generate_v7() WHERE id_uuid IS NULL"))
+    op.execute(sa.text("UPDATE notices SET id_uuid = gen_random_uuid() WHERE id_uuid IS NULL"))
 
     # 2. user_calendar_events: notice_id_uuid 추가 및 backfill (기존 int notice_id → notices.id_uuid 매핑)
     op.add_column(

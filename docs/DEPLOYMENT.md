@@ -5,6 +5,7 @@
 - [요약](#요약)
 - [진입점(고정)](#진입점고정)
 - [비용·리소스](#비용리소스)
+- [DB 연결 수 및 용량 계획](#db-연결-수-및-용량-계획)
 - [운영 DB 백업](#운영-db-백업)
 - [로컬 개발 참고](#로컬-개발-참고)
 - [OAuth 핸드쉐이크 (2단계 확정)](#oauth-핸드쉐이크-2단계-확정)
@@ -31,7 +32,7 @@
 ## 진입점(고정)
 
 - **백엔드 앱 진입점**: `app.main:app`
-- **Start Command(웹 서비스)**: `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
+- **Start Command(웹 서비스)**: `uvicorn app.main:app --host 0.0.0.0 --port $PORT` (workers 미지정 시 **기본 1 프로세스**.)
 - **원칙**: 루트에 `app/` 패키지(폴더) 유지. `Start Command`/진입점은 문서와 코드가 항상 일치해야 함.
 
 ## 비용·리소스
@@ -39,6 +40,73 @@
 - Railway 플랜별 제한(서비스 수, 메모리, 실행 시간)을 대시보드에서 확인.
 - 웹 + DB + Redis + 워커 동시 운영 시 월 예상 비용 상한을 단계별로 체크.
 - 초과 시 알림 또는 스케일 다운 정책을 두면 변동에 대비하기 좋음.
+
+## DB 연결 수 및 용량 계획
+
+배포 스케일·롤링 배포 시 DB 연결 수가 예측 가능하도록 풀을 명시하고, **피크 시** 예산을 초과하지 않도록 한다.
+
+### 공식
+
+- **기본**: `Total_pool_conn = API_conn + Worker_conn`
+- **피크**: `Peak_pool_conn = Total_pool_conn × Deploy_surge_factor` (기본 Deploy_surge_factor = 2. 롤링/오토스케일 구간에 순간 2배까지 늘 수 있음을 가정.)
+- **API**: `API_conn = N_api_instances × N_uvicorn_workers × (P_async + O_async)`  
+  기본값: P_async=5, O_async=10 → 프로세스당 최대 15.
+- **Celery 연결 수 (모드별)**  
+  - **`--pool=solo`** (Windows·문서 기본): 1 프로세스 1풀.  
+    `Worker_conn = N_worker_instances × 1 × (P_sync + O_sync)`  
+  - **`--pool=prefork`** (Linux 등): 자식 프로세스마다 풀 1개.  
+    `Worker_conn = N_worker_instances × N_celery_concurrency × (P_sync + O_sync)`  
+  prefork 사용 시 **concurrency 1 증가 = 풀 1개(연결 P_sync+O_sync) 추가**이므로 스케일 전에 용량을 다시 계산할 것.
+- **안전 예산**: `App_budget = floor((DB_max_connections - Reserved) × 0.7)`  
+  **Reserved**: PostgreSQL 등에서 슈퍼유저/관리용으로 예약된 연결 수. 일반적으로 2~3. 플랫폼 문서 확인.
+- **조건**: `Peak_pool_conn ≤ App_budget`
+
+### 문서 기본 배포 예시
+
+| 항목 | 값 |
+|------|-----|
+| N_api_instances | 1 |
+| N_uvicorn_workers | 1 |
+| N_worker_instances | 1 |
+| N_celery_concurrency | 1 (solo 또는 prefork) |
+| P_async + O_async | 15 (기본 5+10) |
+| P_sync + O_sync | 2 (기본 2+0) |
+| Total_pool_conn | 1×1×15 + 1×1×2 = **17** |
+| Peak_pool_conn (surge 2) | 34 |
+
+### DB max_connections별 안전 판정 (70% 앱 예산 기준)
+
+| DB_max | App_budget (Reserved=3) | 현재 17 (Peak 34) |
+|--------|-------------------------|-------------------|
+| 100 | floor(97×0.7)=67 | 17은 여유, Peak 34도 안전 |
+| 50 | floor(47×0.7)=32 | 17은 안전, Peak 34는 초과 → workers/conc 유지 권장 |
+| 30 | floor(27×0.7)=18 | 17은 간당간당, Peak 34는 위험 |
+
+스케일 시(uvicorn workers 또는 API 인스턴스·Celery 인스턴스/conc 증가) **Peak_pool_conn**이 **App_budget**을 넘지 않도록, DB_max 상향 또는 풀/workers/conc 조정이 필요하다. 풀 크기는 환경 변수(`DB_POOL_SIZE_ASYNC`, `DB_POOL_MAX_OVERFLOW_ASYNC`, `DB_POOL_SIZE_SYNC` 등)로 조정 가능.
+
+### 과다 설정 방지 (부팅 시 예산 검사)
+
+`DB_MAX_CONNECTIONS`를 설정하면 부팅 시 `Peak_pool_conn > App_budget` 여부를 검사한다.
+
+- **기본**: 초과 시 **로그 warning**만 남기고 부팅은 계속. 배포 전 용량 검토 안내.
+- **`DB_POOL_STRICT_BUDGET=true`**: 초과 시 **부팅 실패**(ValueError).  
+예산/인스턴스 수는 `DB_API_INSTANCES`, `DB_UVICORN_WORKERS`, `DB_WORKER_INSTANCES`, `DB_CELERY_CONCURRENCY`, `DB_RESERVED`, `DEPLOY_SURGE_FACTOR` 등으로 반영(기본값 1, 1, 1, 1, 3, 2.0).
+
+### Sync 풀 정책 (timeout / recycle)
+
+Celery Sync 풀에는 **대기 시간 상한**(`pool_timeout`)과 **유휴 연결 재활용 주기**(`pool_recycle`)를 두어, 대기 무한·유휴 연결 단절을 방지한다. 환경 변수: `DB_POOL_TIMEOUT_SYNC`(기본 30초), `DB_POOL_RECYCLE_SYNC`(기본 300초, -1이면 미설정).
+
+### 권장 메트릭 (관측성)
+
+풀 포화는 로그만으로는 늦게 잡힌다. 아래 메트릭을 수집·알림에 활용할 것을 권장한다.
+
+| 메트릭 | 설명 |
+|--------|------|
+| **db_pool_checked_out** (또는 checked_out_count) | 현재 사용 중인 연결 수 |
+| **pool_wait_time** | 풀에서 연결을 기다린 시간(초 또는 ms) |
+| **timeout_count** | 풀 대기 타임아웃 발생 횟수(증분 또는 누적) |
+
+구현은 SQLAlchemy 이벤트 또는 커스텀 래퍼로 가능. Sentry/메트릭 수집기 연동 시 위 항목으로 풀 포화 알림을 설정하면 좋다.
 
 ## 운영 DB 백업
 
@@ -120,6 +188,18 @@ CORS: `ALLOWED_ORIGINS`에 프론트 도메인 등록. credentials: 프론트가
 | `DATABASE_URL` | `postgresql+asyncpg://...` | 2단계~. **비밀번호는 영문·숫자만** 사용. **시스템 환경변수가 .env보다 우선** → Windows에서 `echo $env:DATABASE_URL`로 확인 후, 프로젝트용이 아니면 제거. |
 | `DB_CONNECT_RETRIES` | 연결 실패 시 재시도 횟수. 기본 5. | 2단계 (선택, Railway 권장) |
 | `DB_CONNECT_RETRY_INTERVAL_SEC` | 재시도 간격(초). 기본 2. | 2단계 (선택) |
+| `DB_POOL_SIZE_ASYNC` | Async API 풀 크기(프로세스당). 기본 5. | 2단계 (선택, 용량 계획 참고) |
+| `DB_POOL_MAX_OVERFLOW_ASYNC` | Async API 풀 오버플로(프로세스당). 기본 10. | 2단계 (선택) |
+| `DB_POOL_TIMEOUT_ASYNC` | Async 풀 대기 타임아웃(초). 기본 30. | 2단계 (선택) |
+| `DB_POOL_SIZE_SYNC` | Celery Sync 풀 크기(워커·자식당). 기본 2. | 3단계 (선택) |
+| `DB_POOL_MAX_OVERFLOW_SYNC` | Celery Sync 풀 오버플로. 기본 0. | 3단계 (선택) |
+| `DB_POOL_TIMEOUT_SYNC` | Sync 풀 대기 타임아웃(초). 기본 30. | 3단계 (선택) |
+| `DB_POOL_RECYCLE_SYNC` | Sync 풀 유휴 연결 재활용 주기(초). 기본 300. -1이면 미설정. | 3단계 (선택) |
+| `DB_MAX_CONNECTIONS` | DB max_connections(예산 검사용). 설정 시 부팅 시 Peak vs App_budget 검사. | 2단계 (선택) |
+| `DB_RESERVED` | DB 예약 연결 수(슈퍼유저/관리). 기본 3. App_budget=(max-Reserved)×0.7. | 2단계 (선택) |
+| `DB_POOL_STRICT_BUDGET` | True면 예산 초과 시 부팅 실패. 기본 False. | 2단계 (선택) |
+| `DEPLOY_SURGE_FACTOR` | 롤링/스케일 시 피크 배수. 기본 2. | 2단계 (선택) |
+| `DB_API_INSTANCES`, `DB_UVICORN_WORKERS`, `DB_WORKER_INSTANCES`, `DB_CELERY_CONCURRENCY` | 예산 검사용 인스턴스/워커 수. 기본 1. | 2단계 (선택) |
 | `REDIS_URL` | Redis 연결 URL. Railway는 **rediss://**(TLS) 제공 가능. Celery broker가 rediss 시 SSL 옵션 적용. | 3단계~ |
 | `CRAWL_TRIGGER_SECRET` | Cron이 POST /internal/trigger-crawl 호출 시 검증용 시크릿 (헤더 또는 쿼리로 전달) | 3단계 Cron 연동 시 |
 | `POLITE_DELAY_SECONDS` | 요청/페이지 간 최소 딜레이(초). 대상 서버 부하·IP 차단 완화. 기본 1. | 3단계 (선택) |
@@ -176,7 +256,8 @@ CORS: `ALLOWED_ORIGINS`에 프론트 도메인 등록. credentials: 프론트가
 
 - **새 서비스** 추가. 같은 repo 사용, **Dockerfile**로 빌드.
 - **Settings → Build**: Builder **Dockerfile** 선택. 경로 예: `./Dockerfile.worker` 또는 `./Dockerfile`.
-- **Settings → Deploy** → **Start Command**: `celery -A app.worker worker -l info --concurrency=1` (OOM 방지: 동시 브라우저 개수 제한.)
+- **Settings → Deploy** → **Start Command**: `celery -A app.worker worker -l info --concurrency=1` (OOM 방지: 동시 브라우저 개수 제한.)  
+  Linux에서는 기본 `--pool=prefork`(자식 프로세스마다 DB 풀 1개). Windows는 `--pool=solo` 필수. 연결 수는 [DB 연결 수 및 용량 계획](#db-연결-수-및-용량-계획) 참고.
 - Dockerfile에 **반드시** 포함: `RUN playwright install --with-deps chromium`. Playwright 실행 시 `--no-sandbox`, `--disable-dev-shm-usage` 옵션 사용(ROADMAP 3단계 참고).
 
 ### 5. 도메인

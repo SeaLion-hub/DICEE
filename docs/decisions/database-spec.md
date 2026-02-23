@@ -10,8 +10,8 @@
 
 ### 1.1 PK 및 타임스탬프
 
-* **PK**: 모든 메인 엔티티는 **UUID v7**을 사용한다.
-* **UUID v7 생성**: 애플리케이션 레벨 생성을 엄격히 금지한다. 분산 환경에서의 Clock Drift 방지를 위해 PostgreSQL 내장 `uuid_generate_v7()`(또는 `pg_uuidv7` 확장) 함수를 호출하여 DB 엔진이 직접 발급한다.
+* **PK**: 모든 메인 엔티티는 **UUID**를 사용한다.
+* **UUID 생성**: 애플리케이션 레벨 생성을 엄격히 금지한다. DB 엔진이 직접 발급하도록 한다. Railway 등 기본 PostgreSQL 환경 호환을 위해 **`gen_random_uuid()`**(UUID v4)를 사용한다. (pg_uuidv7 확장이 설치된 환경에서는 `uuid_generate_v7()` 사용 가능.)
 * **Base 모델**: `created_at`, `updated_at` (TIMESTAMPTZ, NOT NULL)을 모든 테이블이 공통 상속한다.
 
 ### 1.2 updated_at 무결성
@@ -95,7 +95,7 @@
 
 | 컬럼 | 타입 | 제약 |
 | --- | --- | --- |
-| id | UUID | PK, DEFAULT uuid_generate_v7() |
+| id | UUID | PK, DEFAULT gen_random_uuid() |
 | name | VARCHAR(255) | NOT NULL |
 | external_id | VARCHAR(255) | NOT NULL |
 | is_crawl_enabled | BOOLEAN | NOT NULL DEFAULT true |
@@ -109,7 +109,7 @@
 
 | 컬럼 | 타입 | 제약 |
 | --- | --- | --- |
-| id | UUID | PK, DEFAULT uuid_generate_v7() |
+| id | UUID | PK, DEFAULT gen_random_uuid() |
 | college_id | UUID | NOT NULL, FK(colleges.id), INDEX |
 | external_id | VARCHAR(512) | NOT NULL |
 | title | VARCHAR(512) | NOT NULL |
@@ -149,7 +149,7 @@
 
 | 컬럼 | 타입 | 제약 |
 | --- | --- | --- |
-| id | UUID | PK, DEFAULT uuid_generate_v7() |
+| id | UUID | PK, DEFAULT gen_random_uuid() |
 | notice_id | UUID | NOT NULL, FK(notices.id), INDEX |
 | schedule_type | VARCHAR(32) | NOT NULL |
 | start_at | TIMESTAMPTZ | NULL |
@@ -170,7 +170,7 @@
 
 | 컬럼 | 타입 | 제약 |
 | --- | --- | --- |
-| id | UUID | PK, DEFAULT uuid_generate_v7() |
+| id | UUID | PK, DEFAULT gen_random_uuid() |
 | provider | VARCHAR(32) | NOT NULL, INDEX |
 | provider_user_id | VARCHAR(256) | NOT NULL, INDEX |
 | email | VARCHAR(256) | NULL |
@@ -200,7 +200,7 @@
 
 | 컬럼 | 타입 | 제약 |
 | --- | --- | --- |
-| id | UUID | PK, DEFAULT uuid_generate_v7() |
+| id | UUID | PK, DEFAULT gen_random_uuid() |
 | user_id | UUID | NOT NULL, FK(users.id), INDEX |
 | notice_schedule_id | UUID | NOT NULL, FK(notice_schedules.id), INDEX |
 | custom_title | VARCHAR(512) | NULL |
@@ -212,7 +212,7 @@
 
 | 컬럼 | 타입 | 제약 |
 | --- | --- | --- |
-| id | UUID | PK, DEFAULT uuid_generate_v7() |
+| id | UUID | PK, DEFAULT gen_random_uuid() |
 | user_id | UUID | NOT NULL, FK(users.id), INDEX |
 | keyword_hash | VARCHAR(64) | NOT NULL, INDEX |
 | created_at | TIMESTAMPTZ | NOT NULL DEFAULT now() |
@@ -233,7 +233,7 @@
 
 | 컬럼 | 타입 | 제약 |
 | --- | --- | --- |
-| id | UUID | NOT NULL, DEFAULT uuid_generate_v7() |
+| id | UUID | NOT NULL, DEFAULT gen_random_uuid() |
 | started_at | TIMESTAMPTZ | NOT NULL |
 | college_id | UUID | NOT NULL, INDEX |
 | finished_at | TIMESTAMPTZ | NULL |
@@ -249,7 +249,7 @@
 
 | 컬럼 | 타입 | 제약 |
 | --- | --- | --- |
-| id | UUID | NOT NULL, DEFAULT uuid_generate_v7() |
+| id | UUID | NOT NULL, DEFAULT gen_random_uuid() |
 | created_at | TIMESTAMPTZ | NOT NULL |
 | run_id | UUID | NOT NULL, INDEX |
 | severity | VARCHAR(16) | NOT NULL, CHECK IN ('INFO', 'WARN', 'ERROR') |

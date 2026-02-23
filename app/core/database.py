@@ -72,10 +72,25 @@ def init_db() -> None:
     except Exception as e:
         logger.warning("DB URL parse check failed: %s", e)
 
+    from app.core.config import check_pool_budget
+
+    within_budget, peak_conn, app_budget = check_pool_budget()
+    if not within_budget and peak_conn > 0 and app_budget >= 0:
+        msg = (
+            f"Pool budget exceeded: peak_conn={peak_conn} > app_budget={app_budget}. "
+            "Adjust pool sizes or DB_MAX_CONNECTIONS. See DEPLOYMENT.md."
+        )
+        if settings.db_pool_strict_budget:
+            raise ValueError(msg)
+        logger.warning(msg)
+
     _db_holder.engine = create_async_engine(
         _async_database_url(settings.database_url),
         echo=False,
         pool_pre_ping=True,
+        pool_size=settings.db_pool_size_async,
+        max_overflow=settings.db_pool_max_overflow_async,
+        pool_timeout=settings.db_pool_timeout_async,
     )
     _db_holder.async_session_maker = async_sessionmaker(
         _db_holder.engine,

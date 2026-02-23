@@ -19,10 +19,9 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.execute(sa.text('CREATE EXTENSION IF NOT EXISTS "pg_uuidv7";'))
     op.create_table(
         "login_audits",
-        sa.Column("id", postgresql.UUID(as_uuid=True), server_default=sa.text("uuid_generate_v7()"), nullable=False),
+        sa.Column("id", postgresql.UUID(as_uuid=True), server_default=sa.text("gen_random_uuid()"), nullable=False),
         sa.Column("ip_hmac", sa.String(64), nullable=False),
         sa.Column("ip_hmac_key_version", sa.String(32), nullable=False),
         sa.Column("user_id", postgresql.UUID(as_uuid=True), nullable=True),

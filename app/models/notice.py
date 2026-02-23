@@ -29,7 +29,7 @@ class Notice(Base):
     id: Mapped[uuid.UUID] = mapped_column(
         PG_UUID(as_uuid=True),
         primary_key=True,
-        server_default=text("uuid_generate_v7()"),
+        server_default=text("gen_random_uuid()"),
     )
     college_id: Mapped[uuid.UUID] = mapped_column(
         PG_UUID(as_uuid=True), ForeignKey("colleges.id"), nullable=False, index=True

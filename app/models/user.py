@@ -26,7 +26,7 @@ class User(Base):
     id: Mapped[uuid.UUID] = mapped_column(
         PG_UUID(as_uuid=True),
         primary_key=True,
-        server_default=text("uuid_generate_v7()"),
+        server_default=text("gen_random_uuid()"),
     )
     provider: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
     provider_user_id: Mapped[str] = mapped_column(String(256), nullable=False, index=True)
