@@ -56,25 +56,24 @@ def _url_to_connect_args(url: str) -> dict:
 
 
 def get_url() -> str:
-    """마이그레이션용 DB URL. ALEMBIC_DATABASE_URL 또는 DATABASE_PUBLIC_URL이 있으면 우선 사용(내부 URL 타임아웃 시 공개 URL로 마이그레이션)."""
-    url = (
-        os.environ.get("ALEMBIC_DATABASE_URL") or
-        os.environ.get("DATABASE_PUBLIC_URL") or
-        (settings.database_url or "")
-    )
+    """마이그레이션용 DB URL. 앱과 동일하게 오직 settings.database_url 단 하나만 사용합니다."""
+    url = settings.database_url or ""
     if not url:
         raise ValueError(
-            "DATABASE_URL (or ALEMBIC_DATABASE_URL / DATABASE_PUBLIC_URL) not set. "
-            "Set it in .env or environment."
+            "DATABASE_URL not set. Set it in .env or environment."
         )
     url = url.strip()
-    # 공백·줄바꿈 검사 (터미널 출력이 .env에 붙어넣어졌을 때). 비밀번호에 head/upgrade 등 포함 가능하므로 제외.
+    
+    # 레거시 스킴 정규화 (app/core/database.py와 동일한 로직)
+    if url.startswith("postgres://"):
+        url = url.replace("postgres://", "postgresql://", 1)
+        
+    # 공백·줄바꿈 검사
     for s in (" ", "\n", "\r"):
         if s in url:
             raise ValueError(
                 "DATABASE_URL must not contain spaces or newlines. "
-                "Check .env: DATABASE_URL must be on a single line, e.g. "
-                "postgresql+asyncpg://postgres:PASSWORD@localhost:5433/dicee"
+                "Check .env: DATABASE_URL must be on a single line."
             )
     return url
 
@@ -140,7 +139,7 @@ def run_migrations_online() -> None:
         elif "OperationalError" in err_type or "connection" in err_msg.lower():
             sys.stderr.write(
                 "[hint] DATABASE_URL: system env overrides .env. Check: echo $env:DATABASE_URL. "
-                "Unset or set correctly. For Railway: use DATABASE_PUBLIC_URL in .env.\n"
+                "Unset or set correctly.\n"
             )
         sys.stderr.flush()
         raise e
