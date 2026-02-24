@@ -167,7 +167,7 @@ CORS: `ALLOWED_ORIGINS`에 프론트 도메인 등록. credentials: 프론트가
     값: `${{Postgres.DATABASE_URL}}` (Postgres 서비스 이름이 다르면 해당 이름으로. 예: `${{PostgreSQL.DATABASE_URL}}`)  
     Railway 최신 Postgres에서는 **Postgres 서비스의 `DATABASE_URL`이 내부(private) URL**이다. **`DATABASE_PUBLIC_URL`을 참조하면 안 됨** — 공개 URL 참조 시 내부에서 인증 실패가 날 수 있음.
   - **직접 입력**  
-    DB 서비스 **Variables** 또는 **Connect** 탭에서 **내부 연결 URL**(호스트가 `postgres.railway.internal`인 것) 전체를 복사한 뒤, 스킴만 `postgresql://` → `postgresql+asyncpg://` 로 바꿔 넣기. 비밀번호에 특수문자(`@`, `#`, `%`, `:` 등)가 있으면 URL 인코딩(`%40`, `%23`, `%25`, `%3A` 등) 필요.
+    DB 서비스 **Variables** 또는 **Connect** 탭에서 **내부 연결 URL**(호스트가 `postgres.railway.internal`인 것) 전체를 복사한 뒤, 스킴만 `postgresql://` → **`postgresql+psycopg://`** 로 바꿔 넣기. (앱에서 `postgres://` 주소를 받으면 **postgresql+psycopg**로 자동 정규화하므로, Railway가 주는 URL을 그대로 넣어도 동작함.) 비밀번호에 특수문자(`@`, `#`, `%`, `:` 등)가 있으면 URL 인코딩(`%40`, `%23`, `%25`, `%3A` 등) 필요.
 - **Railway가 부여한 user/비밀번호를 그대로 사용해야 함.** 로컬용 `postgres:postgres` 등을 넣으면 `password authentication failed for user "postgres"` 로 기동 실패.
 
 **Redis (3단계)**
@@ -185,7 +185,7 @@ CORS: `ALLOWED_ORIGINS`에 프론트 도메인 등록. credentials: 프론트가
 | 변수 | 설명 | 적용 시점 |
 |------|------|-----------|
 | `SENTRY_DSN` | Sentry 에러 모니터링 DSN | 1단계~ |
-| `DATABASE_URL` | `postgresql+asyncpg://...` | 2단계~. **비밀번호는 영문·숫자만** 사용. **시스템 환경변수가 .env보다 우선** → Windows에서 `echo $env:DATABASE_URL`로 확인 후, 프로젝트용이 아니면 제거. |
+| `DATABASE_URL` | **`postgresql+psycopg://...`** 권장. `postgres://`만 넣어도 앱이 `postgresql+psycopg://`로 자동 변환함. (구형 asyncpg 대신 psycopg 사용 — Railway 프록시 환경에서 안정적.) 2단계~. **비밀번호는 영문·숫자만** 사용. **시스템 환경변수가 .env보다 우선** → Windows에서 `echo $env:DATABASE_URL`로 확인 후, 프로젝트용이 아니면 제거. |
 | `DB_CONNECT_RETRIES` | 연결 실패 시 재시도 횟수. 기본 5. | 2단계 (선택, Railway 권장) |
 | `DB_CONNECT_RETRY_INTERVAL_SEC` | 재시도 간격(초). 기본 2. | 2단계 (선택) |
 | `DB_POOL_SIZE_ASYNC` | Async API 풀 크기(프로세스당). 기본 5. | 2단계 (선택, 용량 계획 참고) |
@@ -240,7 +240,7 @@ Private Key 내용을 `JWT_PRIVATE_KEY_PEM`, Public Key 내용을 `JWT_PUBLIC_KE
   값이 `${{Postgres.DATABASE_URL}}`(또는 `${{PostgreSQL.DATABASE_URL}}` 등 **내부 URL 변수**)인지 확인.  
   **`${{Postgres.DATABASE_PUBLIC_URL}}`로 되어 있으면 공개 URL이 주입되어 내부에서 인증 실패가 날 수 있음.** → 참조를 **내부 URL**(Postgres 서비스의 `DATABASE_URL`)로 바꾼 뒤 재배포.
 - **확인 3 — 직접 입력 시:**  
-  Railway **PostgreSQL 서비스** → **Variables** 또는 **Connect** 탭에서 **내부 연결 URL**(호스트 `postgres.railway.internal`) 전체를 복사해 웹 서비스 `DATABASE_URL`에 넣고, 스킴만 `postgresql+asyncpg://` 로 변경. 비밀번호에 `@`, `#`, `%` 등이 있으면 퍼센트 인코딩 필요.
+  Railway **PostgreSQL 서비스** → **Variables** 또는 **Connect** 탭에서 **내부 연결 URL**(호스트 `postgres.railway.internal`) 전체를 복사해 웹 서비스 `DATABASE_URL`에 넣고, 스킴만 **`postgresql+psycopg://`** 로 변경. (앱이 `postgres://`를 자동으로 `postgresql+psycopg://`로 바꿔 주므로 그대로 넣어도 됨.) 비밀번호에 `@`, `#`, `%` 등이 있으면 퍼센트 인코딩 필요.
 - 로컬용·예시용 URL(`postgres:postgres` 등)을 넣으면 이 오류가 난다. **반드시 Railway Postgres 서비스에 나온 값 또는 내부 URL 변수 참조를 사용**한다.
 - **다른 원인 (변수·URL이 맞는데도 실패할 때):**
   - **참조 서비스 이름 불일치:** `${{Postgres.DATABASE_URL}}`에서 **Postgres**는 대시보드에 보이는 **PostgreSQL 서비스 이름**과 정확히 같아야 한다. (예: 서비스 이름이 `PostgreSQL`이면 `${{PostgreSQL.DATABASE_URL}}`.) 참조가 해석되지 않으면 빈 값이나 잘못된 값이 들어갈 수 있다.
@@ -259,7 +259,7 @@ Private Key 내용을 `JWT_PRIVATE_KEY_PEM`, Public Key 내용을 `JWT_PUBLIC_KE
      - `ALEMBIC_RETRY_INITIAL_SEC` = `10` (첫 재시도 전 대기 초, 기본 8)  
      - `ALEMBIC_RETRY_MAX_SEC` = `60` (재시도 간 최대 대기 초, 기본 40)  
   3. **DATABASE_URL 확인:** 내부 URL(`postgres.railway.internal`)을 쓰는지 확인. 공개 URL만 쓰면 레이턴시/방화벽으로 타임아웃이 날 수 있음. 위 **트러블슈팅: password authentication failed** 항목의 변수 참조·내부 URL 설명 참고.  
-  4. **내부 URL이 계속 타임아웃될 때:** Railway에서 내부 호스트로 연결이 안 되면, **마이그레이션만** 공개 URL로 실행하도록 웹 서비스 Variables에 **`ALEMBIC_DATABASE_URL`** = `${{Postgres.DATABASE_PUBLIC_URL}}` 를 추가한다. (앱 런타임은 기존대로 `DATABASE_URL`=내부 URL 사용. 마이그레이션 시에만 `ALEMBIC_DATABASE_URL`이 있으면 그걸 쓴다.) 스킴은 `postgresql+asyncpg://` 또는 `postgresql://` 이어야 하며, 공개 URL이 `postgres://` 이면 앞에 `postgresql+asyncpg://` 로 바꾼다.
+  4. **내부 URL이 계속 타임아웃될 때:** Railway에서 내부 호스트로 연결이 안 되면, **마이그레이션만** 공개 URL로 실행하도록 웹 서비스 Variables에 **`ALEMBIC_DATABASE_URL`** = `${{Postgres.DATABASE_PUBLIC_URL}}` 를 추가한다. (앱 런타임은 기존대로 `DATABASE_URL`=내부 URL 사용. 마이그레이션 시에만 `ALEMBIC_DATABASE_URL`이 있으면 그걸 쓴다.) 스킴은 **`postgresql+psycopg://`** 또는 `postgresql://` 이어야 하며, 공개 URL이 `postgres://` 이면 앱/마이그레이션이 자동으로 `postgresql+psycopg://`로 정규화한다.
 
 **트러블슈팅: `Can't locate revision identified by '011'` (Alembic)**
 
