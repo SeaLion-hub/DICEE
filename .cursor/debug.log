@@ -1,0 +1,4 @@
+{"id": "alembic_psycopg", "hypothesisId": "A", "timestamp": 1771261999392.302, "message": "sync psycopg", "data": {"conn_args_masked": {"host": "trolley.proxy.rlwy.net", "port": 41932, "user": "postgres", "password": "***", "dbname": "railway"}, "url_source": ".env"}, "runId": "env-check"}
+{"id": "alembic_connected", "message": "connection ok", "runId": "post-fix"}
+{"id": "alembic_migrated", "message": "run_migrations done", "runId": "post-fix"}
+{"id": "alembic_success", "message": "migrations completed"}
