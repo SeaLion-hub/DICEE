@@ -1,4 +1,4 @@
-"""인메모리 메트릭(KPI). lock·crawl·upload 등. 추후 Prometheus/Sentry 연동 시 노출."""
+"""인메모리 메트릭(KPI). lock·crawl·upload 등. 레이블 지원·Prometheus 포맷 노출."""
 
 from collections.abc import MutableMapping
 from threading import Lock
@@ -17,25 +17,43 @@ ENQUEUE_TO_START_LAG_SECONDS = "enqueue_to_start_lag_seconds"
 CONTENT_UPLOAD_FAILURE_TOTAL = "content_upload_failure_total"
 CRAWL_PARSER_FAILURE_RATIO = "crawl_parser_failure_ratio"
 
+# 신규 KPI (Prometheus·대시보드용)
+CRAWL_SUCCESS_TOTAL = "crawl_success_total"
+CRAWL_FAILURE_TOTAL = "crawl_failure_total"
+CRAWL_ATTEMPT_TOTAL = "crawl_attempt_total"
+CRAWL_PARSER_FAILURE_TOTAL = "crawl_parser_failure_total"
 
-def increment(name: str, value: int = 1) -> None:
+
+def _make_key(name: str, labels: dict[str, str] | None) -> str:
+    """Prometheus 스타일의 복합 키 생성: name{k="v",...}"""
+    if not labels:
+        return name
+    label_str = ",".join(f'{k}="{v}"' for k, v in sorted(labels.items()))
+    return f"{name}{{{label_str}}}"
+
+
+def increment(name: str, value: int = 1, labels: dict[str, str] | None = None) -> None:
+    key = _make_key(name, labels)
     with _lock:
-        _counters[name] = _counters.get(name, 0) + value
+        _counters[key] = _counters.get(key, 0) + value
 
 
-def set_gauge(name: str, value: float) -> None:
+def set_gauge(name: str, value: float, labels: dict[str, str] | None = None) -> None:
+    key = _make_key(name, labels)
     with _lock:
-        _gauges[name] = value
+        _gauges[key] = value
 
 
-def get_counter(name: str) -> int:
+def get_counter(name: str, labels: dict[str, str] | None = None) -> int:
+    key = _make_key(name, labels)
     with _lock:
-        return _counters.get(name, 0)
+        return _counters.get(key, 0)
 
 
-def get_gauge(name: str) -> float | None:
+def get_gauge(name: str, labels: dict[str, str] | None = None) -> float | None:
+    key = _make_key(name, labels)
     with _lock:
-        return _gauges.get(name)
+        return _gauges.get(key)
 
 
 def get_all() -> dict[str, Any]:

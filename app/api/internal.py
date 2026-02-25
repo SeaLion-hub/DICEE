@@ -5,9 +5,10 @@ Query 파라미터 시크릿 미지원(Access Log 유출 방지). college별 분
 
 import asyncio
 import logging
+import time
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from redis.asyncio import Redis as RedisAsyncio
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -30,6 +31,7 @@ from app.core.redis import (
     set_trigger_idempotency_result,
     try_claim_trigger_idempotency,
 )
+from app.core import metrics
 from app.repositories.crawl_run_repository import get_recent_crawl_runs
 
 router = APIRouter(prefix="/internal", tags=["internal"])
@@ -144,10 +146,12 @@ async def _enqueue_crawls(
                 skipped.append(code)
                 continue
         countdown = i * CRAWL_STAGGER_SECONDS if len(codes) > 1 else 0
+        enqueued_at = time.time()
         try:
             result = await asyncio.to_thread(
                 crawl_college_task.apply_async,
                 args=[code, lock_token],
+                kwargs={"enqueued_at": enqueued_at},
                 countdown=countdown,
             )
         except Exception:
@@ -301,3 +305,27 @@ async def get_crawl_stats(
         item["has_error"] = bool(run.get("error_message"))
         sanitized.append(item)
     return {"runs": sanitized, "limit": limit}
+
+
+def _metrics_allowed_client_ip(request: Request) -> bool:
+    """METRICS_ALLOWED_IPS가 설정된 경우 해당 IP만 허용. 미설정 시 모든 IP 허용."""
+    allowed_ips_str = getattr(settings, "metrics_allowed_ips", "") or ""
+    if not allowed_ips_str.strip():
+        return True
+    allowed = {ip.strip() for ip in allowed_ips_str.split(",") if ip.strip()}
+    client_ip = request.client.host if request and request.client else ""
+    return client_ip in allowed
+
+
+@router.get("/metrics")
+async def get_metrics(request: Request) -> Response:
+    """Prometheus 텍스트 포맷으로 메트릭 노출. METRICS_ALLOWED_IPS 설정 시 해당 IP만 허용."""
+    if not _metrics_allowed_client_ip(request):
+        raise HTTPException(status_code=403, detail="Metrics access not allowed for this client")
+    data = metrics.get_all()
+    lines: list[str] = []
+    for name, val in data["counters"].items():
+        lines.append(f"{name} {val}")
+    for name, val in data["gauges"].items():
+        lines.append(f"{name} {val}")
+    return Response(content="\n".join(lines) + "\n", media_type="text/plain; charset=utf-8")

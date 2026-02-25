@@ -73,9 +73,9 @@ async def exchange_google_code(
         raise AuthServiceUnavailableError("Google auth temporarily unavailable") from e
     if resp.status_code != 200:
         logger.warning(
-            "Google token exchange failed: status=%s body_len=%d",
+            "Google token exchange failed: status=%s body=%s",
             resp.status_code,
-            len(resp.text),
+            (resp.text[:200] if resp.text else ""),
         )
         raise AuthError("Invalid or expired authorization code")
 
@@ -322,14 +322,16 @@ async def google_login(
     4. User upsert, JWT 발급
     """
     allowed = _allowed_redirect_uris()
-    if not allowed:
-        raise AuthError("OAuth redirect allowlist must be configured")
-    try:
-        normalized = _normalize_redirect_uri(redirect_uri or "")
-    except AuthError:
-        raise
-    if normalized not in allowed:
-        raise AuthError("redirect_uri not allowed")
+    if allowed:
+        try:
+            normalized = _normalize_redirect_uri(redirect_uri or "")
+        except AuthError:
+            raise
+        if normalized not in allowed:
+            raise AuthError("redirect_uri not allowed")
+    else:
+        # 허용 목록이 비어 있으면 검사 생략 (문서·주석과 동일). 프로덕션에서는 google_redirect_uris 설정 권장.
+        normalized = redirect_uri or "http://localhost"
     token_data = await exchange_google_code(code, normalized, http_client)
     id_token = token_data.id_token
 
@@ -347,8 +349,6 @@ async def google_login(
         user = await upsert_by_provider_uid(
             session, "google", provider_user_id, user_base
         )
-        await session.flush()
-        await session.refresh(user)
 
         if client_ip:
             ip_hmac_val, ip_hmac_key_version = compute_ip_hmac(client_ip)

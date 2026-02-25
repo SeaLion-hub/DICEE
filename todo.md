@@ -10,9 +10,9 @@ Composer(Cmd+I) 사용 시 **@todo.md**를 반드시 포함해 세션 컨텍스�
 
 | 항목 | 내용 |
 |------|------|
-| **현재 수정 중** | (예: 연대 공대 크롤러 / yonsei_engineering.py) |
-| **발생 중인 이슈** | (예: HTML 구조 변경으로 인한 파싱 에러) |
-| **주의 사항** | (예: DB 인덱스 영향 줄 것 / published_at 필수) |
+| **현재 수정 중** | 크롤 워커 안정성 개선 계획 구현 완료 |
+| **발생 중인 이슈** | 없음 |
+| **주의 사항** | 이슈 2(seen.clear)는 현재 코드와 불일치하여 문서화만 수행 |
 
 - 위 세 칸을 비우지 말고, 작업이 바뀔 때마다 갱신하라. AI는 이 블록을 읽고 "지금 어떤 문제를 풀고 있었지?"를 복기한다.
 
@@ -25,7 +25,7 @@ Composer(Cmd+I) 사용 시 **@todo.md**를 반드시 포함해 세션 컨텍스�
 - **예시(새 대학 크롤러)**: @docs/decisions/database-spec.md를 참고해 Notice 스키마·필수 필드(published_at, external_id, title, url 등)를 확인한 뒤, 베이스/기존 크롤러 패턴을 따라 단계별 계획을 적는다.
 - 한 번에 "모든 크롤러 다 만들어줘"라고 하지 말고, **"베이스 클래스 상속 확인 → 로그인/세션 로직 → 파싱 로직"**처럼 끊어서 지시하고, 그때마다 이 [Plan]과 [Checklist]를 갱신하게 하라.
 
-(현재 계획을 여기에 적기)
+크롤 워커 안정성 개선(검증 결과 반영): 이슈 1 단위 테스트 추가, 이슈 2 _BoundedSeenSet 문서화. 이슈 1·3·4는 코드에 이미 반영됨.
 
 ---
 
@@ -36,7 +36,7 @@ Composer(Cmd+I) 사용 시 **@todo.md**를 반드시 포함해 세션 컨텍스�
 - **예시**: "진행 중: app/services/crawlers/yonsei_ai.py. Notice 모델의 published_at, external_id, title, url, raw_html 필수. content_hash는 제목+본문 텍스트만 사용."
 - 현재 수정 중인 파일(@yonsei_ai.py 등)의 **[Context]**를 요약해 이 섹션에 적고, 다음 턴에서도 @todo.md를 참조하면 맥락을 잃지 않는다.
 
-(현재 맥락 요약을 여기에 적기)
+tests/test_crawl_service.py 추가(rollback→FAILED 경로 테스트). docs/decisions/crawl-bounded-seen-set.md 추가(_BoundedSeenSet max/evict 정책).
 
 ---
 
@@ -44,10 +44,9 @@ Composer(Cmd+I) 사용 시 **@todo.md**를 반드시 포함해 세션 컨텍스�
 
 수정할 때마다 **한 항목씩 지워나가며** 완료 보고를 한다. "다 했습니다"만 하지 말고, 어떤 항목을 끝냈는지 여기서 체크하고 보고하라.
 
-- [ ] (단계 1: 예) 베이스 클래스 상속·모듈 등록 확인)
-- [ ] (단계 2: 예) get_*_links / scrape_*_detail 시그니처 및 fetch_html 적용)
-- [ ] (단계 3: 예) published_at, external_id, title, url, raw_html 매핑 및 에러 핸들링)
-- [ ] (필요 시) pytest 실행 및 수정 반영
+- [x] 이슈 1: run_crawl_job_sync rollback→FAILED 경로 단위 테스트 추가
+- [x] 이슈 2: _BoundedSeenSet max/evict 정책 docs/decisions 문서화
+- [x] pytest 실행 및 수정 반영 (36 passed)
 
 ---
 

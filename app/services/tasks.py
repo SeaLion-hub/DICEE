@@ -12,7 +12,14 @@ from requests.exceptions import RequestException
 from app.core.celery_app import app
 from app.core.config import settings
 from app.core.database_sync import get_sync_session
-from app.core.metrics import CRAWL_DURATION_SECONDS, set_gauge
+from app.core.metrics import (
+    CRAWL_DURATION_SECONDS,
+    CRAWL_FAILURE_TOTAL,
+    CRAWL_SUCCESS_TOTAL,
+    ENQUEUE_TO_START_LAG_SECONDS,
+    increment,
+    set_gauge,
+)
 from app.core.redis import release_trigger_lock_sync, renew_trigger_lock_sync
 from app.repositories.crawl_run_repository import close_stale_running_runs_sync
 from app.repositories.notice_repository import get_notice_for_ai_sync, update_ai_result_sync
@@ -55,7 +62,12 @@ def _heartbeat_loop(
     retry_backoff_max=600,
     retry_jitter=True,
 )
-def crawl_college_task(self, college_code: str, lock_token: str | None = None):
+def crawl_college_task(
+    self,
+    college_code: str,
+    lock_token: str | None = None,
+    enqueued_at: float | None = None,
+):
     """Celery 크롤 태스크. 동기 세션·crawl_college_sync. finally에서 락 해제 보장; 장시간 실행 중 heartbeat로 TTL 갱신."""
     task_id = getattr(self.request, "id", None) or ""
     _set_task_context(str(task_id) if task_id else None, college_code)
@@ -64,6 +76,10 @@ def crawl_college_task(self, college_code: str, lock_token: str | None = None):
         "Task Started: task_id=%s college_code=%s lock_token=%s",
         task_id, college_code, lock_hint,
     )
+    labels = {"college_code": college_code}
+    if enqueued_at is not None:
+        lag = time.time() - enqueued_at
+        set_gauge(ENQUEUE_TO_START_LAG_SECONDS, lag, labels=labels)
     count = 0
     enqueued_ai = 0
     failed_enqueues = 0
@@ -99,7 +115,7 @@ def crawl_college_task(self, college_code: str, lock_token: str | None = None):
             count, _ = run_crawl_job_sync(
                 session, college_code, task_id, on_chunk
             )
-        set_gauge(CRAWL_DURATION_SECONDS, time.monotonic() - started_at)
+        increment(CRAWL_SUCCESS_TOTAL, 1, labels=labels)
         msg = (
             f"Crawling {college_code} completed. Upserted {count} notices, "
             f"enqueued AI for {enqueued_ai} (failed_enqueues={failed_enqueues})."
@@ -110,11 +126,15 @@ def crawl_college_task(self, college_code: str, lock_token: str | None = None):
             "enqueued_ai": enqueued_ai,
             "failed_enqueues": failed_enqueues,
         }
+    except Exception:
+        increment(CRAWL_FAILURE_TOTAL, 1, labels=labels)
+        raise
     finally:
-        release_trigger_lock_sync(college_code, lock_token)
+        set_gauge(CRAWL_DURATION_SECONDS, time.monotonic() - started_at, labels=labels)
         stop_heartbeat.set()
         if heartbeat_thread is not None:
             heartbeat_thread.join(timeout=2.0)
+        release_trigger_lock_sync(college_code, lock_token)
 
 
 @app.task(name="app.services.tasks.close_stale_crawl_runs_task")

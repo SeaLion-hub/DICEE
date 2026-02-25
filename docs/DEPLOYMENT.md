@@ -301,6 +301,7 @@ CORS: `ALLOWED_ORIGINS`에 프론트 도메인 등록. credentials: 프론트가
 | `AUTH_REFRESH_RATE_LIMIT_PER_MINUTE` | 동일 IP 기준 `/v1/auth/refresh` 분당 최대 호출 수. 기본 60. | 2단계 Auth (선택) |
 | `INTERNAL_TRIGGER_CRAWL_RATE_LIMIT_PER_MINUTE` | 동일 IP 기준 `/internal/trigger-crawl` 분당 최대 호출 수. 기본 10. | 3단계 Cron 연동 시 (선택) |
 | `INTERNAL_CRAWL_STATS_RATE_LIMIT_PER_MINUTE` | 동일 IP 기준 `/internal/crawl-stats` 분당 최대 호출 수. 기본 30. | 3단계 운영 모니터링 (선택) |
+| `TRUSTED_PROXY_IPS` | 역방향 프록시(예: Railway) 직전 피어 IP를 쉼표 구분으로 설정. 비어 있으면 `X-Forwarded-For`를 신뢰하지 않고 `request.client.host`만 사용. **프로덕션에서 프록시 뒤에 두고 비워 두면 모든 클라이언트가 프록시 IP 하나로 인식되어 Rate Limit 시 전체 사용자 차단 가능** → Railway 등 배포 시 반드시 설정 권장. | 2단계~ (리버스 프록시 사용 시) |
 | `POLITE_DELAY_SECONDS` | 요청/페이지 간 최소 딜레이(초). 대상 서버 부하·IP 차단 완화. 기본 1. 단과대별 오버라이드는 DB 메타데이터 테이블 또는 ConfigMap/리로드 가능 소스로 설계(재시작 없이 변경 가능). | 3단계 (선택) |
 | `CELERY_WORKER_PREFETCH_MULTIPLIER` | 워커 prefetch 배수. 기본 1. 짧은 태스크 많으면 2~4로 조정. **-O fair**와 함께 사용. | 3단계 (선택) |
 | `JWT_SECRET` | JWT 서명용 비밀키 (강한 랜덤 문자열). RS256 사용 시 불필요. | 2단계 Auth 후 (HS256 시) |
@@ -325,6 +326,9 @@ CORS: `ALLOWED_ORIGINS`에 프론트 도메인 등록. credentials: 프론트가
 | 기타 | Gemini API 키 등 | 해당 기능 단계 |
 
 (나중에 카카오 등 추가 시 `KAKAO_CLIENT_ID` 등 동일 방식으로 Variables + `.env.example`에 추가.)
+
+**Rate limit 및 리버스 프록시**  
+Railway 등 리버스 프록시 뒤에 배포할 때 `TRUSTED_PROXY_IPS`를 설정하지 않으면, 앱이 받는 TCP 연결의 직전 피어는 프록시 IP 하나뿐이므로 `request.client.host`가 모두 동일하게 됩니다. 이 경우 **동일 IP 기준 Rate Limit**(Auth·Internal API 등)이 한 사용자만 초과해도 **전체 사용자가 차단**되는 Fail-closed가 발생할 수 있습니다. 프로덕션에서 프록시를 사용한다면 `TRUSTED_PROXY_IPS`에 프록시(또는 로드밸런서) IP를 쉼표 구분으로 넣어 `X-Forwarded-For`를 신뢰하도록 설정하세요.
 
 **JWT RS256 (선택)**  
 마이크로서비스 확장 시 토큰 검증 서비스가 시크릿 없이 공개키만으로 검증하려면 RS256 사용. 키 생성 예:

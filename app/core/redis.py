@@ -382,6 +382,7 @@ def release_trigger_lock_sync(college_code: str, lock_token: str | None) -> None
     """
     단과대별 크롤 트리거 락 해제(소유자만). 워커 완료/예외 시 호출.
     lock_token이 None이면 no-op(레거시 호출 방지). 동기 Redis 사용(Celery 워커 환경).
+    싱글톤 클라이언트 재사용(커넥션 풀 유지).
     """
     if not lock_token:
         return
@@ -390,39 +391,16 @@ def release_trigger_lock_sync(college_code: str, lock_token: str | None) -> None
     raw_url = getattr(settings, "redis_url", None) or ""
     if not raw_url.strip():
         return
-    client = None
+    client = _get_sync_redis_client()
+    if client is None:
+        return
     try:
-        import redis
-
-        ssl_kwargs = {}
-        url = raw_url
-        url_stripped = url.strip()
-        if url_stripped.startswith("rediss://"):
-            ssl_kwargs = {"ssl_cert_reqs": ssl.CERT_REQUIRED}
-            if getattr(settings, "redis_ca_certs", None):
-                ssl_kwargs["ssl_ca_certs"] = settings.redis_ca_certs
-        socket_timeout = getattr(settings, "redis_socket_timeout", 5.0)
-        socket_connect_timeout = getattr(settings, "redis_socket_connect_timeout", 2.0)
-        client = redis.Redis.from_url(
-            url_stripped or url,
-            decode_responses=True,
-            socket_timeout=socket_timeout,
-            socket_connect_timeout=socket_connect_timeout,
-            **ssl_kwargs,
-        )
         key = f"{TRIGGER_LOCK_KEY_PREFIX}{college_code}"
         client.eval(LUA_RELEASE_IF_OWNER, 1, key, lock_token)
     except Exception as e:
         logger.warning(
             "Trigger lock release failed (college=%s): %s", college_code, e, exc_info=True
         )
-    finally:
-        if client is not None:
-            try:
-                client.close()
-            except Exception:
-                # 연결 종료 실패는 치명적이지 않으므로 무시
-                pass
 
 
 async def _is_access_blocked_raw(
