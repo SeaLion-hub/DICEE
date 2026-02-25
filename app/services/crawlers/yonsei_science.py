@@ -10,6 +10,7 @@ from requests.exceptions import RequestException
 
 from app.core.crawl_http import HtmlTooLargeError, fetch_html, fetch_html_async
 from app.services.crawlers.base import ScrapeResult
+from app.services.crawlers.typing_helpers import ensure_str_attr
 
 logger = logging.getLogger(__name__)
 
@@ -85,7 +86,7 @@ def scrape_science_detail(url):
         temp_soup = get_body_soup(soup)
         if temp_soup:
             for idx, img in enumerate(temp_soup.find_all("img")):
-                src = img.get("src", "")
+                src = ensure_str_attr(img.get("src", ""))
                 if src and not any(x in src for x in ["icon", "btn", "blank"]):
                     if src.startswith("data:image"):
                         try:
@@ -170,7 +171,7 @@ def get_science_links(url):
             if title_td and isinstance(title_td, Tag):
                 a_tag = title_td.find("a")
                 if a_tag and isinstance(a_tag, Tag):
-                    href = a_tag.get("href")
+                    href = ensure_str_attr(a_tag.get("href"))
                     if not href:
                         continue
                     full_url = urljoin(url, href)
@@ -204,7 +205,7 @@ async def get_science_links_async(client: httpx.AsyncClient, url: str):
             if title_td and isinstance(title_td, Tag):
                 a_tag = title_td.find("a")
                 if a_tag and isinstance(a_tag, Tag):
-                    href = a_tag.get("href")
+                    href = ensure_str_attr(a_tag.get("href"))
                     if href:
                         full_url = urljoin(url, href)
                         links.append({"no": num, "title": a_tag.get_text(strip=True), "url": full_url})
@@ -235,7 +236,7 @@ async def scrape_science_detail_async(client: httpx.AsyncClient, url: str):
         temp_soup = get_body_soup(soup)
         if temp_soup:
             for idx, img in enumerate(temp_soup.find_all("img")):
-                src = img.get("src", "")
+                src = ensure_str_attr(img.get("src", ""))
                 if src and not any(x in src for x in ["icon", "btn", "blank"]):
                     if src.startswith("data:image"):
                         try:

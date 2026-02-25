@@ -10,6 +10,7 @@ from requests.exceptions import RequestException
 
 from app.core.crawl_http import HtmlTooLargeError, fetch_html, fetch_html_async
 from app.services.crawlers.base import ScrapeResult
+from app.services.crawlers.typing_helpers import ensure_str_attr
 
 logger = logging.getLogger(__name__)
 
@@ -127,8 +128,7 @@ def scrape_yonsei_engineering_precise(url):
             for idx, img in enumerate(img_tags):
                 if not isinstance(img, Tag):
                     continue
-                raw_src = img.get("src", "")
-                src = raw_src if isinstance(raw_src, str) else ""
+                src = ensure_str_attr(img.get("src", ""))
                 if not src:
                     continue
                 if src.startswith("data:image"):
@@ -186,9 +186,8 @@ def scrape_yonsei_engineering_precise(url):
                     if not isinstance(link, Tag):
                         continue
                     file_name = link.get_text(strip=True)
-                    raw_href = link.get('href', '')
-                    href = raw_href if isinstance(raw_href, str) else ''
-                    if href and not href.startswith('#') and 'javascript' not in href:
+                    href = ensure_str_attr(link.get("href", ""))
+                    if href and not href.startswith("#") and "javascript" not in href:
                         if file_name and file_name not in attachment_names_set:
                             attachment_names_set.add(file_name)
 
@@ -229,13 +228,7 @@ def get_notice_links(list_url):
             if num_text.isdigit():
                 link_tag = row.find("a")
                 if isinstance(link_tag, Tag):
-                    href_val = link_tag.get("href")
-                    if isinstance(href_val, str):
-                        href_str = href_val
-                    elif isinstance(href_val, list) and href_val:
-                        href_str = href_val[0]
-                    else:
-                        href_str = ""
+                    href_str = ensure_str_attr(link_tag.get("href"))
                     if href_str:
                         full_url = urljoin(list_url, href_str)
                         links.append({"no": num_text, "url": full_url})
@@ -268,12 +261,7 @@ async def get_notice_links_async(client: httpx.AsyncClient, list_url: str):
             if num_text.isdigit():
                 link_tag = row.find("a")
                 if isinstance(link_tag, Tag):
-                    href_val = link_tag.get("href")
-                    href_str = (
-                        href_val
-                        if isinstance(href_val, str)
-                        else (href_val[0] if isinstance(href_val, list) and href_val else "")
-                    )
+                    href_str = ensure_str_attr(link_tag.get("href"))
                     if href_str:
                         full_url = urljoin(list_url, href_str)
                         if full_url not in seen_urls:
@@ -334,7 +322,7 @@ async def scrape_yonsei_engineering_precise_async(client: httpx.AsyncClient, url
             for idx, img in enumerate(main_container.find_all("img")):
                 if not isinstance(img, Tag):
                     continue
-                src = img.get("src", "") or ""
+                src = ensure_str_attr(img.get("src", ""))
                 if not src:
                     continue
                 if src.startswith("data:image"):
@@ -377,7 +365,7 @@ async def scrape_yonsei_engineering_precise_async(client: httpx.AsyncClient, url
                     if not isinstance(link, Tag):
                         continue
                     file_name = link.get_text(strip=True)
-                    href = link.get("href", "") or ""
+                    href = ensure_str_attr(link.get("href", ""))
                     if (
                         href and not href.startswith("#") and "javascript" not in href
                         and file_name and file_name not in attachment_names_set

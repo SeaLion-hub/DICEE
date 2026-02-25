@@ -10,6 +10,7 @@ from requests.exceptions import RequestException
 
 from app.core.crawl_http import HtmlTooLargeError, fetch_html, fetch_html_async
 from app.services.crawlers.base import ScrapeResult
+from app.services.crawlers.typing_helpers import ensure_str_attr
 
 logger = logging.getLogger(__name__)
 
@@ -310,7 +311,7 @@ async def scrape_computing_detail_async(client: httpx.AsyncClient, url: str):
             for img in temp_soup.find_all("img"):
                 if not isinstance(img, Tag):
                     continue
-                src = img.get("src", "") or ""
+                src = ensure_str_attr(img.get("src", ""))
                 if not src or src.startswith("data:image"):
                     continue
                 if any(x in src for x in ["icon", "btn", "blank"]):
@@ -330,7 +331,7 @@ async def scrape_computing_detail_async(client: httpx.AsyncClient, url: str):
                 if isinstance(t, Tag):
                     for a in t.find_all("a"):
                         if isinstance(a, Tag):
-                            href_str = a.get("href") or ""
+                            href_str = ensure_str_attr(a.get("href"))
                             if "download.php" in href_str:
                                 fname = a.get_text(strip=True)
                                 if fname and fname not in attachment_names_ai_async:

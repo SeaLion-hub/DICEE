@@ -44,7 +44,7 @@ async def test_decode_google_id_token_valid() -> None:
 
 
 def test_allowed_redirect_uris_raises_when_config_set_but_all_invalid(monkeypatch: pytest.MonkeyPatch) -> None:
-    """_allowed_redirect_uris: google_redirect_uris에 값이 있으나 유효한 URI가 없으면 AuthError (P0 fail-closed 회귀 방지)."""
+    """_allowed_redirect_uris: 설정값은 있으나 유효 URI 없으면 AuthError (P0 fail-closed 회귀 방지)."""
     from app.services.auth_service import AuthError, _allowed_redirect_uris
 
     monkeypatch.setattr("app.services.auth_service.settings.google_redirect_uris", "http://invalid??,not-a-uri")

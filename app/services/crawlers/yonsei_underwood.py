@@ -10,6 +10,7 @@ from requests.exceptions import RequestException
 
 from app.core.crawl_http import HtmlTooLargeError, fetch_html, fetch_html_async
 from app.services.crawlers.base import ScrapeResult
+from app.services.crawlers.typing_helpers import ensure_str_attr
 
 logger = logging.getLogger(__name__)
 
@@ -92,7 +93,7 @@ def get_uic_links(url):
                     break
                 if not isinstance(a, Tag):
                     continue
-                href = a.get("href")
+                href = ensure_str_attr(a.get("href"))
                 if not href:
                     continue
 
@@ -175,8 +176,7 @@ def scrape_uic_detail(url):
             for idx, img in enumerate(content_div.find_all("img")):
                 if not isinstance(img, Tag):
                     continue
-                raw_src = img.get("src", "")
-                src = raw_src if isinstance(raw_src, str) else ""
+                src = ensure_str_attr(img.get("src", ""))
                 if src and not any(x in src for x in ["icon", "btn", "blank", "ext_"]):
                     if src.startswith("data:image"):
                         try:
@@ -243,7 +243,7 @@ async def get_uic_links_async(client: httpx.AsyncClient, url: str):
                     break
                 if not isinstance(a, Tag) or not a.get("href"):
                     continue
-                full_url = urljoin(url, a.get("href"))
+                full_url = urljoin(url, ensure_str_attr(a.get("href")))
                 title = a.get_text(strip=True)
                 if not title or title.lower() == "more":
                     continue
@@ -294,7 +294,7 @@ async def scrape_uic_detail_async(client: httpx.AsyncClient, url: str):
             for idx, img in enumerate(content_div.find_all("img")):
                 if not isinstance(img, Tag):
                     continue
-                src = img.get("src", "") or ""
+                src = ensure_str_attr(img.get("src", ""))
                 if not src or any(x in src for x in ["icon", "btn", "blank", "ext_"]):
                     continue
                 if src.startswith("data:image"):

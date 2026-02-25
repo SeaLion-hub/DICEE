@@ -12,7 +12,8 @@ import asyncio
 import heapq
 import logging
 import time
-from typing import Final
+from collections.abc import Awaitable
+from typing import Any, Final, cast
 
 from redis.asyncio import Redis as RedisAsyncio
 
@@ -122,13 +123,17 @@ async def check_rate_limit(
     key = f"{API_RATE_LIMIT_KEY_PREFIX}{identifier}"
     try:
         # eval은 Redis 측에서 Lua 스크립트 캐시를 사용하므로 반복 호출해도 됨.
-        result = await client.eval(
-            _LUA_API_RATE_LIMIT,
-            1,
-            key,
-            str(window_seconds),
-            str(max_requests),
+        raw_result = await cast(
+            Awaitable[Any],
+            client.eval(
+                _LUA_API_RATE_LIMIT,
+                1,
+                key,
+                str(window_seconds),
+                str(max_requests),
+            ),
         )
+        result = cast(str, raw_result)
         try:
             current = int(result)
         except (TypeError, ValueError):

@@ -7,6 +7,8 @@ import logging
 import ssl
 import time
 import uuid
+from collections.abc import Awaitable
+from typing import Any, cast
 
 from redis.asyncio import Redis as RedisAsyncio
 
@@ -233,8 +235,8 @@ async def release_trigger_lock(
         return False
     key = f"{TRIGGER_LOCK_KEY_PREFIX}{college_code}"
     try:
-        n = await client.eval(LUA_RELEASE_IF_OWNER, 1, key, token)
-        return n == 1
+        raw = await cast(Awaitable[Any], client.eval(LUA_RELEASE_IF_OWNER, 1, key, token))
+        return bool(raw == 1)
     except Exception as e:
         logger.warning(
             "Trigger lock release failed (college=%s): %s", college_code, e, exc_info=True
@@ -300,7 +302,7 @@ async def get_trigger_idempotency_result(
             return None
         if raw == IDEMPOTENCY_VALUE_IN_PROGRESS:
             return {"status": "in_progress", "detail": "in_progress", "code": "IDEMPOTENCY_IN_PROGRESS"}
-        return json.loads(raw)
+        return cast(dict[str, Any], json.loads(raw))
     except (json.JSONDecodeError, Exception) as e:
         logger.warning("Trigger idempotency get failed (key=%s): %s", idempotency_key[:32], e)
         return None
@@ -336,11 +338,12 @@ def _get_sync_redis_client():
         if not raw_url.strip():
             return None
         url_stripped = raw_url.strip()
-        ssl_kwargs = {}
+        ssl_kwargs: dict[str, Any] = {}
         if url_stripped.startswith("rediss://"):
-            ssl_kwargs = {"ssl_cert_reqs": ssl.CERT_REQUIRED}
-            if getattr(settings, "redis_ca_certs", None):
-                ssl_kwargs["ssl_ca_certs"] = settings.redis_ca_certs
+            ssl_kwargs["ssl_cert_reqs"] = ssl.CERT_REQUIRED
+            ca = getattr(settings, "redis_ca_certs", None)
+            if ca is not None:
+                ssl_kwargs["ssl_ca_certs"] = ca
         socket_timeout = getattr(settings, "redis_socket_timeout", 5.0)
         socket_connect_timeout = getattr(settings, "redis_socket_connect_timeout", 2.0)
         _sync_redis_client = redis.Redis.from_url(
@@ -372,7 +375,7 @@ def renew_trigger_lock_sync(college_code: str, lock_token: str | None) -> bool:
     try:
         key = f"{TRIGGER_LOCK_KEY_PREFIX}{college_code}"
         n = client.eval(LUA_RENEW_IF_OWNER, 1, key, lock_token, ttl)
-        return n == 1
+        return bool(n == 1)
     except Exception as e:
         logger.warning(
             "Trigger lock renew failed (college=%s): %s", college_code, e, exc_info=True

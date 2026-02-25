@@ -23,12 +23,13 @@ def upload_notice_html(
     공지 본문 HTML을 스토리지에 저장하고 접근 URL을 반환.
     html_content가 None이거나 비면 None 반환.
     """
-    if not (html_content or "").strip():
+    content = (html_content or "").strip()
+    if not content:
         return None
     key = _object_key(college_id, external_id, content_hash)
     if (settings.content_storage_type or "").lower() == "s3" and settings.s3_bucket:
-        return _upload_s3(html_content, key)
-    return _upload_local(html_content, key)
+        return _upload_s3(content, key)
+    return _upload_local(content, key)
 
 
 def _sanitize_external_id_for_key(external_id: str, *, fallback_seed: str | None = None) -> str:
@@ -113,8 +114,8 @@ def _upload_s3(html_content: str, key: str) -> str | None:
         return None
 
 
-def _upload_local(html_content: str, key: str) -> str:
-    """로컬 디렉터리에 저장 후 base_url 또는 상대 경로 반환. file:// 절대 경로는 노출하지 않음."""
+def _upload_local(html_content: str, key: str) -> str | None:
+    """로컬 디렉터리에 저장 후 base_url 또는 상대 경로 반환. 이탈 시 None. file:// 절대 경로는 노출하지 않음."""
     base = Path(settings.content_storage_local_path or "storage/contents").resolve()
     path = (base / key).resolve()
 

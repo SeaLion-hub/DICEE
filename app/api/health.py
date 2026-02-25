@@ -5,6 +5,7 @@ import logging
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
+from redis.asyncio import Redis as RedisAsyncio
 from sqlalchemy import text
 
 from app.core.config import settings
@@ -30,7 +31,7 @@ async def _check_db(request: Request) -> str:
         return "error"
 
 
-async def _ping_redis(client: object | None) -> str:
+async def _ping_redis(client: RedisAsyncio | None) -> str:
     """단일 Redis 클라이언트 PING. None이면 ok(미설정)."""
     if client is None:
         return "ok"

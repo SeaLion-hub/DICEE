@@ -10,7 +10,7 @@ Composer(Cmd+I) 사용 시 **@todo.md**를 반드시 포함해 세션 컨텍스�
 
 | 항목 | 내용 |
 |------|------|
-| **현재 수정 중** | 없음 (md 문서 최신화 완료) |
+| **현재 수정 중** | 없음 (타입·Ruff·crawl_runs 계획 구현 완료) |
 | **발생 중인 이슈** | 없음 |
 | **주의 사항** | 규칙·매뉴얼은 .cursor/rules/·docs/rules/ 참조, WORK_LOG에 실제 수정만 기록 |
 
@@ -48,6 +48,10 @@ Composer(Cmd+I) 사용 시 **@todo.md**를 반드시 포함해 세션 컨텍스�
 - [x] 이슈 2: _BoundedSeenSet max/evict 정책 docs/decisions 문서화
 - [x] pytest 실행 및 수정 반영 (36 passed)
 - [x] md 파일 uptodate 확인 및 최신화 (README·CAUTIONS·error-handling·WORK_LOG·PLAN_REMEDIATION_68)
+- [x] Phase 1: Ruff E501/I001 2건 수정
+- [x] Phase 2 전: mypy 모듈별 스냅샷 MYPY_BASELINE_BY_MODULE.md
+- [x] Phase 2: boto3(types-boto3)·core/main/services/crawlers 타입 수정·ensure_str_attr 헬퍼·mypy overrides 제거
+- [x] Phase 3: crawl_runs 감시·알림 문서·옵션 B 이슈 문서
 
 ---
 

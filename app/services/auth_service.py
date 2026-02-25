@@ -4,7 +4,7 @@ import logging
 import uuid
 from datetime import UTC, datetime, timedelta
 from functools import lru_cache
-from typing import Any
+from typing import Any, cast
 from urllib.parse import unquote, urlparse
 
 import httpx
@@ -97,7 +97,7 @@ async def decode_google_id_token(
             options={"verify_exp": True, "verify_aud": True},
             **key_entry,
         )
-        return payload
+        return cast(dict[str, Any], payload)
     except jwt.InvalidTokenError as e:
         logger.warning("Invalid id_token: %s", e)
         raise AuthError("Invalid id_token") from e
@@ -203,7 +203,7 @@ async def verify_access_token(
             )
             if blocked:
                 raise AuthError("Token revoked or invalid")
-        return payload
+        return cast(dict[str, Any], payload)
     except AuthError:
         raise
     except jwt.InvalidTokenError as e:
@@ -228,7 +228,7 @@ def verify_refresh_token(encoded: str) -> dict[str, Any]:
         )
         if payload.get("type") != "refresh":
             raise AuthError("Invalid token type")
-        return payload
+        return cast(dict[str, Any], payload)
     except jwt.InvalidTokenError as e:
         logger.warning("Invalid refresh token: %s", e)
         raise AuthError("Invalid or expired refresh token") from e

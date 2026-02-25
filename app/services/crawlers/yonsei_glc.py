@@ -10,6 +10,7 @@ from requests.exceptions import RequestException
 
 from app.core.crawl_http import HtmlTooLargeError, fetch_html, fetch_html_async
 from app.services.crawlers.base import ScrapeResult
+from app.services.crawlers.typing_helpers import ensure_str_attr
 
 logger = logging.getLogger(__name__)
 
@@ -194,7 +195,7 @@ async def get_glc_links_async(client: httpx.AsyncClient, url: str):
             if title_td and isinstance(title_td, Tag):
                 a_tag = title_td.find("a")
                 if a_tag and isinstance(a_tag, Tag) and a_tag.get("href"):
-                    full_url = urljoin(url, a_tag.get("href"))
+                    full_url = urljoin(url, ensure_str_attr(a_tag.get("href")))
                     title_div = a_tag.find("div", class_="kboard-default-cut-strings")
                     title = title_div.get_text(strip=True) if isinstance(title_div, Tag) else a_tag.get_text(strip=True)
                     links.append({"no": uid_text, "title": title, "url": full_url})
@@ -228,7 +229,7 @@ async def scrape_glc_detail_async(client: httpx.AsyncClient, url: str):
             for idx, img in enumerate(content_div.find_all("img")):
                 if not isinstance(img, Tag):
                     continue
-                src = (img.get("data-orig-src") or img.get("src")) or ""
+                src = ensure_str_attr(img.get("data-orig-src") or img.get("src"))
                 if src and not any(x in src for x in ["icon", "btn", "blank"]):
                     if src.startswith("data:image"):
                         try:

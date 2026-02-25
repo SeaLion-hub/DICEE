@@ -43,8 +43,9 @@ app.conf.update(
 )
 
 if broker_url.startswith("rediss://"):
-    ssl_options = {"ssl_cert_reqs": ssl.CERT_REQUIRED}
-    if getattr(settings, "redis_ca_certs", None):
-        ssl_options["ssl_ca_certs"] = settings.redis_ca_certs
+    ssl_options: dict[str, str | ssl.VerifyMode] = {"ssl_cert_reqs": ssl.CERT_REQUIRED}
+    ca = getattr(settings, "redis_ca_certs", None)
+    if ca is not None:
+        ssl_options["ssl_ca_certs"] = ca
     app.conf.broker_use_ssl = ssl_options
     app.conf.redis_backend_use_ssl = ssl_options

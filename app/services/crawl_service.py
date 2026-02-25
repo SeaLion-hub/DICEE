@@ -230,8 +230,11 @@ def _process_scrape_result(
             threshold_exc = tracker.record_parser_failure()
             return (None, threshold_exc)
         return (None, exc)
+    assert data is not None
     tracker.record_success()
-    title, date_str, html_content = data.title, data.date_str, data.html_content
+    title = data.title or ""
+    date_str = data.date_str
+    html_content = data.html_content
     images, attachments = data.images, data.attachments
     external_id = post.get("no") or _external_id_from_url(detail_url)
     if external_id in seen:

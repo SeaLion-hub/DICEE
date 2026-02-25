@@ -87,9 +87,8 @@ def test_crawl_college_uses_bounded_seen_set():
     import asyncio
     from unittest.mock import AsyncMock, MagicMock, patch
 
-    from sqlalchemy.ext.asyncio import AsyncSession
-
     from app.services.crawl_service import _BoundedSeenSet, crawl_college
+    from sqlalchemy.ext.asyncio import AsyncSession
 
     seen_captured = []
 

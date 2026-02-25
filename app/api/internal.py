@@ -251,11 +251,11 @@ async def post_trigger_crawl(
         should_cache = (
             claimed
             and redis_client is not None
-            and key_stripped
+            and key_stripped is not None
             and status_code == 200
             and bool(out)
         )
-        if should_cache:
+        if should_cache and key_stripped is not None:
             await set_trigger_idempotency_result(
                 redis_client, key_stripped, idempotency_scope, out
             )

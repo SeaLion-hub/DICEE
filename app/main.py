@@ -2,11 +2,13 @@
 
 import logging
 from contextlib import asynccontextmanager
+from typing import cast
 
 import httpx
 from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.datastructures import State
 
 from app.api import health, internal
 from app.api.v1 import auth as v1_auth
@@ -37,7 +39,7 @@ async def lifespan(app: FastAPI):
     await init_database()
     check_startup_pool_budget()
     state = create_app_state()
-    app.state = state
+    app.state = cast(State, state)
     yield
     await teardown_state(state)
 
