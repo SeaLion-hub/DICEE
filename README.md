@@ -39,7 +39,7 @@
 - 반영 사항: 비동기 백엔드, ORM, 계층형 구조, Playwright 자체 크롤러, Structured AI 출력, Auth(구글 OAuth + JWT, 다중 제공자 확장 가능), Celery rate limit 등.
 - 배포: 백엔드 **Railway**, 프론트 **Vercel**.
 
-**현재**: 3단계 진행 중 (연세대 크롤러 레포 이식·Celery·Redis·trigger-crawl). 단계·마일스톤·구현 현황은 [ROADMAP](docs/ROADMAP.md) 참고.
+**현재**: M2 Intelligence 진행 중 (연세대 크롤러·Celery·Redis·trigger-crawl·분산 락·헬스·Rate limit). 단계·마일스톤·구현 현황은 [ROADMAP](docs/ROADMAP.md)·[ROADMAP_PHASES](docs/ROADMAP_PHASES.md) 참고.
 
 ---
 
@@ -85,10 +85,10 @@ python run.py
 
 **3단계: Celery 워커 (로컬)**
 
-- Redis 실행 후 별도 터미널에서 워커 기동.
+- Redis 실행 후 별도 터미널에서 워커 기동. 진입점은 `app.core.celery_app:app` (DEPLOYMENT·worker.py와 동일).
 - **Windows**: prefork 풀 미지원이므로 **`--pool=solo`** 필수.  
-  `celery -A app.worker worker -l info --pool=solo`
-- Linux/Mac: `celery -A app.worker worker -l info`
+  `celery -A app.core.celery_app:app worker -l info -O fair --pool=solo`
+- Linux/Mac: `celery -A app.core.celery_app:app worker -l info -O fair`
 - trigger-crawl 테스트 시 Windows PowerShell에서는 `curl`이 별칭이므로 **`curl.exe`** 사용 권장.  
   예: `curl.exe -X POST "http://localhost:8000/internal/trigger-crawl?college_code=engineering" -H "X-Crawl-Trigger-Secret: YOUR_SECRET"`
 
@@ -96,9 +96,11 @@ python run.py
 
 ## 주요 엔드포인트
 
-- `GET /health`: 헬스 체크
-- `POST /v1/auth/google`: 구글 OAuth code로 JWT 발급  
-  필요 환경변수: `DATABASE_URL`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `JWT_SECRET`
+- `GET /health`: 프로세스 헬스 (DB/Redis 미체크). 플랫폼 프로브용.
+- `GET /ready`: 준비 상태 (DB·Redis blocklist·trigger_lock). 배포·모니터링용.
+- `GET /live`: Liveness.
+- `POST /v1/auth/google`: 구글 OAuth code로 JWT 발급.  
+  필요 환경변수: `DATABASE_URL`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `JWT_SECRET`(또는 RS256 시 `JWT_PRIVATE_KEY_PEM`·`JWT_PUBLIC_KEY_PEM`)
 
 API 전체 목록·스키마는 실행 후 **Swagger UI** (`/docs`)에서 확인.
 

@@ -156,7 +156,7 @@
 
 1. **크롤러에 무한정 기다리는 HTTP 통신이 있는가?** → `requests.get`에 `timeout` 누락 여부 grep. (현재 전 크롤러 timeout=10 적용. 유지.)
 2. **조용히 넘기는 예외(pass)가 핵심 데이터를 훼손하지 않는가?** → `_parse_published_at`, `_external_id_from_url` 등에서 pass 제거·구체 예외+로그 연결 여부 확인.
-3. **.env.example과 Railway Variables 동기화되었는가?** → DEPLOYMENT 표·.env.example에 필수 변수 목록 명시. 배포 시 Railway Settings와 대조(DATABASE_URL 포맷 `postgresql+asyncpg://`, JWT_SECRET, GOOGLE_CLIENT_ID/SECRET 등).
+3. **.env.example과 Railway Variables 동기화되었는가?** → DEPLOYMENT 표·.env.example에 필수 변수 목록 명시. 배포 시 Railway Settings와 대조(DATABASE_URL 포맷 `postgresql+psycopg://`, JWT_SECRET 또는 RS256 키, GOOGLE_CLIENT_ID/SECRET 등).
 
 ---
 
