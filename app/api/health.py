@@ -6,16 +6,14 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
-from app.core.database import get_async_session_maker
-
 router = APIRouter(tags=["health"])
 
 HEALTH_REDIS_PING_TIMEOUT = 2.0
 
 
 async def _check_db(request: Request) -> str:
-    """DB 연결 상태. SELECT 1 실행. app.state 또는 _db_holder에서 세션 팩토리 사용."""
-    maker = getattr(request.app.state, "async_session_maker", None) or get_async_session_maker()
+    """DB 연결 상태. SELECT 1 실행. app.state.async_session_maker 단일 경로만 사용."""
+    maker = getattr(request.app.state, "async_session_maker", None)
     if not maker:
         return "error"
     try:

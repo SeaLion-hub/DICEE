@@ -9,7 +9,9 @@
 
 - **직전 피어(peer) IP 검증**: 앱이 받는 TCP 연결의 상대편 IP(`request.client.host`)가 **신뢰할 수 있는 프록시 목록(TRUSTED_PROXY_IPS)**에 있을 때만 `X-Forwarded-For` 헤더를 사용한다.
 - **목록에 없거나 비어 있으면**: `X-Forwarded-For`는 무시하고 `request.client.host`만 클라이언트 IP로 사용한다.
-- **헤더 사용 시**: `X-Forwarded-For`의 **첫 번째 값**(클라이언트에 가장 가까운 IP)을 사용한다. (쉼표 구분 체인에서 왼쪽이 클라이언트 측.)
+- **역순 훑기**: 헤더 사용 시 `X-Forwarded-For`를 쉼표로 split한 리스트를 **오른쪽→왼쪽**으로 훑어, **신뢰 목록에 없는 첫 번째 IP**를 클라이언트 IP 후보로 채택한다. 모두 신뢰 목록에 있으면 **맨 왼쪽**(클라이언트에 가장 가까운) IP를 사용한다.
+- **RFC 1918 필터링**: 후보 IP가 사설 대역(10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8)이면 클라이언트 IP로 사용하지 않고 `request.client.host`로 fallback 한다.
+- **비정상 포맷**: IP 개수 상한(32개 초과) 또는 비IP 문자열 포함 시 `request.client.host`로 fallback 한다.
 
 ---
 

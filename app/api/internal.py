@@ -22,6 +22,7 @@ from app.core.redis import (
     get_trigger_idempotency_result,
     release_trigger_lock,
     set_trigger_idempotency_result,
+    try_claim_trigger_idempotency,
 )
 from app.repositories.crawl_run_repository import get_recent_crawl_runs
 
@@ -69,11 +70,18 @@ async def post_trigger_crawl(
     """
     _validate_trigger_secret(x_crawl_trigger_secret, authorization)
 
-    # Idempotency: 이미 처리된 결과가 있으면 202 + 캐시 반환 (재요청 시 중복 enqueue 방지).
-    if idempotency_key and idempotency_key.strip():
-        cached = await get_trigger_idempotency_result(redis_client, idempotency_key.strip())
-        if cached is not None:
-            return JSONResponse(status_code=202, content=cached)
+    # Idempotency: 원자적 슬롯 점유(SET NX). 점유 실패 시 202(in_progress 또는 캐시된 결과).
+    key_stripped = idempotency_key.strip() if idempotency_key and idempotency_key.strip() else None
+    if key_stripped and redis_client is not None:
+        claimed = await try_claim_trigger_idempotency(redis_client, key_stripped)
+        if not claimed:
+            cached = await get_trigger_idempotency_result(redis_client, key_stripped)
+            if cached is not None:
+                return JSONResponse(status_code=202, content=cached)
+            return JSONResponse(
+                status_code=202,
+                content={"detail": "in_progress", "code": "IDEMPOTENCY_IN_PROGRESS"},
+            )
 
     # 운영 모드: Redis trigger-lock 필수 시 미설정이면 503 (중복 실행 방어 유지).
     if redis_client is None and getattr(settings, "redis_trigger_lock_required", False):
@@ -141,8 +149,8 @@ async def post_trigger_crawl(
         out["skipped"] = skipped
     if failed:
         out["failed"] = failed
-    if idempotency_key and idempotency_key.strip() and redis_client is not None:
-        await set_trigger_idempotency_result(redis_client, idempotency_key.strip(), out)
+    if key_stripped and redis_client is not None:
+        await set_trigger_idempotency_result(redis_client, key_stripped, out)
     return JSONResponse(status_code=200, content=out)
 
 

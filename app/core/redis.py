@@ -1,7 +1,9 @@
 """Redis 비동기 클라이언트. Blocklist(Access Token 무효화)용. 풀 크기 명시로 동시 처리량 대응."""
 
+import asyncio
 import json
 import logging
+import time
 import uuid
 
 from redis.asyncio import Redis as RedisAsyncio
@@ -98,17 +100,70 @@ def create_trigger_lock_client() -> RedisAsyncio | None:
     return redis.Redis(connection_pool=pool)
 
 
-async def add_access_to_blocklist(
+async def _add_access_to_blocklist_raw(
     client: RedisAsyncio | None, jti: str, ttl_seconds: int
 ) -> None:
-    """Access Token jti를 Blocklist에 추가. TTL로 자동 만료. client는 redis.asyncio.Redis."""
+    """Blocklist 추가(원시). Circuit Breaker에서 호출."""
     if client is None or ttl_seconds <= 0:
         return
     key = f"{BLOCKLIST_KEY_PREFIX}{jti}"
+    await client.set(key, "1", ex=ttl_seconds)
+
+
+class BlocklistCircuitBreaker:
+    """Blocklist Redis 호출 래퍼. 연속 실패 시 열림(open) → Fail-open(서명만 검증 통과)."""
+
+    def __init__(self) -> None:
+        self._failures = 0
+        self._open_until = 0.0
+        self._state = "closed"  # closed | open | half_open
+        self._lock = asyncio.Lock()
+
+    async def _record_success(self) -> None:
+        async with self._lock:
+            self._failures = 0
+            if self._state == "half_open":
+                self._state = "closed"
+
+    async def _record_failure(self) -> None:
+        async with self._lock:
+            self._failures += 1
+            if self._failures >= getattr(
+                settings, "redis_blocklist_circuit_failure_threshold", 5
+            ):
+                self._state = "open"
+                self._open_until = time.monotonic() + getattr(
+                    settings, "redis_blocklist_circuit_open_seconds", 30.0
+                )
+
+    async def _maybe_try_half_open(self) -> bool:
+        async with self._lock:
+            if self._state == "open" and time.monotonic() >= self._open_until:
+                self._state = "half_open"
+                return True
+            return self._state == "closed" or self._state == "half_open"
+
+    def _is_open(self) -> bool:
+        return self._state == "open"
+
+
+_blocklist_circuit = BlocklistCircuitBreaker()
+
+
+async def add_access_to_blocklist(
+    client: RedisAsyncio | None, jti: str, ttl_seconds: int
+) -> None:
+    """Access Token jti를 Blocklist에 추가. Circuit Breaker 적용. 열림 시 no-op(Fail-open)."""
+    if client is None or ttl_seconds <= 0:
+        return
+    if not await _blocklist_circuit._maybe_try_half_open():
+        return
     try:
-        await client.set(key, "1", ex=ttl_seconds)
+        await _add_access_to_blocklist_raw(client, jti, ttl_seconds)
+        await _blocklist_circuit._record_success()
     except Exception as e:
         logger.warning("Blocklist add failed (jti=%s): %s", jti, e, exc_info=True)
+        await _blocklist_circuit._record_failure()
         raise
 
 
@@ -162,10 +217,35 @@ async def release_trigger_lock(
         return False
 
 
+IDEMPOTENCY_VALUE_IN_PROGRESS = "in_progress"
+
+
+async def try_claim_trigger_idempotency(
+    client: RedisAsyncio | None, idempotency_key: str
+) -> bool:
+    """
+    Idempotency-Key 슬롯을 원자적으로 점유. SET key NX EX.
+    성공 시 True(이번 요청이 처리 담당), 이미 존재 시 False(다른 요청이 점유 중 또는 완료).
+    """
+    if client is None or not idempotency_key:
+        return True  # Redis 없으면 클레임 검사 생략, 기존처럼 진행
+    key = f"{TRIGGER_IDEMPOTENCY_KEY_PREFIX}{idempotency_key}"
+    try:
+        ok = await client.set(
+            key, IDEMPOTENCY_VALUE_IN_PROGRESS, nx=True, ex=TRIGGER_IDEMPOTENCY_TTL_SECONDS
+        )
+        return bool(ok)
+    except Exception as e:
+        logger.warning(
+            "Trigger idempotency claim failed (key=%s): %s", idempotency_key[:32], e
+        )
+        return False  # 실패 시 중복 처리 허용하지 않고 202 경로로 유도
+
+
 async def get_trigger_idempotency_result(
     client: RedisAsyncio | None, idempotency_key: str
 ) -> dict | None:
-    """동일 Idempotency-Key로 이미 처리된 결과가 있으면 반환. 없으면 None."""
+    """동일 Idempotency-Key로 이미 처리된 결과가 있으면 반환. 없으면 None. in_progress 값은 완료가 아니므로 None으로 취급하지 않고 별도 처리."""
     if client is None or not idempotency_key:
         return None
     key = f"{TRIGGER_IDEMPOTENCY_KEY_PREFIX}{idempotency_key}"
@@ -173,6 +253,8 @@ async def get_trigger_idempotency_result(
         raw = await client.get(key)
         if raw is None:
             return None
+        if raw == IDEMPOTENCY_VALUE_IN_PROGRESS:
+            return {"status": "in_progress", "detail": "in_progress", "code": "IDEMPOTENCY_IN_PROGRESS"}
         return json.loads(raw)
     except (json.JSONDecodeError, Exception) as e:
         logger.warning("Trigger idempotency get failed (key=%s): %s", idempotency_key[:32], e)
@@ -243,19 +325,34 @@ def release_trigger_lock_sync(college_code: str, lock_token: str | None) -> None
         )
 
 
+async def _is_access_blocked_raw(
+    client: RedisAsyncio | None, jti: str
+) -> bool:
+    """Blocklist 조회(원시). Circuit Breaker에서 호출."""
+    if client is None:
+        return False
+    key = f"{BLOCKLIST_KEY_PREFIX}{jti}"
+    exists = await client.exists(key)
+    return bool(exists)
+
+
 async def is_access_blocked(
     client: RedisAsyncio | None, jti: str, *, fail_closed: bool
 ) -> bool:
     """
-    jti가 Blocklist에 있으면 True(무효).
-    Redis 장애 시: fail_closed=True면 True(인증 거부), False면 False(서명만 믿고 통과).
+    jti가 Blocklist에 있으면 True(무효). Circuit Breaker 적용.
+    열림(open) 시 Fail-open: False 반환(서명만 검증 통과).
+    Redis 장애 시: fail_closed=True면 True(인증 거부), False면 False.
     """
     if client is None:
         return False
-    key = f"{BLOCKLIST_KEY_PREFIX}{jti}"
+    if not await _blocklist_circuit._maybe_try_half_open():
+        return False
     try:
-        exists = await client.exists(key)
-        return bool(exists)
+        result = await _is_access_blocked_raw(client, jti)
+        await _blocklist_circuit._record_success()
+        return result
     except Exception as e:
         logger.warning("Blocklist check failed (jti=%s): %s", jti, e, exc_info=True)
+        await _blocklist_circuit._record_failure()
         return fail_closed

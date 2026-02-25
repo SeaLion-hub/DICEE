@@ -5,13 +5,15 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app.core.config import settings
+from app.core.database import get_db
 from app.core.deps import get_google_key_fetcher, get_httpx_client, get_redis_blocklist
-from app.schemas.auth import TokenPayload, TokenResponse
+from app.schemas.auth import RefreshTokenPayload, TokenPayload, TokenResponse
 from app.services.auth_service import (
     AuthError,
     AuthServiceUnavailableError,
     google_login,
     logout_user,
+    refresh_tokens,
     verify_access_token,
 )
 
@@ -57,20 +59,54 @@ async def get_current_user_id_and_jti(
         raise HTTPException(status_code=401, detail="Invalid or expired token") from None
 
 
+# X-Forwarded-For 역순 훑기: 최대 IP 개수. 초과 시 request.client.host 사용.
+_XFF_MAX_IPS = 32
+
+# RFC 1918 사설 대역. 후보 IP가 여기 있으면 클라이언트 IP로 사용하지 않고 fallback.
+def _is_private_ip(ip: str) -> bool:
+    if not ip or not ip.strip():
+        return True
+    parts = ip.strip().split(".")
+    if len(parts) != 4:
+        return True
+    try:
+        a, b, c, d = (int(p) for p in parts)
+    except ValueError:
+        return True
+    if a == 10:
+        return True
+    if a == 172 and 16 <= b <= 31:
+        return True
+    if a == 192 and b == 168:
+        return True
+    if a == 127:
+        return True
+    return False
+
+
 def _client_ip_from_request(request: Request) -> str | None:
     """
-    클라이언트 IP. 명세 3.2: 평문은 DB에 저장하지 않고 ip_hmac만 저장.
-    직전 피어(request.client.host)가 TRUSTED_PROXY_IPS에 있을 때만 X-Forwarded-For 첫 값을 사용.
-    목록에 없거나 비어 있으면 X-Forwarded-For를 신뢰하지 않고 request.client.host만 반환.
+    클라이언트 IP. 역순 훑기: X-Forwarded-For를 오른쪽→왼쪽으로 훑어 신뢰 목록에 없는 첫 IP 채택.
+    직전 피어가 trusted가 아니면 request.client.host만 사용. RFC 1918 후보는 fallback.
     """
+    if not request.client:
+        return None
+    fallback = request.client.host
     trusted = settings.trusted_proxy_ips_set
-    if request.client and request.client.host in trusted:
-        forwarded = request.headers.get("x-forwarded-for")
-        if forwarded:
-            return forwarded.split(",")[0].strip()
-    if request.client:
-        return request.client.host
-    return None
+    if request.client.host not in trusted:
+        return fallback
+    forwarded = request.headers.get("x-forwarded-for")
+    if not forwarded or not forwarded.strip():
+        return fallback
+    parts = [p.strip() for p in forwarded.split(",") if p.strip()]
+    if len(parts) > _XFF_MAX_IPS:
+        return fallback
+    for ip in reversed(parts):
+        if ip not in trusted:
+            if _is_private_ip(ip):
+                return fallback
+            return ip
+    return parts[0] if parts else fallback
 
 
 @router.post("/google", response_model=TokenResponse)
@@ -97,6 +133,21 @@ async def post_google_auth(
         raise HTTPException(status_code=503, detail=str(e)) from e
     except AuthError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@router.post("/refresh", response_model=TokenResponse)
+async def post_refresh(
+    payload: RefreshTokenPayload,
+    session=Depends(get_db),
+) -> TokenResponse:
+    """
+    Refresh 토큰으로 새 Access/Refresh JWT 발급.
+    type=refresh, token_version 검증 후 새 쌍 반환. 무효화된 토큰 시 401.
+    """
+    try:
+        return await refresh_tokens(payload.refresh_token, session)
+    except AuthError as e:
+        raise HTTPException(status_code=401, detail=str(e)) from e
 
 
 @router.post("/logout", status_code=204)

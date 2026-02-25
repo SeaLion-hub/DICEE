@@ -4,6 +4,7 @@ import logging
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
+from urllib.parse import urlparse, unquote
 
 import httpx
 import jwt
@@ -208,6 +209,57 @@ async def verify_access_token(
         raise AuthError("Invalid or expired token") from e
 
 
+def verify_refresh_token(encoded: str) -> dict[str, Any]:
+    """
+    Refresh JWT 검증. type=refresh, token_version, sub, exp 필수.
+    불일치/만료 시 AuthError. 반환 payload에는 sub, token_version 포함.
+    """
+    key, algorithm = _jwt_decode_key_and_algorithm()
+    try:
+        payload = jwt.decode(
+            encoded,
+            key,
+            algorithms=[algorithm],
+            issuer=settings.jwt_issuer,
+            audience=settings.jwt_audience,
+            options={"require": ["exp", "iat", "sub", "type", "token_version"]},
+        )
+        if payload.get("type") != "refresh":
+            raise AuthError("Invalid token type")
+        return payload
+    except jwt.InvalidTokenError as e:
+        logger.warning("Invalid refresh token: %s", e)
+        raise AuthError("Invalid or expired refresh token") from e
+
+
+async def refresh_tokens(
+    refresh_token: str,
+    session: AsyncSession,
+) -> TokenResponse:
+    """
+    Refresh 토큰으로 새 Access/Refresh 쌍 발급.
+    token_version이 DB의 User.refresh_token_version과 일치할 때만 발급. 불일치 시 AuthError(무효화된 토큰).
+    """
+    from app.repositories.user_repository import get_by_id
+
+    payload = verify_refresh_token(refresh_token)
+    user_id = uuid.UUID(payload["sub"])
+    token_version = int(payload["token_version"])
+    user = await get_by_id(session, user_id)
+    if not user:
+        raise AuthError("User not found")
+    current_version = getattr(user, "refresh_token_version", 0)
+    if current_version != token_version:
+        raise AuthError("Refresh token revoked or invalid")
+    access_token, new_refresh_token = create_jwt_pair(user.id, token_version=current_version)
+    return TokenResponse(
+        access_token=access_token,
+        refresh_token=new_refresh_token,
+        token_type="bearer",
+        expires_in=settings.jwt_access_expire_seconds,
+    )
+
+
 async def revoke_refresh_tokens_for_user(
     session: AsyncSession, user_id: uuid.UUID
 ) -> None:
@@ -215,12 +267,44 @@ async def revoke_refresh_tokens_for_user(
     await increment_refresh_token_version(session, user_id)
 
 
+def _normalize_redirect_uri(uri: str) -> str:
+    """
+    redirect_uri 정규화: scheme·netloc 소문자, path 한 번만 unquote, query·fragment 있으면 거부.
+    더블 인코딩 방어: unquote 1회 후 path에 '%'가 남아 있으면 거부.
+    """
+    s = (uri or "").strip()
+    if not s:
+        raise AuthError("redirect_uri required")
+    parsed = urlparse(s)
+    scheme = (parsed.scheme or "").lower()
+    if scheme not in ("http", "https"):
+        raise AuthError("redirect_uri must be http or https")
+    netloc = (parsed.netloc or "").lower()
+    path = parsed.path or "/"
+    path_unescaped = unquote(path)
+    if "%" in path_unescaped:
+        raise AuthError("redirect_uri invalid encoding")
+    path = path_unescaped.rstrip("/") or "/"
+    if parsed.query or parsed.fragment:
+        raise AuthError("redirect_uri must not contain query or fragment")
+    return f"{scheme}://{netloc}{path}"
+
+
 def _allowed_redirect_uris() -> set[str]:
-    """설정된 허용 redirect_uri 목록(쉼표 구분). 비어 있으면 빈 set(검사 생략)."""
+    """설정된 허용 redirect_uri 목록(쉼표 구분). 정규화 후 set 반환. 비어 있으면 빈 set."""
     raw = (settings.google_redirect_uris or "").strip()
     if not raw:
         return set()
-    return {u.strip() for u in raw.split(",") if u.strip()}
+    result: set[str] = set()
+    for u in raw.split(","):
+        u = u.strip()
+        if not u:
+            continue
+        try:
+            result.add(_normalize_redirect_uri(u))
+        except AuthError:
+            continue
+    return result
 
 
 async def google_login(
@@ -239,12 +323,13 @@ async def google_login(
     4. User upsert, JWT 발급
     """
     allowed = _allowed_redirect_uris()
-    # Default-Deny: allowlist 비어 있으면 로그인 거부. 비어 있지 않으면 redirect_uri 필수 + exact match.
     if not allowed:
         raise AuthError("OAuth redirect allowlist must be configured")
-    if not redirect_uri or not redirect_uri.strip():
-        raise AuthError("redirect_uri required")
-    if redirect_uri.strip() not in allowed:
+    try:
+        normalized = _normalize_redirect_uri(redirect_uri or "")
+    except AuthError:
+        raise
+    if normalized not in allowed:
         raise AuthError("redirect_uri not allowed")
     token_data = await exchange_google_code(code, redirect_uri, http_client)
     id_token = token_data.id_token

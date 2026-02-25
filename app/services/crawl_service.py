@@ -25,7 +25,11 @@ import httpx
 from app.core.config import settings
 from app.core.constants import CrawlRunStatus
 from app.core.crawl_http import HtmlTooLargeError
-from app.core.crawl_rate_limit import HostRateLimiter, host_from_url
+from app.core.crawl_rate_limit import (
+    HostRateLimiter,
+    get_host_rate_limiter_sync,
+    host_from_url,
+)
 from app.services.crawl_policy import (
     CrawlThresholdExceeded,
     PARSER_CONSECUTIVE_FAILURES_THRESHOLD,
@@ -319,7 +323,7 @@ def _collect_payloads_sync(
     """
     if seen is None:
         seen = set()
-    rate_limiter = HostRateLimiter(delay_sec)
+    rate_limiter = get_host_rate_limiter_sync(delay_sec)
     attempted = 0
     parser_failures = 0
     consecutive_parser_failures = 0

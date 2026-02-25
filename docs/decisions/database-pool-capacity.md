@@ -37,6 +37,12 @@
 * **결정**: `DB_MAX_CONNECTIONS`가 설정된 경우, 부팅 시 `Peak_pool_conn > App_budget`이면 **기본은 로그 warning**, `DB_POOL_STRICT_BUDGET=true`이면 **부팅 실패**로 둔다.
 * **이유**: 풀·인스턴스 수를 환경 변수로 키우다 보면 예산을 넘길 수 있어, **과도한 값**에 대한 방지 장치가 필요하다. 선택적 strict 모드로 운영 정책에 맞출 수 있다.
 
+### 5.1 동적 max_connections 조회
+
+* **결정**: `verify_db_connection()` 성공 시 PostgreSQL `SELECT current_setting('max_connections')::int`로 **실제 DB max_connections**를 조회해 저장한다. `check_pool_budget(max_conn_override=...)`에 이 값을 넘기면 환경 변수 대신 동적 값으로 예산 검사를 수행한다.
+* **이유**: DB 쪽 설정 변경 시 앱이 이를 반영할 수 있다. `DB_MAX_CONNECTIONS`는 fallback·오버라이드용으로 유지한다.
+* **적용**: lifespan에서 `verify_db_connection()` 후 `check_pool_budget(max_conn_override=get_resolved_max_connections())` 호출.
+
 ---
 
 ## 6. Statement timeout (장기 쿼리 방어)

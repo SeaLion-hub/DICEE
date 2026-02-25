@@ -10,19 +10,30 @@ logger = logging.getLogger(__name__)
 
 
 def _parse_allowed_origins(value: str) -> list[str]:
-    """CSV 또는 JSON 문자열을 list[str]로 파싱. 런타임/플랫폼 차이 대비."""
+    """JSON 배열만 파싱. ALLOWED_ORIGINS는 JSON 배열 형식만 지원. 예: [\"https://a.com\",\"https://b.com\"]"""
     if not value or not value.strip():
         return []
     s = value.strip()
-    if s.startswith("["):
-        try:
-            parsed = json.loads(s)
-            if isinstance(parsed, list):
-                return [str(x).strip() for x in parsed if str(x).strip()]
-            return []
-        except (json.JSONDecodeError, TypeError):
-            pass
-    return [o.strip() for o in s.split(",") if o.strip()]
+    if not s.startswith("["):
+        raise ValueError(
+            "ALLOWED_ORIGINS must be a JSON array. Example: [\"https://example.com\"]"
+        )
+    try:
+        parsed = json.loads(s)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"ALLOWED_ORIGINS invalid JSON: {e}") from e
+    if not isinstance(parsed, list):
+        raise ValueError("ALLOWED_ORIGINS must be a JSON array.")
+    origins = [str(x).strip() for x in parsed if str(x).strip()]
+    for o in origins:
+        if o == "*":
+            raise ValueError(
+                "ALLOWED_ORIGINS cannot contain '*' when allow_credentials is True. "
+                "Specify explicit origins as JSON array."
+            )
+        if not (o.startswith("http://") or o.startswith("https://")):
+            raise ValueError(f"ALLOWED_ORIGINS entry must be http(s) URL: {o!r}")
+    return origins
 
 
 class Settings(BaseSettings):
@@ -92,6 +103,10 @@ class Settings(BaseSettings):
     redis_socket_connect_timeout: float = Field(2.0, ge=0.5, le=30.0)
     # Blocklist: Redis 장애 시 정책. True=Fail-Closed(인증 거부), False=Fail-Open(서명만 검증 후 통과).
     redis_blocklist_fail_closed: bool = True
+    # Blocklist Circuit Breaker: 연속 실패 N회 시 열림, open_seconds 동안 Fail-open.
+    redis_blocklist_circuit_failure_threshold: int = Field(5, ge=1, le=50)
+    redis_blocklist_circuit_open_seconds: float = Field(30.0, ge=5.0, le=300.0)
+    redis_blocklist_circuit_half_open_interval_seconds: float = Field(10.0, ge=2.0, le=60.0)
     # Blocklist용 Redis 비동기 풀 크기. Uvicorn 워커 동시 처리량에 맞게 설정.
     redis_blocklist_max_connections: int = Field(20, ge=1, le=100)
     # Trigger 락용 Redis 비동기 풀 크기. 인증 풀과 분리해 장애 전파 완화(단일 Redis는 SPOF).
@@ -101,6 +116,8 @@ class Settings(BaseSettings):
     # True면 Redis 미설정/실패 시 락 없이 진행하지 않고 503. 운영 모드에서만 True 권장.
     redis_trigger_lock_required: bool = False
     crawl_trigger_secret: SecretStr | None = None
+    # True일 때만 AI 파이프라인(Gemini 등) 실행 및 done 저장. False면 process_notice_ai_task는 스킵(pending 유지).
+    ai_pipeline_enabled: bool = False
     # 요청/페이지 간 최소 딜레이(초). 대상 서버 부하·IP 차단 완화용.
     polite_delay_seconds: float = Field(1.0, ge=0.1, le=60.0)
 
@@ -141,6 +158,8 @@ class Settings(BaseSettings):
         )
         if not has_jwt_secret and not has_rs256:
             missing.append("JWT_SECRET or (JWT_PRIVATE_KEY_PEM + JWT_PUBLIC_KEY_PEM)")
+        if not (self.ip_hmac_key.get_secret_value() or "").strip():
+            missing.append("IP_HMAC_KEY")
         if missing:
             raise ValueError(
                 f"Production environment requires these variables to be set: {', '.join(missing)}. "
@@ -150,7 +169,7 @@ class Settings(BaseSettings):
 
     @property
     def allowed_origins_list(self) -> list[str]:
-        """CORS 허용 오리진 리스트. CSV/JSON 파싱 결과. 빈 문자열이면 []."""
+        """CORS 허용 오리진 리스트. JSON 배열만 지원. '*' 포함 시 ValueError(allow_credentials 사용 시)."""
         return _parse_allowed_origins(self.allowed_origins)
 
     @property
@@ -161,12 +180,13 @@ class Settings(BaseSettings):
         )
 
 
-def check_pool_budget() -> tuple[bool, int, int]:
+def check_pool_budget(max_conn_override: int | None = None) -> tuple[bool, int, int]:
     """
-    풀 예산 검사. DB_MAX_CONNECTIONS 미설정 시 검사 생략(True 반환).
+    풀 예산 검사. max_conn_override 또는 DB_MAX_CONNECTIONS 사용. 둘 다 미설정 시 검사 생략(True 반환).
+    부팅 후 verify_db_connection()에서 조회한 max_connections를 override로 넘기면 동적 값 반영.
     반환: (within_budget, peak_conn, app_budget).
     """
-    max_conn = settings.db_max_connections
+    max_conn = max_conn_override if max_conn_override is not None else settings.db_max_connections
     if max_conn is None:
         return True, 0, 0
     api_conn = (

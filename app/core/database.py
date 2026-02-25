@@ -3,9 +3,10 @@
 import asyncio
 import logging
 import sys
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
+from enum import Enum
 from typing import Any
 
 from fastapi import Request
@@ -22,6 +23,15 @@ from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
+
+class Propagation(str, Enum):
+    """중첩 트랜잭션 전파 정책. SessionScope에서만 사용."""
+
+    REQUIRED = "required"  # 기존 세션 참여, 없으면 새로 생성. 내부 commit/rollback은 외부에 전파하지 않음.
+    REQUIRES_NEW = "requires_new"  # 항상 새 세션. 독립 commit/rollback. ContextVar에 넣지 않음.
+    NESTED = "nested"  # 기존 세션 있으면 savepoint, 없으면 REQUIRED와 동일.
+
+
 # Holder: 테스트에서 오버라이드 가능. 전역 뮤테이션 대신 getter로 접근.
 class _DbHolder:
     engine: AsyncEngine | None = None
@@ -30,7 +40,16 @@ class _DbHolder:
 
 _db_holder = _DbHolder()
 
-# 동일 컨텍스트 내 세션 전파. transaction() 진입 시 set, finally에서 reset(token)으로 누수 방지.
+# verify_db_connection()에서 조회한 DB max_connections. check_pool_budget 오버라이드용.
+_resolved_max_connections: int | None = None
+
+
+def get_resolved_max_connections() -> int | None:
+    """부팅 시 DB에서 조회한 max_connections. 미조회 시 None."""
+    return _resolved_max_connections
+
+
+# SessionScope를 통해서만 set/reset. 직접 _session_context.set/reset 호출 금지.
 _session_context: ContextVar[AsyncSession | None] = ContextVar(
     "session_context", default=None
 )
@@ -87,18 +106,6 @@ def init_db() -> None:
     except Exception as e:
         logger.warning("DB URL parse check failed: %s", e)
 
-    from app.core.config import check_pool_budget
-
-    within_budget, peak_conn, app_budget = check_pool_budget()
-    if not within_budget and peak_conn > 0 and app_budget >= 0:
-        msg = (
-            f"Pool budget exceeded: peak_conn={peak_conn} > app_budget={app_budget}. "
-            "Adjust pool sizes or DB_MAX_CONNECTIONS. See DEPLOYMENT.md."
-        )
-        if settings.db_pool_strict_budget:
-            raise ValueError(msg)
-        logger.warning(msg)
-
     connect_args: dict = {}
     
     _db_holder.engine = create_async_engine(
@@ -140,10 +147,20 @@ async def verify_db_connection() -> None:
     retries = max(1, settings.db_connect_retries)
     interval = max(0.5, settings.db_connect_retry_interval_sec)
 
+    global _resolved_max_connections
     for attempt in range(1, retries + 1):
         try:
             async with maker() as session:
                 await session.execute(text("SELECT 1"))
+                try:
+                    result = await session.execute(
+                        text("SELECT current_setting('max_connections')::int")
+                    )
+                    val = result.scalar_one_or_none()
+                    if val is not None:
+                        _resolved_max_connections = int(val)
+                except Exception as e:
+                    logger.debug("Could not fetch max_connections: %s", e)
             return
         except Exception as exc:
             last_exc = exc
@@ -186,9 +203,9 @@ async def verify_db_connection() -> None:
 
 async def get_db(request: Request) -> AsyncGenerator[AsyncSession, None]:
     """
-    FastAPI Depends용 비동기 DB 세션 생성기.
+    FastAPI Depends용 비동기 DB 세션 생성기. app.state.async_session_maker 단일 경로만 사용.
     """
-    maker = getattr(request.app.state, "async_session_maker", None) or get_async_session_maker()
+    maker = getattr(request.app.state, "async_session_maker", None)
     if not maker:
         raise RuntimeError("Database not initialized. Set DATABASE_URL.")
 
@@ -197,24 +214,36 @@ async def get_db(request: Request) -> AsyncGenerator[AsyncSession, None]:
 
 
 @asynccontextmanager
-async def transaction() -> AsyncGenerator[AsyncSession, None]:
+async def session_scope(
+    session_factory: async_sessionmaker[AsyncSession] | None,
+    propagation: Propagation = Propagation.REQUIRED,
+) -> AsyncGenerator[AsyncSession, None]:
     """
-    서비스 레이어용 트랜잭션 컨텍스트 매니저. 성공 시 commit, 예외 시 rollback.
+    세션 스코프. ContextVar는 이 매니저를 통해서만 set/reset됨.
+    REQUIRED: 기존 세션 참여 또는 새로 생성(commit/rollback 소유).
+    REQUIRES_NEW: 항상 새 세션, 독립 commit/rollback.
+    NESTED: 기존 세션 있으면 savepoint, 없으면 REQUIRED와 동일.
     """
-    maker = get_async_session_maker()
-    if not maker:
+    if not session_factory:
         raise RuntimeError("Database not initialized. Set DATABASE_URL.")
 
     existing = _session_context.get()
-    if existing is not None:
+    if propagation == Propagation.REQUIRED and existing is not None:
         yield existing
         return
 
+    if propagation == Propagation.NESTED and existing is not None:
+        async with existing.begin_nested():
+            yield existing
+        return
+
+    # REQUIRES_NEW 또는 REQUIRED/NESTED에서 기존 세션 없음: 새 세션 생성
     session: AsyncSession | None = None
     token: Any = None
     try:
-        session = maker()
-        token = _session_context.set(session)
+        session = session_factory()
+        if propagation == Propagation.REQUIRED:
+            token = _session_context.set(session)
         try:
             yield session
             await session.commit()
@@ -226,3 +255,25 @@ async def transaction() -> AsyncGenerator[AsyncSession, None]:
             _session_context.reset(token)
         if session is not None:
             await session.close()
+
+
+@asynccontextmanager
+async def transaction() -> AsyncGenerator[AsyncSession, None]:
+    """서비스 레이어용 트랜잭션. SessionScope(REQUIRED) 호환 레이어."""
+    maker = get_async_session_maker()
+    async with session_scope(maker, Propagation.REQUIRED) as session:
+        yield session
+
+
+async def run_in_session(
+    session_factory: async_sessionmaker[AsyncSession] | None,
+    fn: Callable[[AsyncSession], Awaitable[Any]],
+) -> Any:
+    """
+    비요청 컨텍스트(Celery 등)에서 단일 진입점. 세션 생성 후 fn(session) 호출.
+    fn은 async def(session) 시그니처. 전역 상태에 손대지 않고 세션만 명시 전달.
+    """
+    if not session_factory:
+        raise RuntimeError("Database not initialized. Set DATABASE_URL.")
+    async with session_scope(session_factory, Propagation.REQUIRES_NEW) as session:
+        return await fn(session)
