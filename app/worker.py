@@ -12,9 +12,10 @@ from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
-# broker_url 없으면 기본값(로컬 개발 시 수동 설정 필요)
-broker_url = settings.redis_url or "redis://localhost:6379/0"
-result_backend = settings.redis_url or "redis://localhost:6379/0"
+# broker_url 없으면 기본값(로컬 개발 시 수동 설정 필요). 공백 문자열은 미설정으로 취급.
+_raw_redis_url = (settings.redis_url or "").strip()
+broker_url = _raw_redis_url or "redis://localhost:6379/0"
+result_backend = _raw_redis_url or "redis://localhost:6379/0"
 
 app = Celery(
     "app",

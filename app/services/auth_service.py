@@ -3,6 +3,7 @@
 import logging
 import uuid
 from datetime import UTC, datetime, timedelta
+from functools import lru_cache
 from typing import Any
 from urllib.parse import urlparse, unquote
 
@@ -290,6 +291,7 @@ def _normalize_redirect_uri(uri: str) -> str:
     return f"{scheme}://{netloc}{path}"
 
 
+@lru_cache(maxsize=1)
 def _allowed_redirect_uris() -> set[str]:
     """설정된 허용 redirect_uri 목록(쉼표 구분). 정규화 후 set 반환. 비어 있으면 빈 set."""
     raw = (settings.google_redirect_uris or "").strip()

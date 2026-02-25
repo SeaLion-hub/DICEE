@@ -64,6 +64,7 @@ def crawl_college_task(self, college_code: str, lock_token: str | None = None):
     )
     count = 0
     enqueued_ai = 0
+    failed_enqueues = 0
     started_at = time.monotonic()
     stop_heartbeat = threading.Event()
     heartbeat_thread: threading.Thread | None = None
@@ -76,20 +77,37 @@ def crawl_college_task(self, college_code: str, lock_token: str | None = None):
         heartbeat_thread.start()
     try:
         def on_chunk(ids: list) -> None:
+            nonlocal enqueued_ai, failed_enqueues
             for nid in ids:
-                process_notice_ai_task.delay(str(nid))
+                try:
+                    process_notice_ai_task.delay(str(nid))
+                    enqueued_ai += 1
+                except Exception as e:
+                    failed_enqueues += 1
+                    logger.warning(
+                        "Failed to enqueue AI task for notice_id=%s (task_id=%s college=%s): %s",
+                        nid,
+                        task_id,
+                        college_code,
+                        e,
+                        exc_info=True,
+                    )
 
         with get_sync_session() as session:
-            count, enqueued_ai = run_crawl_job_sync(
+            count, _ = run_crawl_job_sync(
                 session, college_code, task_id, on_chunk
             )
         set_gauge(CRAWL_DURATION_SECONDS, time.monotonic() - started_at)
         msg = (
             f"Crawling {college_code} completed. Upserted {count} notices, "
-            f"enqueued AI for {enqueued_ai}."
+            f"enqueued AI for {enqueued_ai} (failed_enqueues={failed_enqueues})."
         )
         logger.info(msg)
-        return {"upserted": count, "enqueued_ai": enqueued_ai}
+        return {
+            "upserted": count,
+            "enqueued_ai": enqueued_ai,
+            "failed_enqueues": failed_enqueues,
+        }
     finally:
         release_trigger_lock_sync(college_code, lock_token)
         stop_heartbeat.set()

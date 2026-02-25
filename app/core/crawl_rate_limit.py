@@ -124,6 +124,16 @@ class RedisHostRateLimiterSync:
             )
             self._fallback.wait_sync(host)
 
+    def close(self) -> None:
+        """보유한 Redis 클라이언트를 명시적으로 종료."""
+        client = self._client
+        if client is not None:
+            try:
+                client.close()
+            except Exception:
+                # 연결 종료 실패는 치명적이지 않으므로 무시
+                pass
+
 
 def get_host_rate_limiter_sync(min_interval_sec: float):
     """동기 크롤용 limiter. Redis URL 있으면 RedisHostRateLimiterSync, 없으면 HostRateLimiter."""
@@ -190,6 +200,16 @@ class RedisHostRateLimiterAsync:
                 e,
             )
             await self._fallback.wait_async(host)
+
+    async def aclose(self) -> None:
+        """보유한 비동기 Redis 클라이언트를 명시적으로 종료."""
+        client = self._client
+        if client is not None:
+            try:
+                await client.aclose()
+            except Exception:
+                # 연결 종료 실패는 치명적이지 않으므로 무시
+                pass
 
 
 def get_host_rate_limiter_async(min_interval_sec: float):

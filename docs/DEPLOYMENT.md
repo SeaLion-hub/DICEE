@@ -4,6 +4,7 @@
 
 - [요약](#요약)
 - [진입점(고정)](#진입점고정)
+- [헬스체크·장애 전파 방지](#헬스체크장애-전파-방지)
 - [비용·리소스](#비용리소스)
 - [DB 연결 수 및 용량 계획](#db-연결-수-및-용량-계획)
 - [운영 DB 백업](#운영-db-백업)
@@ -35,6 +36,22 @@
 - **Start Command(웹 서비스)**: `uvicorn app.main:app --host 0.0.0.0 --port $PORT` (workers 미지정 시 **기본 1 프로세스**.)
 - **원칙**: 루트에 `app/` 패키지(폴더) 유지. `Start Command`/진입점은 문서와 코드가 항상 일치해야 함.
 
+## 헬스체크·장애 전파 방지
+
+플랫폼(로드밸런서·오토스케일러)이 Redis/DB 장애 시에도 인스턴스를 과도하게 제거하지 않도록, 엔드포인트 역할을 분리한다.
+
+| 엔드포인트 | 용도 | 동작 |
+|------------|------|------|
+| **/health** | 플랫폼 헬스체크 | 프로세스 기동 여부만 확인. DB/Redis 미체크. 항상 200 `{"status":"ok"}`. |
+| **/ready** | 준비 상태·내부 모니터링 | DB 및 Redis(blocklist·trigger_lock) 연결 확인. 실패 시 503. |
+| **/live** | Liveness(재시작 유도) | 프로세스 생존만. DB/Redis 미체크. 200 `{"status":"ok"}`. |
+
+**운영 설정**  
+- 플랫폼 헬스체크/오토스케일 프로브는 **/health** 사용. Redis 장애 시에도 인스턴스가 비정상 판정되지 않는다.  
+- **/ready**는 내부 모니터링·경보 및 배포 롤링 시 "새 인스턴스가 트래픽 받을 준비가 되었는지" 판단용.  
+- **롤링 배포**: 동시 교체 인스턴스 수 1개로 제한. 새 인스턴스가 /ready 200을 반환한 뒤에만 다음 인스턴스 교체.  
+- 모니터링에 `active_connections / App_budget` 비율 메트릭을 두고, 0.7·0.85 초과 시 경고를 권장한다.
+
 ## 비용·리소스
 
 - Railway 플랜별 제한(서비스 수, 메모리, 실행 시간)을 대시보드에서 확인.
@@ -45,52 +62,84 @@
 
 배포 스케일·롤링 배포 시 DB 연결 수가 예측 가능하도록 풀을 명시하고, **피크 시** 예산을 초과하지 않도록 한다.
 
-### 공식
+### 공식 (프로파일 R 기준 예산 검사)
 
 - **기본**: `Total_pool_conn = API_conn + Worker_conn`
-- **피크**: `Peak_pool_conn = Total_pool_conn × Deploy_surge_factor` (기본 Deploy_surge_factor = 2. 롤링/오토스케일 구간에 순간 2배까지 늘 수 있음을 가정.)
-- **API**: `API_conn = N_api_instances × N_uvicorn_workers × (P_async + O_async)`  
-  기본값: P_async=5, O_async=10 → 프로세스당 최대 15.
+- **피크**: `Peak_pool_conn = Total_pool_conn × Deploy_surge_factor` (기본 2. 롤링/오토스케일 구간에 순간 2배까지 늘 수 있음을 가정.)
+- **프로파일 R (권장·예산 검사용)**: `P_async=4`, `O_async=6` → API 프로세스당 10. `P_sync=2`, `O_sync=0` → 워커당 2.  
+  **API**: `API_conn = N_api_instances × N_uvicorn_workers × 10`  
+  **Worker**: `Worker_conn = N_worker_instances × N_celery_concurrency × 2`
 - **Celery 연결 수 (모드별)**  
   - **`--pool=solo`** (Windows·문서 기본): 1 프로세스 1풀.  
-    `Worker_conn = N_worker_instances × 1 × (P_sync + O_sync)`  
+    `Worker_conn = N_worker_instances × 1 × 2`  
   - **`--pool=prefork`** (Linux 등): 자식 프로세스마다 풀 1개.  
-    `Worker_conn = N_worker_instances × N_celery_concurrency × (P_sync + O_sync)`  
-  prefork 사용 시 **concurrency 1 증가 = 풀 1개(연결 P_sync+O_sync) 추가**이므로 스케일 전에 용량을 다시 계산할 것.
-- **안전 예산**: `App_budget = floor((DB_max_connections - Reserved) × 0.7)`  
-  **Reserved**: PostgreSQL 등에서 슈퍼유저/관리용으로 예약된 연결 수. 일반적으로 2~3. 플랫폼 문서 확인.
-- **조건**: `Peak_pool_conn ≤ App_budget`
+    `Worker_conn = N_worker_instances × N_celery_concurrency × 2`  
+  prefork 사용 시 concurrency 1 증가 = 풀 1개(연결 2) 추가이므로 스케일 전에 용량을 다시 계산할 것.
+- **안전 예산**: `App_budget = floor((DB_max_connections - DB_RESERVED) × 0.7)`  
+  **DB_RESERVED**: PostgreSQL 등에서 슈퍼유저/관리용 예약 연결 수. 기본 3.
+- **통과 조건**: `Peak_pool_conn ≤ App_budget`. 운영상한(85% 안전 마진) 권장: `Peak_pool_conn ≤ 0.85 × App_budget`.
 
-### 문서 기본 배포 예시
+### 문서 기본 배포 예시 (프로파일 R)
 
 | 항목 | 값 |
 |------|-----|
 | N_api_instances | 1 |
 | N_uvicorn_workers | 1 |
 | N_worker_instances | 1 |
-| N_celery_concurrency | 1 (solo 또는 prefork) |
-| P_async + O_async | 15 (기본 5+10) |
-| P_sync + O_sync | 2 (기본 2+0) |
-| Total_pool_conn | 1×1×15 + 1×1×2 = **17** |
-| Peak_pool_conn (surge 2) | 34 |
+| N_celery_concurrency | 1 |
+| P_async + O_async | 10 (프로파일 R: 4+6) |
+| P_sync + O_sync | 2 (프로파일 R: 2+0) |
+| Total_pool_conn | 1×1×10 + 1×1×2 = **12** |
+| Peak_pool_conn (surge 2) | 24 |
 
-### DB max_connections별 안전 판정 (70% 앱 예산 기준)
+### DB max_connections별 안전 판정 (프로파일 R, Reserved=3)
 
-| DB_max | App_budget (Reserved=3) | 현재 17 (Peak 34) |
-|--------|-------------------------|-------------------|
-| 100 | floor(97×0.7)=67 | 17은 여유, Peak 34도 안전 |
-| 50 | floor(47×0.7)=32 | 17은 안전, Peak 34는 초과 → workers/conc 유지 권장 |
-| 30 | floor(27×0.7)=18 | 17은 간당간당, Peak 34는 위험 |
+| DB_max | App_budget | 산술상한 N_api (하드) | 운영상한 N_api (85% 마진) |
+|--------|------------|----------------------|---------------------------|
+| 50 | 32 | 1 | 1 |
+| 100 | 67 | 3 | 2 |
+| 150 | 102 | 4 | 4 |
+| 200 | 137 | 6 | 5 |
 
-스케일 시(uvicorn workers 또는 API 인스턴스·Celery 인스턴스/conc 증가) **Peak_pool_conn**이 **App_budget**을 넘지 않도록, DB_max 상향 또는 풀/workers/conc 조정이 필요하다. 풀 크기는 환경 변수(`DB_POOL_SIZE_ASYNC`, `DB_POOL_MAX_OVERFLOW_ASYNC`, `DB_POOL_SIZE_SYNC` 등)로 조정 가능.
+운영상한 계산: `Peak_pool_conn ≤ 0.85 × App_budget`. Replica max는 **DB_API_INSTANCES**와 일치하거나 그 이하로 설정할 것.
+
+스케일 시 **Peak_pool_conn**이 **App_budget**을 넘지 않도록, DB_max 상향 또는 인스턴스/workers/conc 조정이 필요하다. 풀 크기·타임아웃은 환경 변수(`DB_POOL_SIZE_ASYNC`, `DB_POOL_MAX_OVERFLOW_ASYNC`, `DB_POOL_TIMEOUT_ASYNC`, `DB_POOL_SIZE_SYNC` 등)로 조정 가능.
 
 ### 과다 설정 방지 (부팅 시 예산 검사)
 
-`DB_MAX_CONNECTIONS`를 설정하면 부팅 시 `Peak_pool_conn > App_budget` 여부를 검사한다.
+부팅 시 **프로파일 R** 기준으로 `Peak_pool_conn > App_budget` 여부를 검사한다. **effective_max_connections**는 환경 변수 `DB_MAX_CONNECTIONS`가 있으면 그 값(운영 오버라이드), 없으면 DB에서 조회한 `max_connections`를 사용.
 
-- **기본**: 초과 시 **로그 warning**만 남기고 부팅은 계속. 배포 전 용량 검토 안내.
-- **`DB_POOL_STRICT_BUDGET=true`**: 초과 시 **부팅 실패**(ValueError).  
+- **기본**: 초과 시 **critical 로그** 및 Sentry(`context=db_capacity`) 후 부팅 계속.
+- **`DB_POOL_STRICT_BUDGET=true`**: 초과 시 **부팅 실패**(RuntimeError).  
 예산/인스턴스 수는 `DB_API_INSTANCES`, `DB_UVICORN_WORKERS`, `DB_WORKER_INSTANCES`, `DB_CELERY_CONCURRENCY`, `DB_RESERVED`, `DEPLOY_SURGE_FACTOR` 등으로 반영(기본값 1, 1, 1, 1, 3, 2.0).
+
+### 오토스케일·Replica 정책 (DB 용량별)
+
+Replica max는 **DB_API_INSTANCES**와 일치하거나 그 이하로 설정할 것. 이를 초과하면 커넥션 예산 검증이 무의미해진다.
+
+| DB_max_connections | Replica min | Replica max | DB_API_INSTANCES (권장) |
+|--------------------|-------------|-------------|-------------------------|
+| 50 | 1 | 1 | 1 |
+| 100 | 1 | 2 | 2 (운영상한 기준) |
+| 150 | 2 | 4 | 4 |
+| 200 | 2 | 5 | 5 |
+
+**스케일 트리거 (인프라/IaC 또는 플랫폼 설정)**  
+- **Scale-out**: CPU > 65% 3분 연속, 또는 p95 latency > 400ms 3분 연속. Step: 한 번에 +1 replica. Cooldown: 180초.
+- **Scale-in**: CPU < 35% 10분 연속.
+
+모니터링(Grafana 등)에서 동일 기준으로 알림 규칙을 두면 일관된 대응이 가능하다. 커넥션 예산은 **산술상한(hard)** 외에 **운영상한(85% 마진)** 기준을 함께 사용하며, Replica max는 운영상한에 맞추고, 긴급 시에만 일시적으로 hard 상한까지 허용(이 경우 추가 모니터링 필수).
+
+### 앱 내부 타임아웃 정책 (운영 권장)
+
+인프라(게이트웨이/로드밸런서)의 request timeout은 **항상 앱 내부 타임아웃보다 길게** 설정할 것. 그렇지 않으면 앱이 정상 처리 중인데 상위에서 끊어 장애로 오인할 수 있다.
+
+| 구분 | 기본값 | 환경 변수 |
+|------|--------|-----------|
+| DB 풀 대기 타임아웃(Async) | 5초 | `DB_POOL_TIMEOUT_ASYNC` |
+| SQL statement timeout | 30초 | `DB_STATEMENT_TIMEOUT_MS` |
+| Redis 연결 타임아웃 | 2초 | `REDIS_SOCKET_CONNECT_TIMEOUT` |
+| Redis 소켓 타임아웃 | 5초 | `REDIS_SOCKET_TIMEOUT` |
 
 ### Sync 풀 정책 (timeout / recycle)
 
@@ -107,6 +156,49 @@ Celery Sync 풀에는 **대기 시간 상한**(`pool_timeout`)과 **유휴 연�
 | **timeout_count** | 풀 대기 타임아웃 발생 횟수(증분 또는 누적) |
 
 구현은 SQLAlchemy 이벤트 또는 커스텀 래퍼로 가능. Sentry/메트릭 수집기 연동 시 위 항목으로 풀 포화 알림을 설정하면 좋다.
+
+### 게이트웨이/로드밸런서 타임아웃 (엔드포인트별)
+
+인프라 레벨에서 아래 request timeout을 설정할 것. 앱 내부 타임아웃보다 길어야 한다.
+
+| 경로 | request timeout (권장) |
+|------|------------------------|
+| `/v1/auth/google` | 12초 |
+| `/v1/auth/refresh` | 5초 |
+| `/internal/trigger-crawl` | 5초 |
+| `/internal/crawl-stats` | 3초 |
+
+---
+
+## Go-Live 검증 (부하 테스트·장애 훈련)
+
+베타 → 프로덕션 전환 전 아래 검증을 수행한다.
+
+### 통과 기준 (공통)
+
+- 오류율 **&lt; 1%**
+- Auth 계열 엔드포인트: **p95 &lt; 500ms**
+- DB active connection **&lt; App_budget × 0.7**
+
+### 부하 테스트 시나리오 (각 10분)
+
+| 대상 엔드포인트 | 목적 | 관측 메트릭 |
+|-----------------|------|-------------|
+| `/v1/auth/refresh` | Refresh 토큰 갱신 부하 | 오류율, p95, DB 커넥션 수 |
+| `/v1/auth/google` | 구글 로그인·토큰 발급 부하 | 오류율, p95, Google API 지연 |
+| `/internal/trigger-crawl` | Cron 트리거 부하 | 오류율, p95, Redis 락·레이트 리밋 |
+
+각 시나리오별 목표 RPS·동시 사용자 수는 환경에 맞게 정한 뒤, 위 통과 기준을 만족하는지 확인한다.
+
+### 장애 훈련 (Chaos Test)
+
+| 시나리오 | 기대 동작 | 관측 메트릭 |
+|----------|-----------|-------------|
+| **Redis 다운 5분** | Circuit Breaker 열림 → Fail-open. 인증은 서명 검증만으로 통과. Blocklist 미동작 구간 허용. | 인증 성공률, Circuit 상태 전이, 로그/Sentry |
+| **DB 지연 2배** | statement_timeout·pool_timeout 동작. 장기 쿼리 차단, 풀 대기 타임아웃 발생 시 적절한 에러 응답. | timeout_count, 5xx 비율, DB active connection |
+| **Google API 지연 주입** | `/v1/auth/google` 요청 타임아웃·재시도. 사용자 경험 저하 최소화 또는 명확한 에러 메시지. | p95, 오류율, 클라이언트 타임아웃 |
+
+각 시나리오별로 "기대 동작"과 "실제 관측해야 하는 메트릭"을 실행 전에 정리하고, 실행 후 결과를 기록해 재발 대비한다.
 
 ## 운영 DB 백업
 
@@ -188,9 +280,10 @@ CORS: `ALLOWED_ORIGINS`에 프론트 도메인 등록. credentials: 프론트가
 | `DATABASE_URL` | **`postgresql+psycopg://...`** 권장. `postgres://`만 넣어도 앱이 `postgresql+psycopg://`로 자동 변환함. (구형 asyncpg 대신 psycopg 사용 — Railway 프록시 환경에서 안정적.) 2단계~. **비밀번호는 영문·숫자만** 사용. **시스템 환경변수가 .env보다 우선** → Windows에서 `echo $env:DATABASE_URL`로 확인 후, 프로젝트용이 아니면 제거. |
 | `DB_CONNECT_RETRIES` | 연결 실패 시 재시도 횟수. 기본 5. | 2단계 (선택, Railway 권장) |
 | `DB_CONNECT_RETRY_INTERVAL_SEC` | 재시도 간격(초). 기본 2. | 2단계 (선택) |
-| `DB_POOL_SIZE_ASYNC` | Async API 풀 크기(프로세스당). 기본 5. | 2단계 (선택, 용량 계획 참고) |
-| `DB_POOL_MAX_OVERFLOW_ASYNC` | Async API 풀 오버플로(프로세스당). 기본 10. | 2단계 (선택) |
-| `DB_POOL_TIMEOUT_ASYNC` | Async 풀 대기 타임아웃(초). 기본 30. | 2단계 (선택) |
+| `DB_POOL_SIZE_ASYNC` | Async API 풀 크기(프로세스당). 프로파일 R 기본 4. | 2단계 (선택, 용량 계획 참고) |
+| `DB_POOL_MAX_OVERFLOW_ASYNC` | Async API 풀 오버플로(프로세스당). 프로파일 R 기본 6. | 2단계 (선택) |
+| `DB_POOL_TIMEOUT_ASYNC` | Async 풀 대기 타임아웃(초). 운영 권장 5. | 2단계 (선택) |
+| `DB_STATEMENT_TIMEOUT_MS` | SQL statement timeout(ms). 기본 30000(30초). | 2단계 (선택) |
 | `DB_POOL_SIZE_SYNC` | Celery Sync 풀 크기(워커·자식당). 기본 2. | 3단계 (선택) |
 | `DB_POOL_MAX_OVERFLOW_SYNC` | Celery Sync 풀 오버플로. 기본 0. | 3단계 (선택) |
 | `DB_POOL_TIMEOUT_SYNC` | Sync 풀 대기 타임아웃(초). 기본 30. | 3단계 (선택) |
@@ -204,14 +297,18 @@ CORS: `ALLOWED_ORIGINS`에 프론트 도메인 등록. credentials: 프론트가
 | `CRAWL_TRIGGER_SECRET` | Cron이 POST /internal/trigger-crawl 호출 시 검증용 시크릿 (헤더 또는 쿼리로 전달) | 3단계 Cron 연동 시 |
 | `AUTH_GOOGLE_RATE_LIMIT_PER_MINUTE` | 동일 IP 기준 `/v1/auth/google` 분당 최대 호출 수. 기본 10. | 2단계 Auth (선택) |
 | `AUTH_REFRESH_RATE_LIMIT_PER_MINUTE` | 동일 IP 기준 `/v1/auth/refresh` 분당 최대 호출 수. 기본 60. | 2단계 Auth (선택) |
-| `INTERNAL_TRIGGER_CRAWL_RATE_LIMIT_PER_MINUTE` | 동일 IP 기준 `/internal/trigger-crawl` 분당 최대 호출 수. 기본 30. | 3단계 Cron 연동 시 (선택) |
-| `INTERNAL_CRAWL_STATS_RATE_LIMIT_PER_MINUTE` | 동일 IP 기준 `/internal/crawl-stats` 분당 최대 호출 수. 기본 60. | 3단계 운영 모니터링 (선택) |
+| `INTERNAL_TRIGGER_CRAWL_RATE_LIMIT_PER_MINUTE` | 동일 IP 기준 `/internal/trigger-crawl` 분당 최대 호출 수. 기본 10. | 3단계 Cron 연동 시 (선택) |
+| `INTERNAL_CRAWL_STATS_RATE_LIMIT_PER_MINUTE` | 동일 IP 기준 `/internal/crawl-stats` 분당 최대 호출 수. 기본 30. | 3단계 운영 모니터링 (선택) |
 | `POLITE_DELAY_SECONDS` | 요청/페이지 간 최소 딜레이(초). 대상 서버 부하·IP 차단 완화. 기본 1. | 3단계 (선택) |
 | `JWT_SECRET` | JWT 서명용 비밀키 (강한 랜덤 문자열). RS256 사용 시 불필요. | 2단계 Auth 후 (HS256 시) |
 | `JWT_PRIVATE_KEY_PEM` | JWT RS256 개인키 PEM(한 줄로 `\n` 포함 가능). RS256 사용 시 `JWT_PUBLIC_KEY_PEM`과 쌍으로 필수. | 2단계 Auth (RS256 선택 시) |
 | `JWT_PUBLIC_KEY_PEM` | JWT RS256 공개키 PEM. 검증 서비스는 공개키만 보유하면 됨. | 2단계 Auth (RS256 선택 시) |
 | `JWT_ACCESS_EXPIRE_SECONDS` | Access 토큰 만료(초). 기본 600(10분). 탈퇴/탈취 시 노출 시간 최소화. | 2단계 (선택) |
-| `REDIS_BLOCKLIST_FAIL_CLOSED` | Redis 장애 시 True=인증 거부(Fail-Closed), False=서명만 검증 후 통과(Fail-Open). 기본 True. | 2단계 Auth (Blocklist 사용 시) |
+| `REDIS_BLOCKLIST_FAIL_CLOSED` | Redis 장애 시 True=인증 거부(Fail-Closed), False=서명만 검증 후 통과(Fail-Open). 운영 권장 False(가용성 우선). 기본 False. | 2단계 Auth (Blocklist 사용 시) |
+| `REDIS_BLOCKLIST_CIRCUIT_FAILURE_THRESHOLD` | Blocklist Circuit Breaker: 연속 실패 N회 시 열림. 기본 3. | 2단계 (선택) |
+| `REDIS_BLOCKLIST_CIRCUIT_OPEN_SECONDS` | Circuit 열림 유지 시간(초). 기본 60. | 2단계 (선택) |
+| `REDIS_BLOCKLIST_CIRCUIT_HALF_OPEN_INTERVAL_SECONDS` | Half-open 시도 간격(초). 기본 15. | 2단계 (선택) |
+| `REDIS_TRIGGER_LOCK_REQUIRED` | True면 Redis 미설정/실패 시 trigger-crawl 503. 운영 권장 True. 기본 True. | 3단계 (선택) |
 | `REDIS_BLOCKLIST_MAX_CONNECTIONS` | Blocklist용 Redis 비동기 풀 크기. Uvicorn 동시 처리량에 맞게. 기본 20. | 2단계 Auth (Blocklist 사용 시) |
 | `JWT_REFRESH_EXPIRE_DAYS` | Refresh 토큰 만료(일). 기본 7. | 2단계 (선택) |
 | `GOOGLE_CLIENT_ID` | 구글 OAuth 2.0 클라이언트 ID | 2단계 Auth (구글 먼저) |
@@ -279,7 +376,7 @@ Private Key 내용을 `JWT_PRIVATE_KEY_PEM`, Public Key 내용을 `JWT_PUBLIC_KE
 
 **본문 스토리지(production):** `ENVIRONMENT=production`이면 **CONTENT_STORAGE_TYPE=s3**, **S3_BUCKET** 설정 필수. `local`은 dev/test만 허용. **CONTENT_UPLOAD_FAILURE_POLICY**: 업로드 실패 시 `allow_none`이면 None 반환(본문 유실 가능, 크롤 계속), `fail`이면 예외 전파(데이터 유실 방지, 크롤/파이프라인 중단 가능).
 
-**DB 부팅·Liveness/Readiness:** `STRICT_STARTUP_DB_CHECK=true`(기본)면 DB 연결 실패 시 부팅 중단. `false`면 soft-start: 기동은 하고 **readiness**(예: `/ready`)가 실패해 DB 의존 API에 트래픽이 가지 않도록 인그레스/프로브에서 제어. **Liveness**(예: `/live`)는 프로세스 생존만 반환(DB/Redis 미체크). Kubernetes 등에서 liveness/readiness 분리 사용 시 이 엔드포인트 구분을 참고.
+**DB 부팅·Liveness/Readiness:** `STRICT_STARTUP_DB_CHECK=true`(기본)면 DB 연결 실패 시 부팅 중단. `false`면 soft-start: 기동은 하고 **readiness**(`/ready`)가 실패해 DB 의존 API에 트래픽이 가지 않도록 인그레스/프로브에서 제어. 플랫폼 프로브는 **/health** 사용(DB/Redis 미체크로 장애 전파 완화). 상세는 [헬스체크·장애 전파 방지](#헬스체크장애-전파-방지) 참고.
 
 ### 4. 빌드·실행 설정
 

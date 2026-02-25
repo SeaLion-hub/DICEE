@@ -20,16 +20,16 @@ sync_session_factory = None
 
 def _sync_database_url() -> str | None:
     """asyncpg URL을 동기 드라이버(psycopg3)용으로 변환. plain postgresql:// → +psycopg (psycopg2 미설치 시)."""
-    url = settings.database_url
-    if not url:
+    raw = (settings.database_url or "").strip()
+    if not raw:
         return None
-    if "postgresql+asyncpg" in url:
-        return url.replace("postgresql+asyncpg", "postgresql+psycopg", 1)
-    if url.startswith("postgresql://") and "postgresql+" not in url:
-        return url.replace("postgresql://", "postgresql+psycopg://", 1)
-    if "postgresql+psycopg" in url:
-        return url
-    return url
+    if "postgresql+asyncpg" in raw:
+        return raw.replace("postgresql+asyncpg", "postgresql+psycopg", 1)
+    if raw.startswith("postgresql://") and "postgresql+" not in raw:
+        return raw.replace("postgresql://", "postgresql+psycopg://", 1)
+    if "postgresql+psycopg" in raw:
+        return raw
+    return raw
 
 
 def init_sync_db() -> None:
@@ -40,17 +40,14 @@ def init_sync_db() -> None:
         logger.warning("DATABASE_URL not set. Sync DB features disabled.")
         return
 
-    from app.core.config import check_pool_budget
+    from app.core.database import check_pool_budget
 
-    within_budget, peak_conn, app_budget = check_pool_budget()
-    if not within_budget and peak_conn > 0 and app_budget >= 0:
-        msg = (
-            f"Pool budget exceeded: peak_conn={peak_conn} > app_budget={app_budget}. "
-            "Adjust pool sizes or DB_MAX_CONNECTIONS. See DEPLOYMENT.md."
-        )
+    effective_max_conn = settings.db_max_connections
+    budget_result = check_pool_budget(effective_max_conn)
+    if not budget_result.within_budget and budget_result.app_budget > 0:
         if settings.db_pool_strict_budget:
-            raise ValueError(msg)
-        logger.warning(msg)
+            raise RuntimeError(budget_result.message)
+        logger.critical("%s", budget_result.message)
 
     pool_kw: dict = {
         "pool_size": settings.db_pool_size_sync,

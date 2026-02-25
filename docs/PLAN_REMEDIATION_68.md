@@ -84,3 +84,9 @@
 ---
 
 이 문서는 계획 평가 68/100 피드백을 반영한 **보강 체크리스트**이다. 실제 계획 파일을 수정할 때 위 항목을 반드시 반영하면 된다.
+
+---
+
+## Go-Live Checklist (참조)
+
+베타 → 프로덕션 전환 시 **부하 테스트·통과 기준·장애 훈련** 시나리오 및 **게이트웨이 타임아웃** 정책은 [DEPLOYMENT.md — Go-Live 검증](DEPLOYMENT.md#go-live-검증-부하-테스트장애-훈련) 섹션을 따른다. 통과 기준: 오류율 &lt; 1%, Auth p95 &lt; 500ms, DB active connection &lt; App_budget × 0.7.

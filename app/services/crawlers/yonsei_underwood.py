@@ -186,8 +186,13 @@ def scrape_uic_detail(url):
                             if "jpeg" in header or "jpg" in header:
                                 ext = "jpg"
                             images.append({"type": "base64", "data": encoded, "name": f"image_{idx+1}.{ext}"})
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.warning(
+                                "scrape_uic_detail: failed to parse inline image (idx=%d) url=%s: %s",
+                                idx,
+                                url,
+                                e,
+                            )
                     else:
                         full_url = urljoin(url, src)
                         parsed = urllib.parse.urlparse(full_url)
@@ -293,8 +298,13 @@ async def scrape_uic_detail_async(client: httpx.AsyncClient, url: str):
                         header, encoded = src.split(",", 1)
                         ext = "jpg" if "jpeg" in header or "jpg" in header else "png"
                         images.append({"type": "base64", "data": encoded, "name": f"image_{idx+1}.{ext}"})
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.warning(
+                            "scrape_uic_detail_async: failed to parse inline image (idx=%d) url=%s: %s",
+                            idx,
+                            url,
+                            e,
+                        )
                 else:
                     full_url = urljoin(url, src)
                     parsed = urllib.parse.urlparse(full_url)

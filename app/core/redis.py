@@ -78,7 +78,9 @@ def create_blocklist_client() -> RedisAsyncio | None:
     Blocklist용 비동기 Redis 클라이언트. max_connections·타임아웃 명시.
     redis_url 없으면 None. lifespan에서 한 번 생성해 app.state에 보관.
     """
-    if not settings.redis_url:
+    raw_url = getattr(settings, "redis_url", None) or ""
+    redis_url = raw_url.strip()
+    if not redis_url:
         return None
     try:
         import redis.asyncio as redis
@@ -86,7 +88,7 @@ def create_blocklist_client() -> RedisAsyncio | None:
         logger.warning("redis.asyncio not available. Blocklist disabled.")
         return None
     pool = redis.ConnectionPool.from_url(
-        settings.redis_url,
+        redis_url,
         max_connections=settings.redis_blocklist_max_connections,
         **_redis_pool_kwargs(),
         **_redis_ssl_kwargs(),
@@ -99,7 +101,9 @@ def create_trigger_lock_client() -> RedisAsyncio | None:
     Trigger 락 전용 비동기 Redis 클라이언트. Blocklist 풀과 분리해 인증 장애 전파 완화.
     단일 Redis 인스턴스는 SPOF이므로 풀 분리만으로는 완전 격리 아님(CAUTIONS 참고).
     """
-    if not settings.redis_url:
+    raw_url = getattr(settings, "redis_url", None) or ""
+    redis_url = raw_url.strip()
+    if not redis_url:
         return None
     try:
         import redis.asyncio as redis
@@ -107,7 +111,7 @@ def create_trigger_lock_client() -> RedisAsyncio | None:
         logger.warning("redis.asyncio not available. Trigger lock disabled.")
         return None
     pool = redis.ConnectionPool.from_url(
-        settings.redis_url,
+        redis_url,
         max_connections=getattr(settings, "redis_trigger_lock_max_connections", 5),
         **_redis_pool_kwargs(),
         **_redis_ssl_kwargs(),
@@ -315,32 +319,45 @@ def renew_trigger_lock_sync(college_code: str, lock_token: str | None) -> bool:
         return False
     from app.core.config import settings
 
-    if not settings.redis_url:
+    raw_url = getattr(settings, "redis_url", None) or ""
+    if not raw_url.strip():
         return False
     ttl = getattr(settings, "redis_trigger_lock_ttl_seconds", 2400)
+    client = None
     try:
         import redis
 
         ssl_kwargs = {}
-        url = settings.redis_url or ""
-        if url.strip().startswith("rediss://"):
+        url = raw_url
+        url_stripped = url.strip()
+        if url_stripped.startswith("rediss://"):
             ssl_kwargs = {"ssl_cert_reqs": ssl.CERT_REQUIRED}
             if getattr(settings, "redis_ca_certs", None):
                 ssl_kwargs["ssl_ca_certs"] = settings.redis_ca_certs
+        socket_timeout = getattr(settings, "redis_socket_timeout", 5.0)
+        socket_connect_timeout = getattr(settings, "redis_socket_connect_timeout", 2.0)
         client = redis.Redis.from_url(
-            settings.redis_url,
+            url_stripped or url,
             decode_responses=True,
+            socket_timeout=socket_timeout,
+            socket_connect_timeout=socket_connect_timeout,
             **ssl_kwargs,
         )
         key = f"{TRIGGER_LOCK_KEY_PREFIX}{college_code}"
         n = client.eval(LUA_RENEW_IF_OWNER, 1, key, lock_token, ttl)
-        client.close()
         return n == 1
     except Exception as e:
         logger.warning(
             "Trigger lock renew failed (college=%s): %s", college_code, e, exc_info=True
         )
         return False
+    finally:
+        if client is not None:
+            try:
+                client.close()
+            except Exception:
+                # 연결 종료 실패는 치명적이지 않으므로 무시
+                pass
 
 
 def release_trigger_lock_sync(college_code: str, lock_token: str | None) -> None:
@@ -352,29 +369,42 @@ def release_trigger_lock_sync(college_code: str, lock_token: str | None) -> None
         return
     from app.core.config import settings
 
-    if not settings.redis_url:
+    raw_url = getattr(settings, "redis_url", None) or ""
+    if not raw_url.strip():
         return
+    client = None
     try:
         import redis
 
         ssl_kwargs = {}
-        url = settings.redis_url or ""
-        if url.strip().startswith("rediss://"):
+        url = raw_url
+        url_stripped = url.strip()
+        if url_stripped.startswith("rediss://"):
             ssl_kwargs = {"ssl_cert_reqs": ssl.CERT_REQUIRED}
             if getattr(settings, "redis_ca_certs", None):
                 ssl_kwargs["ssl_ca_certs"] = settings.redis_ca_certs
+        socket_timeout = getattr(settings, "redis_socket_timeout", 5.0)
+        socket_connect_timeout = getattr(settings, "redis_socket_connect_timeout", 2.0)
         client = redis.Redis.from_url(
-            settings.redis_url,
+            url_stripped or url,
             decode_responses=True,
+            socket_timeout=socket_timeout,
+            socket_connect_timeout=socket_connect_timeout,
             **ssl_kwargs,
         )
         key = f"{TRIGGER_LOCK_KEY_PREFIX}{college_code}"
         client.eval(LUA_RELEASE_IF_OWNER, 1, key, lock_token)
-        client.close()
     except Exception as e:
         logger.warning(
             "Trigger lock release failed (college=%s): %s", college_code, e, exc_info=True
         )
+    finally:
+        if client is not None:
+            try:
+                client.close()
+            except Exception:
+                # 연결 종료 실패는 치명적이지 않으므로 무시
+                pass
 
 
 async def _is_access_blocked_raw(

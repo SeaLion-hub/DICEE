@@ -7,6 +7,7 @@ from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from enum import Enum
+from dataclasses import dataclass
 from typing import Any
 
 from fastapi import Request
@@ -42,6 +43,72 @@ _db_holder = _DbHolder()
 
 # verify_db_connection()에서 조회한 DB max_connections. check_pool_budget 오버라이드용.
 _resolved_max_connections: int | None = None
+
+# 프로파일 R (권장 풀 크기). 예산 검사 시 이 상수로 Peak 계산. DEPLOYMENT.md / docs/decisions/database-pool-capacity.md.
+POOL_PROFILE_R = (4, 6, 2, 0)  # (P_async, O_async, P_sync, O_sync)
+
+
+@dataclass(frozen=True)
+class PoolBudgetResult:
+    """풀 예산 검사 결과. 프로파일 R 기준 Peak_pool_conn vs App_budget."""
+
+    within_budget: bool
+    app_budget: int
+    total_pool_conn: int
+    peak_pool_conn: int
+    message: str
+
+
+def check_pool_budget(effective_max_conn: int | None) -> PoolBudgetResult:
+    """
+    풀 예산 검사(프로파일 R 기준). effective_max_conn이 None이면 검사 생략(within_budget=True, 0 값 반환).
+    산식: App_budget = floor((max_conn - DB_RESERVED) * 0.7),
+    API_conn = N_api * N_uvicorn_workers * (P_async + O_async),
+    Worker_conn = N_worker * N_celery_concurrency * (P_sync + O_sync),
+    Total = API_conn + Worker_conn, Peak = Total * DEPLOY_SURGE_FACTOR.
+    통과 조건: Peak_pool_conn <= App_budget.
+    """
+    if effective_max_conn is None or effective_max_conn < 1:
+        return PoolBudgetResult(
+            within_budget=True,
+            app_budget=0,
+            total_pool_conn=0,
+            peak_pool_conn=0,
+            message="Pool budget check skipped (no effective max_connections).",
+        )
+    p_async, o_async, p_sync, o_sync = POOL_PROFILE_R
+    reserved = settings.db_reserved
+    app_budget = int((effective_max_conn - reserved) * 0.7)
+    api_conn = (
+        settings.db_api_instances
+        * settings.db_uvicorn_workers
+        * (p_async + o_async)
+    )
+    worker_conn = (
+        settings.db_worker_instances
+        * settings.db_celery_concurrency
+        * (p_sync + o_sync)
+    )
+    total_pool_conn = api_conn + worker_conn
+    peak_pool_conn = int(total_pool_conn * settings.deploy_surge_factor)
+    within_budget = peak_pool_conn <= app_budget
+    if within_budget:
+        msg = (
+            f"Pool budget OK: peak={peak_pool_conn} <= app_budget={app_budget} "
+            f"(total={total_pool_conn}, max_conn={effective_max_conn})."
+        )
+    else:
+        msg = (
+            f"Pool budget exceeded: peak_pool_conn={peak_pool_conn} > app_budget={app_budget}. "
+            "Adjust DB_API_INSTANCES or DB_MAX_CONNECTIONS. See DEPLOYMENT.md."
+        )
+    return PoolBudgetResult(
+        within_budget=within_budget,
+        app_budget=app_budget,
+        total_pool_conn=total_pool_conn,
+        peak_pool_conn=peak_pool_conn,
+        message=msg,
+    )
 
 
 def get_resolved_max_connections() -> int | None:
@@ -86,13 +153,14 @@ def get_async_session_maker() -> async_sessionmaker[AsyncSession] | None:
 
 def init_db() -> None:
     """DATABASE_URL이 있으면 엔진·세션 팩토리 초기화. Holder에 설정."""
-    if not settings.database_url:
-        logger.warning("DATABASE_URL not set. DB features disabled.")
+    raw_url = (settings.database_url or "").strip()
+    if not raw_url:
+        logger.warning("DATABASE_URL not set or empty. DB features disabled.")
         return
 
     # 배포 환경 디버깅: 앱이 실제로 쓰는 호스트만 로그 (비밀번호·user 제외). warning으로 해야 Railway stderr에 출력됨.
     try:
-        parsed = make_url(settings.database_url.strip())
+        parsed = make_url(raw_url)
         has_username = bool(parsed.username)
         has_password = bool(parsed.password)
         logger.warning(
@@ -112,7 +180,7 @@ def init_db() -> None:
     connect_args["server_settings"] = {"statement_timeout": str(timeout_ms)}
 
     _db_holder.engine = create_async_engine(
-        _async_database_url(settings.database_url),
+        _async_database_url(raw_url),
         echo=False,
         pool_pre_ping=True,
         pool_size=settings.db_pool_size_async,
@@ -186,7 +254,10 @@ async def verify_db_connection() -> None:
             scope.set_tag("context", "database_connection_check")
             scope.set_context(
                 "database",
-                {"url_set": bool(settings.database_url), "retries": retries},
+                {
+                    "url_set": bool((settings.database_url or "").strip()),
+                    "retries": retries,
+                },
             )
             sentry_sdk.capture_exception(last_exc)
     except ImportError:

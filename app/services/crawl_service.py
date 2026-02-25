@@ -207,6 +207,7 @@ def build_notice_payload(
     images: list | None,
     attachments: list | None,
     body_text_for_hash: str | None = None,
+    external_id: str | None = None,
 ) -> dict | None:
     """
     한 건 공지 스크랩 결과 → upsert용 payload dict. 스킵 시 None(로깅 후 반환).
@@ -232,7 +233,7 @@ def build_notice_payload(
             title[:80] if title else "",
         )
         return None
-    external_id = post.get("no") or _external_id_from_url(detail_url)
+    external_id_value = external_id or post.get("no") or _external_id_from_url(detail_url)
     content_hash = _content_hash_from_title_and_html(
         title, html_content, body_text_for_hash
     )
@@ -241,12 +242,12 @@ def build_notice_payload(
     content_url = upload_notice_html(
         html_content,
         college_id=college_id,
-        external_id=external_id,
+        external_id=external_id_value,
         content_hash=content_hash,
     )
     return {
         "college_id": college_id,
-        "external_id": external_id,
+        "external_id": external_id_value,
         "title": title,
         "url": detail_url or None,
         "content_url": content_url,
@@ -376,53 +377,77 @@ def _collect_payloads_sync(
             raise exc
         consecutive_parser_failures = 0
         title, date_str, html_content, images, attachments = data
+        # dedupe를 위해 external_id를 먼저 계산해 중복이면 HTML 업로드 자체를 건너뛴다.
+        external_id = post.get("no") or _external_id_from_url(detail_url)
+        if external_id in seen:
+            return None
         body_text_for_hash = (
             BeautifulSoup(html_content, "html.parser").get_text(separator="\n", strip=True)
             if html_content else ""
         )
         payload = build_notice_payload(
-            college_id, post, detail_url, title, date_str,
-            html_content, images, attachments,
+            college_id,
+            post,
+            detail_url,
+            title,
+            date_str,
+            html_content,
+            images,
+            attachments,
             body_text_for_hash=body_text_for_hash or None,
+            external_id=external_id,
         )
-        if payload is None or payload["external_id"] in seen:
+        if payload is None:
             return None
-        seen.add(payload["external_id"])
+        seen.add(external_id)
         return payload
 
-    with ThreadPoolExecutor(max_workers=COLLECT_PAYLOADS_MAX_WORKERS) as executor:
-        futures: dict = {}
-        for _ in range(min(COLLECT_IN_FLIGHT_LIMIT, len(remaining))):
-            if not remaining:
-                break
-            post = remaining.popleft()
-            rate_limiter.wait_sync(host_from_url(post.get("url") or "") or "_")
-            fut = executor.submit(_scrape_one_sync, post, scrape_fn)
-            futures[fut] = post
+    try:
+        with ThreadPoolExecutor(max_workers=COLLECT_PAYLOADS_MAX_WORKERS) as executor:
+            futures: dict = {}
+            for _ in range(min(COLLECT_IN_FLIGHT_LIMIT, len(remaining))):
+                if not remaining:
+                    break
+                post = remaining.popleft()
+                rate_limiter.wait_sync(host_from_url(post.get("url") or "") or "_")
+                fut = executor.submit(_scrape_one_sync, post, scrape_fn)
+                futures[fut] = post
 
-        while futures:
-            done, _ = wait(futures.keys(), return_when=FIRST_COMPLETED)
-            for fut in done:
-                post = futures.pop(fut)
-                try:
-                    p, detail_url, data, exc = fut.result()
-                except Exception as e:
-                    logger.warning("scrape future exception: %s", e, exc_info=True)
+            while futures:
+                done, _ = wait(futures.keys(), return_when=FIRST_COMPLETED)
+                for fut in done:
+                    post = futures.pop(fut)
+                    try:
+                        p, detail_url, data, exc = fut.result()
+                    except Exception as e:
+                        logger.warning("scrape future exception: %s", e, exc_info=True)
+                        if remaining:
+                            next_post = remaining.popleft()
+                            rate_limiter.wait_sync(
+                                host_from_url(next_post.get("url") or "") or "_"
+                            )
+                            futures[executor.submit(_scrape_one_sync, next_post, scrape_fn)] = next_post
+                        continue
+                    try:
+                        payload = process_result(post, detail_url, data, exc)
+                    except CrawlThresholdExceeded:
+                        raise
+                    if payload is not None:
+                        yield payload
                     if remaining:
                         next_post = remaining.popleft()
-                        rate_limiter.wait_sync(host_from_url(next_post.get("url") or "") or "_")
+                        rate_limiter.wait_sync(
+                            host_from_url(next_post.get("url") or "") or "_"
+                        )
                         futures[executor.submit(_scrape_one_sync, next_post, scrape_fn)] = next_post
-                    continue
-                try:
-                    payload = process_result(post, detail_url, data, exc)
-                except CrawlThresholdExceeded:
-                    raise
-                if payload is not None:
-                    yield payload
-                if remaining:
-                    next_post = remaining.popleft()
-                    rate_limiter.wait_sync(host_from_url(next_post.get("url") or "") or "_")
-                    futures[executor.submit(_scrape_one_sync, next_post, scrape_fn)] = next_post
+    finally:
+        close_fn = getattr(rate_limiter, "close", None)
+        if callable(close_fn):
+            try:
+                close_fn()
+            except Exception:
+                # 종료 실패는 치명적이지 않으므로 무시
+                pass
 
 
 async def _collect_payloads_async(
@@ -463,75 +488,133 @@ async def _collect_payloads_async(
         t = asyncio.create_task(fetch_one(remaining.popleft()))
         pending.add(t)
 
-    while pending:
-        done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
-        for task in done:
+    try:
+        while pending:
+            done, pending = await asyncio.wait(
+                pending, return_when=asyncio.FIRST_COMPLETED
+            )
+            for task in done:
+                try:
+                    post, detail_url, data, exc = task.result()
+                except Exception as e:
+                    logger.warning("scrape task exception: %s", e, exc_info=True)
+                    if remaining:
+                        pending.add(
+                            asyncio.create_task(fetch_one(remaining.popleft()))
+                        )
+                    continue
+                attempted += 1
+                if exc is not None:
+                    if isinstance(
+                        exc,
+                        (
+                            httpx.HTTPError,
+                            httpx.TimeoutException,
+                            TimeoutError,
+                            OSError,
+                            ConnectionError,
+                        ),
+                    ):
+                        logger.warning(
+                            "scrape failed (network/timeout): url=%s error=%s",
+                            detail_url[:200] if detail_url else "",
+                            exc,
+                            exc_info=True,
+                        )
+                        consecutive_parser_failures = 0
+                    elif isinstance(exc, HtmlTooLargeError):
+                        logger.warning(
+                            "scrape skipped (body too large): url=%s %s",
+                            detail_url[:200] if detail_url else "",
+                            exc,
+                        )
+                        consecutive_parser_failures = 0
+                    elif isinstance(
+                        exc, (ValueError, KeyError, AttributeError, TypeError)
+                    ):
+                        parser_failures += 1
+                        consecutive_parser_failures += 1
+                        logger.warning(
+                            "scrape failed (parser): url=%s error=%s",
+                            detail_url[:200] if detail_url else "",
+                            exc,
+                            exc_info=True,
+                        )
+                        if (
+                            consecutive_parser_failures
+                            >= PARSER_CONSECUTIVE_FAILURES_THRESHOLD
+                        ):
+                            raise CrawlThresholdExceeded(
+                                f"consecutive parser failures {consecutive_parser_failures} >= {PARSER_CONSECUTIVE_FAILURES_THRESHOLD}",
+                                attempted=attempted,
+                                parser_failures=parser_failures,
+                                consecutive=consecutive_parser_failures,
+                            )
+                        if attempted >= 3 and (
+                            parser_failures / attempted
+                        ) > PARSER_FAILURE_RATIO_THRESHOLD:
+                            raise CrawlThresholdExceeded(
+                                f"parser failure ratio {parser_failures}/{attempted} > {PARSER_FAILURE_RATIO_THRESHOLD}",
+                                attempted=attempted,
+                                parser_failures=parser_failures,
+                                consecutive=consecutive_parser_failures,
+                            )
+                    else:
+                        raise exc
+                    if remaining:
+                        pending.add(
+                            asyncio.create_task(fetch_one(remaining.popleft()))
+                        )
+                    continue
+                consecutive_parser_failures = 0
+                title, date_str, html_content, images, attachments = data
+                # dedupe를 위해 external_id를 먼저 계산해 중복이면 HTML 업로드 자체를 건너뛴다.
+                external_id = post.get("no") or _external_id_from_url(detail_url)
+                if external_id in seen:
+                    if remaining:
+                        pending.add(
+                            asyncio.create_task(fetch_one(remaining.popleft()))
+                        )
+                    continue
+                body_text_for_hash = (
+                    BeautifulSoup(html_content, "html.parser").get_text(
+                        separator="\n", strip=True
+                    )
+                    if html_content
+                    else ""
+                )
+                payload = build_notice_payload(
+                    college_id,
+                    post,
+                    detail_url,
+                    title,
+                    date_str,
+                    html_content,
+                    images,
+                    attachments,
+                    body_text_for_hash=body_text_for_hash or None,
+                    external_id=external_id,
+                )
+                if remaining:
+                    pending.add(
+                        asyncio.create_task(fetch_one(remaining.popleft()))
+                    )
+                if payload is None:
+                    continue
+                seen.add(external_id)
+                yield payload
+    finally:
+        if pending:
+            for task in pending:
+                task.cancel()
+            await asyncio.gather(*pending, return_exceptions=True)
+        aclose_fn = getattr(rate_limiter, "aclose", None)
+        if callable(aclose_fn):
             try:
-                post, detail_url, data, exc = task.result()
-            except Exception as e:
-                logger.warning("scrape task exception: %s", e, exc_info=True)
-                if remaining:
-                    pending.add(asyncio.create_task(fetch_one(remaining.popleft())))
-                continue
-            attempted += 1
-            if exc is not None:
-                if isinstance(
-                    exc, (httpx.HTTPError, httpx.TimeoutException, TimeoutError, OSError, ConnectionError)
-                ):
-                    logger.warning(
-                        "scrape failed (network/timeout): url=%s error=%s",
-                        detail_url[:200] if detail_url else "", exc, exc_info=True,
-                    )
-                    consecutive_parser_failures = 0
-                elif isinstance(exc, HtmlTooLargeError):
-                    logger.warning(
-                        "scrape skipped (body too large): url=%s %s",
-                        detail_url[:200] if detail_url else "", exc,
-                    )
-                    consecutive_parser_failures = 0
-                elif isinstance(exc, (ValueError, KeyError, AttributeError, TypeError)):
-                    parser_failures += 1
-                    consecutive_parser_failures += 1
-                    logger.warning(
-                        "scrape failed (parser): url=%s error=%s",
-                        detail_url[:200] if detail_url else "", exc, exc_info=True,
-                    )
-                    if consecutive_parser_failures >= PARSER_CONSECUTIVE_FAILURES_THRESHOLD:
-                        raise CrawlThresholdExceeded(
-                            f"consecutive parser failures {consecutive_parser_failures} >= {PARSER_CONSECUTIVE_FAILURES_THRESHOLD}",
-                            attempted=attempted,
-                            parser_failures=parser_failures,
-                            consecutive=consecutive_parser_failures,
-                        )
-                    if attempted >= 3 and (parser_failures / attempted) > PARSER_FAILURE_RATIO_THRESHOLD:
-                        raise CrawlThresholdExceeded(
-                            f"parser failure ratio {parser_failures}/{attempted} > {PARSER_FAILURE_RATIO_THRESHOLD}",
-                            attempted=attempted,
-                            parser_failures=parser_failures,
-                            consecutive=consecutive_parser_failures,
-                        )
-                else:
-                    raise exc
-                if remaining:
-                    pending.add(asyncio.create_task(fetch_one(remaining.popleft())))
-                continue
-            consecutive_parser_failures = 0
-            title, date_str, html_content, images, attachments = data
-            body_text_for_hash = (
-                BeautifulSoup(html_content, "html.parser").get_text(separator="\n", strip=True)
-                if html_content else ""
-            )
-            payload = build_notice_payload(
-                college_id, post, detail_url, title, date_str,
-                html_content, images, attachments,
-                body_text_for_hash=body_text_for_hash or None,
-            )
-            if remaining:
-                pending.add(asyncio.create_task(fetch_one(remaining.popleft())))
-            if payload is None or payload["external_id"] in seen:
-                continue
-            seen.add(payload["external_id"])
-            yield payload
+                await aclose_fn()
+            except Exception:
+                # 종료 실패는 치명적이지 않으므로 무시
+                pass
 
 
 def crawl_college_sync(

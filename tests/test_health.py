@@ -24,9 +24,8 @@ def test_ready_returns_200_or_503(client):
 
 
 def test_health_returns_200(client):
-    """GET /health → 200 + status만 노출(요약)."""
+    """GET /health → 200 + status ok (플랫폼 헬스체크용, DB/Redis 미체크)."""
     response = client.get("/health")
     assert response.status_code == 200
     data = response.json()
-    assert "status" in data
-    assert data["status"] in ("ok", "degraded")
+    assert data == {"status": "ok"}

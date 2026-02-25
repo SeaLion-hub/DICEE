@@ -56,10 +56,10 @@ class Settings(BaseSettings):
     # DB 부팅 정책. True=연결 실패 시 부팅 중단, False=soft-start(기동은 하고 readiness에서 차단).
     strict_startup_db_check: bool = True
 
-    # DB 풀 (용량 계획: DEPLOYMENT.md 참고). 미설정 시 아래 기본값 사용.
-    db_pool_size_async: int = Field(5, ge=1, le=20, description="Async API 풀 크기(프로세스당).")
-    db_pool_max_overflow_async: int = Field(10, ge=0, le=20, description="Async API 풀 오버플로(프로세스당).")
-    db_pool_timeout_async: float = Field(30.0, ge=5.0, le=120.0, description="Async 풀 대기 타임아웃(초).")
+    # DB 풀 (용량 계획: DEPLOYMENT.md, 프로파일 R). 미설정 시 아래 기본값 사용.
+    db_pool_size_async: int = Field(4, ge=1, le=20, description="Async API 풀 크기(프로세스당). 프로파일 R: 4.")
+    db_pool_max_overflow_async: int = Field(6, ge=0, le=20, description="Async API 풀 오버플로(프로세스당). 프로파일 R: 6.")
+    db_pool_timeout_async: float = Field(5.0, ge=1.0, le=120.0, description="Async 풀 대기 타임아웃(초). 운영 권장: 5.")
     # 쿼리 실행 제한(ms). 장기 쿼리가 풀을 잡고 늘어지는 것 방지. PostgreSQL statement_timeout.
     db_statement_timeout_ms: int = Field(30000, ge=1000, le=300000, description="Statement timeout(ms). 기본 30초.")
     db_pool_size_sync: int = Field(2, ge=1, le=10, description="Celery Sync 풀 크기(워커·자식당).")
@@ -115,29 +115,29 @@ class Settings(BaseSettings):
     # Redis 소켓/연결 타임아웃(초). 풀 포화·장애 시 무한 대기 방지.
     redis_socket_timeout: float = Field(5.0, ge=1.0, le=60.0)
     redis_socket_connect_timeout: float = Field(2.0, ge=0.5, le=30.0)
-    # Blocklist: Redis 장애 시 정책. True=Fail-Closed(인증 거부), False=Fail-Open(서명만 검증 후 통과).
-    redis_blocklist_fail_closed: bool = True
+    # Blocklist: Redis 장애 시 정책. True=Fail-Closed(인증 거부), False=Fail-Open(서명만 검증 후 통과). 운영 권장 False(가용성 우선).
+    redis_blocklist_fail_closed: bool = False
     # Blocklist Circuit Breaker: 연속 실패 N회 시 열림, open_seconds 동안 Fail-open.
-    redis_blocklist_circuit_failure_threshold: int = Field(5, ge=1, le=50)
-    redis_blocklist_circuit_open_seconds: float = Field(30.0, ge=5.0, le=300.0)
-    redis_blocklist_circuit_half_open_interval_seconds: float = Field(10.0, ge=2.0, le=60.0)
+    redis_blocklist_circuit_failure_threshold: int = Field(3, ge=1, le=50)
+    redis_blocklist_circuit_open_seconds: float = Field(60.0, ge=5.0, le=300.0)
+    redis_blocklist_circuit_half_open_interval_seconds: float = Field(15.0, ge=2.0, le=60.0)
     # Blocklist용 Redis 비동기 풀 크기. Uvicorn 워커 동시 처리량에 맞게 설정.
     redis_blocklist_max_connections: int = Field(20, ge=1, le=100)
     # Trigger 락용 Redis 비동기 풀 크기. 인증 풀과 분리해 장애 전파 완화(단일 Redis는 SPOF).
     redis_trigger_lock_max_connections: int = Field(5, ge=1, le=50)
     # TTL >= max_countdown + p99_runtime + safety. 단과대 7개·5분 스태거 시 max_countdown=1800 → 2400 권장.
     redis_trigger_lock_ttl_seconds: int = Field(2400, ge=60, le=86400)
-    # True면 Redis 미설정/실패 시 락 없이 진행하지 않고 503. 운영 모드에서만 True 권장.
-    redis_trigger_lock_required: bool = False
+    # True면 Redis 미설정/실패 시 락 없이 진행하지 않고 503. 운영 반영값 True.
+    redis_trigger_lock_required: bool = True
     crawl_trigger_secret: SecretStr | None = None
     internal_trigger_crawl_rate_limit_per_minute: int = Field(
-        30,
+        10,
         ge=1,
         le=1000,
         description="동일 IP에 대한 /internal/trigger-crawl 분당 최대 호출 수.",
     )
     internal_crawl_stats_rate_limit_per_minute: int = Field(
-        60,
+        30,
         ge=1,
         le=1000,
         description="동일 IP에 대한 /internal/crawl-stats 분당 최대 호출 수.",
@@ -208,27 +208,18 @@ class Settings(BaseSettings):
 
 def check_pool_budget(max_conn_override: int | None = None) -> tuple[bool, int, int]:
     """
-    풀 예산 검사. max_conn_override 또는 DB_MAX_CONNECTIONS 사용. 둘 다 미설정 시 검사 생략(True 반환).
-    부팅 후 verify_db_connection()에서 조회한 max_connections를 override로 넘기면 동적 값 반영.
-    반환: (within_budget, peak_conn, app_budget).
+    풀 예산 검사(프로파일 R 기준). max_conn_override 또는 DB_MAX_CONNECTIONS 사용.
+    내부적으로 app.core.database.check_pool_budget 호출. 반환: (within_budget, peak_conn, app_budget).
     """
-    max_conn = max_conn_override if max_conn_override is not None else settings.db_max_connections
-    if max_conn is None:
-        return True, 0, 0
-    api_conn = (
-        settings.db_api_instances
-        * settings.db_uvicorn_workers
-        * (settings.db_pool_size_async + settings.db_pool_max_overflow_async)
+    from app.core.database import check_pool_budget as _check_pool_budget
+
+    effective = (
+        max_conn_override
+        if max_conn_override is not None
+        else settings.db_max_connections
     )
-    worker_conn = (
-        settings.db_worker_instances
-        * settings.db_celery_concurrency
-        * (settings.db_pool_size_sync + settings.db_pool_max_overflow_sync)
-    )
-    total = api_conn + worker_conn
-    peak = int(total * settings.deploy_surge_factor)
-    app_budget = int((max_conn - settings.db_reserved) * 0.7)
-    return peak <= app_budget, peak, app_budget
+    r = _check_pool_budget(effective)
+    return r.within_budget, r.peak_pool_conn, r.app_budget
 
 
 settings = Settings()

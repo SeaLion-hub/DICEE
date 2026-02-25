@@ -12,8 +12,9 @@ from pyjwt_key_fetcher import AsyncKeyFetcher
 
 from app.api import health, internal
 from app.api.v1 import auth as v1_auth
-from app.core.config import settings, check_pool_budget
+from app.core.config import settings
 from app.core.database import (
+    check_pool_budget,
     get_async_session_maker,
     get_engine,
     get_resolved_max_connections,
@@ -56,16 +57,31 @@ async def lifespan(app: FastAPI):
 
     init_db()
     await verify_db_connection()
-    max_conn = get_resolved_max_connections()
-    within_budget, peak_conn, app_budget = check_pool_budget(max_conn_override=max_conn)
-    if not within_budget and peak_conn > 0 and app_budget >= 0:
-        msg = (
-            f"Pool budget exceeded: peak_conn={peak_conn} > app_budget={app_budget}. "
-            "Adjust pool sizes or DB_MAX_CONNECTIONS. See DEPLOYMENT.md."
-        )
+    effective_max_conn = (
+        settings.db_max_connections
+        if settings.db_max_connections is not None
+        else get_resolved_max_connections()
+    )
+    budget_result = check_pool_budget(effective_max_conn)
+    if not budget_result.within_budget and budget_result.app_budget > 0:
         if settings.db_pool_strict_budget:
-            raise ValueError(msg)
-        logger.warning(msg)
+            raise RuntimeError(budget_result.message)
+        logger.critical("%s", budget_result.message)
+        try:
+            import sentry_sdk
+            with sentry_sdk.push_scope() as scope:
+                scope.set_tag("context", "db_capacity")
+                scope.set_context(
+                    "pool_budget",
+                    {
+                        "peak_pool_conn": budget_result.peak_pool_conn,
+                        "app_budget": budget_result.app_budget,
+                        "total_pool_conn": budget_result.total_pool_conn,
+                    },
+                )
+                sentry_sdk.capture_message(budget_result.message, level="error")
+        except ImportError:
+            pass
     state = AppState(
         httpx_client=httpx.AsyncClient(),
         google_key_fetcher=AsyncKeyFetcher(
@@ -78,13 +94,34 @@ async def lifespan(app: FastAPI):
     )
     app.state = state
     yield
-    await state.httpx_client.aclose()
-    if state.redis_blocklist_client is not None:
-        await state.redis_blocklist_client.aclose()
-    if state.redis_trigger_lock_client is not None:
-        await state.redis_trigger_lock_client.aclose()
-    if state.engine is not None:
-        await state.engine.dispose()
+
+    # 종료 시점: 각 리소스를 개별적으로 정리해, 하나의 실패가 나머지 해제를 막지 않도록 한다.
+    try:
+        await state.httpx_client.aclose()
+    except Exception as e:
+        logger.warning("httpx_client close failed during shutdown: %s", e, exc_info=True)
+
+    try:
+        if state.redis_blocklist_client is not None:
+            await state.redis_blocklist_client.aclose()
+    except Exception as e:
+        logger.warning(
+            "redis_blocklist_client close failed during shutdown: %s", e, exc_info=True
+        )
+
+    try:
+        if state.redis_trigger_lock_client is not None:
+            await state.redis_trigger_lock_client.aclose()
+    except Exception as e:
+        logger.warning(
+            "redis_trigger_lock_client close failed during shutdown: %s", e, exc_info=True
+        )
+
+    try:
+        if state.engine is not None:
+            await state.engine.dispose()
+    except Exception as e:
+        logger.warning("DB engine dispose failed during shutdown: %s", e, exc_info=True)
 
 
 app = FastAPI(
