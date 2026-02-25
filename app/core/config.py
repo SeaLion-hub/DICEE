@@ -183,6 +183,11 @@ class Settings(BaseSettings):
         le=1000,
         description="동일 IP에 대한 /internal/crawl-stats 분당 최대 호출 수.",
     )
+    # GET /internal/metrics 허용 IP. 쉼표 구분. 비어 있으면 모든 IP 허용. Prometheus 스크래핑 제한용.
+    metrics_allowed_ips: str = Field(
+        "",
+        description="Comma-separated IPs allowed to scrape /internal/metrics. Empty = allow all.",
+    )
     # True일 때만 AI 파이프라인(Gemini 등) 실행 및 done 저장. False면 process_notice_ai_task는 스킵(pending 유지).
     ai_pipeline_enabled: bool = False
     # Celery 워커 prefetch. 1=한 번에 하나만. 짧은 태스크 많으면 2~4로 올려 I/O 효율 개선. -O fair와 함께 사용.
