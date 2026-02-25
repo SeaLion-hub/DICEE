@@ -330,7 +330,7 @@ async def google_login(
         raise
     if normalized not in allowed:
         raise AuthError("redirect_uri not allowed")
-    token_data = await exchange_google_code(code, redirect_uri, http_client)
+    token_data = await exchange_google_code(code, normalized, http_client)
     id_token = token_data.id_token
 
     claims = await decode_google_id_token(id_token, key_fetcher)

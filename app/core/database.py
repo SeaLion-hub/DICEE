@@ -175,9 +175,10 @@ def init_db() -> None:
         logger.warning("DB URL parse check failed: %s", e)
 
     # 연결 단위 statement_timeout 적용. docs/decisions/database-pool-capacity.md.
+    # psycopg3 (postgresql+psycopg)는 server_settings 미지원 → libpq options 사용.
     connect_args: dict = {}
     timeout_ms = getattr(settings, "db_statement_timeout_ms", 30000)
-    connect_args["server_settings"] = {"statement_timeout": str(timeout_ms)}
+    connect_args["options"] = f"-c statement_timeout={timeout_ms}"
 
     _db_holder.engine = create_async_engine(
         _async_database_url(raw_url),

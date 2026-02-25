@@ -22,6 +22,7 @@ API_RATE_LIMIT_KEY_PREFIX: Final[str] = "dicee:api_rate:"
 # 인메모리 fallback용 전역 상태
 _inmemory_counts: dict[str, tuple[float, int]] = {}
 _inmemory_lock = asyncio.Lock()
+_MAX_INMEMORY_KEYS: Final[int] = 100_000
 
 
 class RateLimitExceededError(Exception):
@@ -33,9 +34,15 @@ async def _check_rate_limit_inmemory(
     max_requests: int,
     window_seconds: int,
 ) -> bool:
-    """프로세스 로컬 인메모리 카운터 기반 rate limit."""
+    """프로세스 로컬 인메모리 카운터 기반 rate limit. 키 수 상한 초과 시 오래된 키 정리."""
     now = time.monotonic()
     async with _inmemory_lock:
+        if len(_inmemory_counts) > _MAX_INMEMORY_KEYS:
+            cutoff = now - window_seconds
+            stale_keys = [k for k, (ws, _) in _inmemory_counts.items() if ws < cutoff]
+            for k in stale_keys:
+                _inmemory_counts.pop(k, None)
+
         window_start, count = _inmemory_counts.get(identifier, (now, 0))
         if now - window_start >= window_seconds:
             window_start = now

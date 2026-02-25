@@ -61,6 +61,116 @@ def _log_internal_auth_failure(
         logger.warning("internal auth failed", extra=extra)
 
 
+def _authorize_internal_trigger(
+    request: Request,
+    x_crawl_trigger_secret: str | None,
+    authorization: str | None,
+) -> None:
+    """내부 트리거 시크릿 검사. 실패 시 HTTPException 발생."""
+    try:
+        check_crawl_trigger_secret(x_crawl_trigger_secret, authorization)
+    except CrawlTriggerNotConfiguredError as e:
+        _log_internal_auth_failure(request, reason="trigger_not_configured", error=e)
+        raise HTTPException(
+            status_code=503,
+            detail="Crawl trigger not configured (CRAWL_TRIGGER_SECRET missing)",
+        ) from None
+    except InvalidCrawlTriggerSecretError as e:
+        _log_internal_auth_failure(request, reason="invalid_or_missing_secret", error=e)
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid or missing crawl trigger secret",
+        ) from None
+
+
+def _resolve_college_codes(college_code: str | None) -> list[str]:
+    """college_code 정규화·검증 후 코드 목록 반환. 단일 코드 미등록 시 HTTPException(400)."""
+    normalized = college_code.strip() if college_code and college_code.strip() else None
+    if normalized and normalized not in COLLEGE_CODE_TO_MODULE:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown college_code: {normalized}. Valid: {list(COLLEGE_CODE_TO_MODULE.keys())}",
+        )
+    return [normalized] if normalized else list(COLLEGE_CODE_TO_MODULE.keys())
+
+
+async def _claim_idempotency(
+    redis_client: RedisAsyncio | None,
+    idempotency_key: str | None,
+    scope: str,
+) -> tuple[bool, dict | None]:
+    """
+    Idempotency 슬롯 점유 시도. 반환 (claimed, cached_or_none).
+    claimed=True면 이번 요청이 처리 담당. claimed=False면 cached에 202 응답용 payload(캐시 결과 또는 in_progress).
+    """
+    if not idempotency_key or redis_client is None:
+        return (True, None)
+    claimed = await try_claim_trigger_idempotency(redis_client, idempotency_key, scope)
+    if claimed:
+        return (True, None)
+    cached = await get_trigger_idempotency_result(redis_client, idempotency_key, scope)
+    if cached is not None:
+        return (False, cached)
+    return (False, {"detail": "in_progress", "code": "IDEMPOTENCY_IN_PROGRESS"})
+
+
+async def _enqueue_crawls(
+    request: Request,
+    redis_client: RedisAsyncio | None,
+    codes: list[str],
+) -> tuple[dict, int]:
+    """크롤 태스크 enqueue. 반환 (응답 body, status_code)."""
+    from app.services.tasks import crawl_college_task
+
+    status_code = 200
+    out: dict = {}
+    task_ids: list[dict] = []
+    skipped: list[str] = []
+    failed: list[str] = []
+    for i, code in enumerate(codes):
+        lock_token: str | None = None
+        if redis_client is not None:
+            try:
+                acquired, lock_token = await acquire_trigger_lock(redis_client, code)
+            except RedisLockUnavailableError:
+                logger.exception("Trigger lock unavailable (Redis error) for college=%s", code)
+                status_code = 503
+                out = {
+                    "detail": "Service temporarily unavailable",
+                    "code": "REDIS_LOCK_UNAVAILABLE",
+                }
+                break
+            if not acquired:
+                skipped.append(code)
+                continue
+        countdown = i * CRAWL_STAGGER_SECONDS if len(codes) > 1 else 0
+        try:
+            result = await asyncio.to_thread(
+                crawl_college_task.apply_async,
+                args=[code, lock_token],
+                countdown=countdown,
+            )
+        except Exception:
+            logger.exception("trigger-crawl apply_async failed: code=%s", code)
+            if redis_client is not None and lock_token:
+                await release_trigger_lock(redis_client, code, lock_token)
+            failed.append(code)
+            continue
+        task_ids.append({"college_code": code, "task_id": result.id, "countdown_sec": countdown})
+        request_id = getattr(request.state, "request_id", None) if request else None
+        logger.info(
+            "trigger-crawl enqueued: college_code=%s task_id=%s countdown=%s request_id=%s",
+            code, result.id, countdown, request_id,
+        )
+    if status_code == 200:
+        out = {"enqueued": len(task_ids), "tasks": task_ids}
+        if skipped:
+            out["skipped"] = skipped
+        if failed:
+            out["failed"] = failed
+    return (out, status_code)
+
+
 @router.post("/trigger-crawl")
 async def post_trigger_crawl(
     request: Request,
@@ -70,7 +180,13 @@ async def post_trigger_crawl(
     ),
     x_crawl_trigger_secret: str | None = Header(None, alias="X-Crawl-Trigger-Secret"),
     authorization: str | None = Header(None),
-    idempotency_key: str | None = Header(None, alias="Idempotency-Key"),
+    idempotency_key: str | None = Header(
+        None,
+        alias="Idempotency-Key",
+        min_length=1,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9._:-]+$",
+    ),
     redis_client: RedisAsyncio | None = Depends(get_redis_trigger_lock),
 ):
     """
@@ -95,36 +211,16 @@ async def post_trigger_crawl(
             status_code=429,
             detail="Too many internal trigger requests, please try again later.",
         )
-    try:
-        check_crawl_trigger_secret(x_crawl_trigger_secret, authorization)
-    except CrawlTriggerNotConfiguredError as e:
-        _log_internal_auth_failure(request, reason="trigger_not_configured", error=e)
-        raise HTTPException(
-            status_code=503,
-            detail="Crawl trigger not configured (CRAWL_TRIGGER_SECRET missing)",
-        ) from None
-    except InvalidCrawlTriggerSecretError as e:
-        _log_internal_auth_failure(request, reason="invalid_or_missing_secret", error=e)
-        raise HTTPException(
-            status_code=401,
-            detail="Invalid or missing crawl trigger secret",
-        ) from None
+    _authorize_internal_trigger(request, x_crawl_trigger_secret, authorization)
 
-    # Idempotency: 요청 스코프(route+college_code)별로 별도 캐시. 동일 키라도 college_code가 다르면 다른 결과.
-    idempotency_scope = (college_code.strip() if college_code and college_code.strip() else "all")
+    codes = _resolve_college_codes(college_code)
+    idempotency_scope = codes[0] if len(codes) == 1 else "all"
     key_stripped = idempotency_key.strip() if idempotency_key and idempotency_key.strip() else None
-    if key_stripped and redis_client is not None:
-        claimed = await try_claim_trigger_idempotency(redis_client, key_stripped, idempotency_scope)
-        if not claimed:
-            cached = await get_trigger_idempotency_result(redis_client, key_stripped, idempotency_scope)
-            if cached is not None:
-                return JSONResponse(status_code=202, content=cached)
-            return JSONResponse(
-                status_code=202,
-                content={"detail": "in_progress", "code": "IDEMPOTENCY_IN_PROGRESS"},
-            )
 
-    # 운영 모드: Redis trigger-lock 필수 시 미설정이면 503 (중복 실행 방어 유지).
+    claimed, cached = await _claim_idempotency(redis_client, key_stripped, idempotency_scope)
+    if not claimed:
+        return JSONResponse(status_code=202, content=cached or {})
+
     if redis_client is None and getattr(settings, "redis_trigger_lock_required", False):
         return JSONResponse(
             status_code=503,
@@ -134,65 +230,13 @@ async def post_trigger_crawl(
             },
         )
 
-    from app.services.tasks import crawl_college_task
-
-    if college_code is not None:
-        if college_code not in COLLEGE_CODE_TO_MODULE:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Unknown college_code: {college_code}. Valid: {list(COLLEGE_CODE_TO_MODULE.keys())}",
-            )
-        codes = [college_code]
-    else:
-        codes = list(COLLEGE_CODE_TO_MODULE.keys())
-
-    task_ids: list[dict] = []
-    skipped: list[str] = []
-    failed: list[str] = []
-    for i, code in enumerate(codes):
-        lock_token: str | None = None
-        if redis_client is not None:
-            try:
-                acquired, lock_token = await acquire_trigger_lock(redis_client, code)
-            except RedisLockUnavailableError:
-                logger.exception("Trigger lock unavailable (Redis error) for college=%s", code)
-                return JSONResponse(
-                    status_code=503,
-                    content={
-                        "detail": "Service temporarily unavailable",
-                        "code": "REDIS_LOCK_UNAVAILABLE",
-                    },
-                )
-            if not acquired:
-                skipped.append(code)
-                continue
-        countdown = i * CRAWL_STAGGER_SECONDS if len(codes) > 1 else 0
-        try:
-            result = await asyncio.to_thread(
-                crawl_college_task.apply_async,
-                args=[code, lock_token],
-                countdown=countdown,
-            )
-        except Exception as e:
-            logger.exception("trigger-crawl apply_async failed: code=%s", code)
-            if redis_client is not None and lock_token:
-                await release_trigger_lock(redis_client, code, lock_token)
-            failed.append(code)
-            continue
-        task_ids.append({"college_code": code, "task_id": result.id, "countdown_sec": countdown})
-        request_id = getattr(request.state, "request_id", None) if request else None
-        logger.info(
-            "trigger-crawl enqueued: college_code=%s task_id=%s countdown=%s request_id=%s",
-            code, result.id, countdown, request_id,
-        )
-    out: dict = {"enqueued": len(task_ids), "tasks": task_ids}
-    if skipped:
-        out["skipped"] = skipped
-    if failed:
-        out["failed"] = failed
-    if key_stripped and redis_client is not None:
-        await set_trigger_idempotency_result(redis_client, key_stripped, idempotency_scope, out)
-    return JSONResponse(status_code=200, content=out)
+    out: dict = {}
+    try:
+        out, status_code = await _enqueue_crawls(request, redis_client, codes)
+    finally:
+        if claimed and redis_client is not None and key_stripped:
+            await set_trigger_idempotency_result(redis_client, key_stripped, idempotency_scope, out)
+    return JSONResponse(status_code=status_code, content=out)
 
 
 @router.get("/crawl-stats")

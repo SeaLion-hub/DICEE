@@ -55,7 +55,7 @@
 ## 7. Statement timeout (장기 쿼리 방어)
 
 * **결정**: 연결 단위로 PostgreSQL `statement_timeout`을 설정한다. 한 쿼리가 풀을 오래 잡아 Connection Pool Exhaustion으로 서비스 전체가 멈추는 것을 방지한다.
-* **구현**: Async 엔진 생성 시 `connect_args={"server_settings": {"statement_timeout": "<ms>"}}`로 전달. `DB_STATEMENT_TIMEOUT_MS` 환경 변수(기본 30000ms)로 설정 가능.
+* **구현**: Async 엔진(postgresql+psycopg) 생성 시 `connect_args={"options": "-c statement_timeout=<ms>"}`로 전달. psycopg3는 `server_settings` 미지원이므로 libpq `options` 사용. `DB_STATEMENT_TIMEOUT_MS` 환경 변수(기본 30000ms)로 설정 가능.
 * **이유**: 크롤링·복잡한 조인 등으로 장기 실행 쿼리가 나가면 해당 연결이 TTL 만료까지 풀에 묶이므로, 서버 레벨에서 실행 시간 상한을 두는 것이 안전하다.
 
 ---

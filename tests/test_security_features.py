@@ -1,6 +1,7 @@
 """보안 관련 기능 테스트: Rate Limit·내부 인증·오류 메시지 마스킹."""
 
 import asyncio
+import uuid
 
 import pytest
 from pydantic import SecretStr
@@ -169,4 +170,32 @@ def test_check_crawl_trigger_secret_valid_and_invalid(monkeypatch):
     # 잘못된 시크릿은 InvalidCrawlTriggerSecretError 발생
     with pytest.raises(InvalidCrawlTriggerSecretError):
         check_crawl_trigger_secret("wrong-secret", None)
+
+
+def test_logout_blocklist_unavailable_returns_503(client, monkeypatch):
+    """로그아웃 시 Blocklist(Redis) 불가 시 503을 반환한다."""
+    from app.api.v1.auth import get_current_user_id_and_jti
+    from app.core.redis import BlocklistUnavailableError
+    from app.main import app
+
+    user_id = uuid.uuid4()
+    jti = "test-jti"
+
+    async def _fake_get_current_user_id_and_jti():
+        return (user_id, jti)
+
+    async def _logout_raise_blocklist_unavailable(*args, **kwargs):
+        raise BlocklistUnavailableError("Blocklist temporarily unavailable")
+
+    from app.api.v1 import auth as auth_module
+
+    app.dependency_overrides[get_current_user_id_and_jti] = _fake_get_current_user_id_and_jti
+    monkeypatch.setattr(auth_module, "logout_user", _logout_raise_blocklist_unavailable)
+    try:
+        response = client.post("/v1/auth/logout")
+        assert response.status_code == 503
+        data = response.json()
+        assert "retry" in data.get("detail", "").lower()
+    finally:
+        app.dependency_overrides.pop(get_current_user_id_and_jti, None)
 

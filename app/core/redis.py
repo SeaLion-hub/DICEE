@@ -189,7 +189,7 @@ async def add_access_to_blocklist(
     except Exception as e:
         logger.warning("Blocklist add failed (jti=%s): %s", jti, e, exc_info=True)
         await _blocklist_circuit._record_failure()
-        raise
+        raise BlocklistUnavailableError("Blocklist temporarily unavailable") from e
 
 
 async def acquire_trigger_lock(
@@ -245,6 +245,11 @@ async def release_trigger_lock(
 IDEMPOTENCY_VALUE_IN_PROGRESS = "in_progress"
 
 
+def _idempotency_key_hash(idempotency_key: str) -> str:
+    """Idempotency-Key 원문을 Redis 키용 짧은 해시로 변환. 키 길이·keyspace 오염 방지."""
+    return hashlib.sha256(idempotency_key.encode()).hexdigest()[:32]
+
+
 def _idempotency_scope_hash(scope: str) -> str:
     """요청 스코프(route+college_code 등)를 짧은 안정적 해시로 변환. 키 길이 제한용."""
     return hashlib.sha256(scope.encode()).hexdigest()[:16]
@@ -261,7 +266,7 @@ async def try_claim_trigger_idempotency(
     if client is None or not idempotency_key:
         return True  # Redis 없으면 클레임 검사 생략, 기존처럼 진행
     scope_hash = _idempotency_scope_hash(scope)
-    key = f"{TRIGGER_IDEMPOTENCY_KEY_PREFIX}{idempotency_key}:{scope_hash}"
+    key = f"{TRIGGER_IDEMPOTENCY_KEY_PREFIX}{_idempotency_key_hash(idempotency_key)}:{scope_hash}"
     try:
         ok = await client.set(
             key,
@@ -287,7 +292,7 @@ async def get_trigger_idempotency_result(
     if client is None or not idempotency_key:
         return None
     scope_hash = _idempotency_scope_hash(scope)
-    key = f"{TRIGGER_IDEMPOTENCY_KEY_PREFIX}{idempotency_key}:{scope_hash}"
+    key = f"{TRIGGER_IDEMPOTENCY_KEY_PREFIX}{_idempotency_key_hash(idempotency_key)}:{scope_hash}"
     try:
         raw = await client.get(key)
         if raw is None:
@@ -307,7 +312,7 @@ async def set_trigger_idempotency_result(
     if client is None or not idempotency_key:
         return
     scope_hash = _idempotency_scope_hash(scope)
-    key = f"{TRIGGER_IDEMPOTENCY_KEY_PREFIX}{idempotency_key}:{scope_hash}"
+    key = f"{TRIGGER_IDEMPOTENCY_KEY_PREFIX}{_idempotency_key_hash(idempotency_key)}:{scope_hash}"
     try:
         await client.set(
             key, json.dumps(payload), ex=TRIGGER_IDEMPOTENCY_TTL_SECONDS
