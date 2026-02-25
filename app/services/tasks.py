@@ -111,10 +111,11 @@ def crawl_college_task(self, college_code: str, lock_token: str | None = None):
             "failed_enqueues": failed_enqueues,
         }
     finally:
-        release_trigger_lock_sync(college_code, lock_token)
+        # Heartbeat 스레드 먼저 중지 후 락 해제 (경합 완화)
         stop_heartbeat.set()
         if heartbeat_thread is not None:
             heartbeat_thread.join(timeout=2.0)
+        release_trigger_lock_sync(college_code, lock_token)
 
 
 @app.task(name="app.services.tasks.close_stale_crawl_runs_task")

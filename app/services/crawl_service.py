@@ -280,46 +280,47 @@ def _collect_payloads_sync(
     tracker = CrawlErrorTracker()
     remaining = deque(links)
 
+    executor = ThreadPoolExecutor(max_workers=COLLECT_PAYLOADS_MAX_WORKERS)
     try:
-        with ThreadPoolExecutor(max_workers=COLLECT_PAYLOADS_MAX_WORKERS) as executor:
-            futures: dict = {}
-            for _ in range(min(COLLECT_IN_FLIGHT_LIMIT, len(remaining))):
-                if not remaining:
-                    break
-                post = remaining.popleft()
-                rate_limiter.wait_sync(host_from_url(post.get("url") or "") or "_")
-                fut = executor.submit(_scrape_one_sync, post, scrape_fn)
-                futures[fut] = post
+        futures: dict = {}
+        for _ in range(min(COLLECT_IN_FLIGHT_LIMIT, len(remaining))):
+            if not remaining:
+                break
+            post = remaining.popleft()
+            rate_limiter.wait_sync(host_from_url(post.get("url") or "") or "_")
+            fut = executor.submit(_scrape_one_sync, post, scrape_fn)
+            futures[fut] = post
 
-            while futures:
-                done, _ = wait(futures.keys(), return_when=FIRST_COMPLETED)
-                for fut in done:
-                    post = futures.pop(fut)
-                    try:
-                        p, detail_url, data, exc = fut.result()
-                    except Exception as e:
-                        logger.warning("scrape future exception: %s", e, exc_info=True)
-                        if remaining:
-                            next_post = remaining.popleft()
-                            rate_limiter.wait_sync(
-                                host_from_url(next_post.get("url") or "") or "_"
-                            )
-                            futures[executor.submit(_scrape_one_sync, next_post, scrape_fn)] = next_post
-                        continue
-                    payload, raise_exc = _process_scrape_result(
-                        post, detail_url, data, exc, college_id, seen, tracker
-                    )
-                    if raise_exc is not None:
-                        raise raise_exc
-                    if payload is not None:
-                        yield payload
+        while futures:
+            done, _ = wait(futures.keys(), return_when=FIRST_COMPLETED)
+            for fut in done:
+                post = futures.pop(fut)
+                try:
+                    p, detail_url, data, exc = fut.result()
+                except Exception as e:
+                    logger.warning("scrape future exception: %s", e, exc_info=True)
                     if remaining:
                         next_post = remaining.popleft()
                         rate_limiter.wait_sync(
                             host_from_url(next_post.get("url") or "") or "_"
                         )
                         futures[executor.submit(_scrape_one_sync, next_post, scrape_fn)] = next_post
+                    continue
+                payload, raise_exc = _process_scrape_result(
+                    post, detail_url, data, exc, college_id, seen, tracker
+                )
+                if raise_exc is not None:
+                    raise raise_exc
+                if payload is not None:
+                    yield payload
+                if remaining:
+                    next_post = remaining.popleft()
+                    rate_limiter.wait_sync(
+                        host_from_url(next_post.get("url") or "") or "_"
+                    )
+                    futures[executor.submit(_scrape_one_sync, next_post, scrape_fn)] = next_post
     finally:
+        executor.shutdown(wait=False, cancel_futures=True)
         close_fn = getattr(rate_limiter, "close", None)
         if callable(close_fn):
             try:
@@ -511,6 +512,8 @@ def run_crawl_job_sync(
         session.commit()
         return (count, count)
     except Exception as e:
+        # 실패한 트랜잭션 초기화 → 이후 FAILED 업데이트/커밋 가능 (PendingRollbackError 방지)
+        session.rollback()
         update_crawl_run_sync(
             session,
             run_id,
