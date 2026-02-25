@@ -51,26 +51,29 @@ class _RedisConfig(NamedTuple):
 
 
 def _parse_allowed_origins(value: str) -> list[str]:
-    """JSON 배열만 파싱. ALLOWED_ORIGINS는 JSON 배열 형식만 지원. 예: [\"https://a.com\",\"https://b.com\"]"""
+    """
+    ALLOWED_ORIGINS 파싱. JSON 배열 또는 CSV(쉼표 구분) 지원.
+    - '[\"https://a.com\"]' 형태면 JSON 배열로 파싱.
+    - 그 외에는 쉼표로 split 후 strip (배포 파이프라인 따옴표 이스케이핑 오류 완화).
+    """
     if not value or not value.strip():
         return []
     s = value.strip()
-    if not s.startswith("["):
-        raise ValueError(
-            "ALLOWED_ORIGINS must be a JSON array. Example: [\"https://example.com\"]"
-        )
-    try:
-        parsed = json.loads(s)
-    except json.JSONDecodeError as e:
-        raise ValueError(f"ALLOWED_ORIGINS invalid JSON: {e}") from e
-    if not isinstance(parsed, list):
-        raise ValueError("ALLOWED_ORIGINS must be a JSON array.")
-    origins = [str(x).strip() for x in parsed if str(x).strip()]
+    if s.startswith("["):
+        try:
+            parsed = json.loads(s)
+        except json.JSONDecodeError as e:
+            raise ValueError(f"ALLOWED_ORIGINS invalid JSON: {e}") from e
+        if not isinstance(parsed, list):
+            raise ValueError("ALLOWED_ORIGINS must be a JSON array.")
+        origins = [str(x).strip() for x in parsed if str(x).strip()]
+    else:
+        origins = [x.strip() for x in s.split(",") if x.strip()]
     for o in origins:
         if o == "*":
             raise ValueError(
                 "ALLOWED_ORIGINS cannot contain '*' when allow_credentials is True. "
-                "Specify explicit origins as JSON array."
+                "Specify explicit origins (JSON array or comma-separated)."
             )
         if not (o.startswith("http://") or o.startswith("https://")):
             raise ValueError(f"ALLOWED_ORIGINS entry must be http(s) URL: {o!r}")
@@ -183,10 +186,10 @@ class Settings(BaseSettings):
         le=1000,
         description="동일 IP에 대한 /internal/crawl-stats 분당 최대 호출 수.",
     )
-    # GET /internal/metrics 허용 IP. 쉼표 구분. 비어 있으면 모든 IP 허용. Prometheus 스크래핑 제한용.
+    # GET /internal/metrics 허용 IP. 쉼표 구분. 비어 있으면 모든 IP 차단(fail-closed). Prometheus 스크래핑 제한용.
     metrics_allowed_ips: str = Field(
         "",
-        description="Comma-separated IPs allowed to scrape /internal/metrics. Empty = allow all.",
+        description="Comma-separated IPs allowed to scrape /internal/metrics. Empty = deny all (fail-closed).",
     )
     # True일 때만 AI 파이프라인(Gemini 등) 실행 및 done 저장. False면 process_notice_ai_task는 스킵(pending 유지).
     ai_pipeline_enabled: bool = False

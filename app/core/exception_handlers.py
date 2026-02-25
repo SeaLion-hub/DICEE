@@ -52,7 +52,8 @@ async def global_exception_handler(request: Request, exc: Exception) -> JSONResp
         content: dict = {"detail": exc.detail}
         if hasattr(exc, "code") and exc.code:
             content["code"] = exc.code
-        return JSONResponse(status_code=exc.status_code, content=content)
+        headers = getattr(exc, "headers", None) or {}
+        return JSONResponse(status_code=exc.status_code, content=content, headers=dict(headers))
     request_id = getattr(request.state, "request_id", None)
     logger.exception(
         "Unhandled exception: %s (request_id=%s)",

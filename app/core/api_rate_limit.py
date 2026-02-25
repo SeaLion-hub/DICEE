@@ -41,11 +41,11 @@ class RateLimitExceededError(Exception):
 
 
 def _evict_expired_shard(shard: int, now: float, window_seconds: int) -> None:
-    """샤드에서 만료된 항목만 heap에서 꺼내 삭제. O(evicted * log N)."""
+    """샤드에서 만료된 항목만 heap에서 꺼내 삭제. 캡 여부와 관계없이 만료된 항목은 매 요청마다 제거하여 힙 누적 방지."""
     counts = _shard_counts[shard]
     heap = _shard_heaps[shard]
     cutoff = now - window_seconds
-    while heap and len(counts) >= _PER_SHARD_CAP and heap[0][0] < cutoff:
+    while heap and heap[0][0] < cutoff:
         ws, id_ = heapq.heappop(heap)
         if id_ in counts and counts[id_][0] == ws:
             del counts[id_]

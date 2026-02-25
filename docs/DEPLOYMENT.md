@@ -317,7 +317,7 @@ CORS: `ALLOWED_ORIGINS`에 프론트 도메인 등록. credentials: 프론트가
 | `JWT_REFRESH_EXPIRE_DAYS` | Refresh 토큰 만료(일). 기본 7. | 2단계 (선택) |
 | `GOOGLE_CLIENT_ID` | 구글 OAuth 2.0 클라이언트 ID | 2단계 Auth (구글 먼저) |
 | `GOOGLE_CLIENT_SECRET` | 구글 OAuth 2.0 클라이언트 시크릿 | 2단계 Auth |
-| `ALLOWED_ORIGINS` | 프론트 도메인. **JSON 배열만** 지원(`["https://app.example.com"]`). `*`는 허용하지 않으며, allow_credentials=True + 명시 오리진만 허용. | 6단계 연동 시 |
+| `ALLOWED_ORIGINS` | 프론트 도메인. **JSON 배열**(`["https://app.example.com"]`) 또는 **쉼표 구분(CSV)** 지원. `*`는 허용하지 않으며, allow_credentials=True + 명시 오리진만 허용. | 6단계 연동 시 |
 | `STRICT_STARTUP_DB_CHECK` | `true`(기본): DB 연결 실패 시 부팅 중단. `false`: soft-start(기동은 하고 readiness에서 차단). | 선택 |
 | `ENVIRONMENT` | `production` \| `staging` \| `development`. production 시 스토리지 s3 강제. | 선택 |
 | `CONTENT_STORAGE_TYPE` | `s3` \| `local`. **production에서는 s3 필수.** | 본문 스토리지 사용 시 |

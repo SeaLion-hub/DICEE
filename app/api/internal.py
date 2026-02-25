@@ -260,6 +260,7 @@ async def get_crawl_stats(
     x_crawl_trigger_secret: str | None = Header(None, alias="X-Crawl-Trigger-Secret"),
     authorization: str | None = Header(None),
     session: AsyncSession = Depends(get_db),
+    redis_client: RedisAsyncio | None = Depends(get_redis_trigger_lock),
 ) -> dict:
     """
     최근 크롤 실행 이력. 단과대별 last_run_at, status, notices_upserted, has_error.
@@ -269,9 +270,8 @@ async def get_crawl_stats(
     _authorize_internal_trigger(request, x_crawl_trigger_secret, authorization)
     client_ip = request.client.host if request and request.client else "unknown"
     rate_identifier = f"internal_crawl_stats:{client_ip}"
-    # crawl-stats는 운영자용이라 조금 더 완화된 제한을 둔다.
     allowed = await check_rate_limit(
-        None,  # Redis Trigger Lock과 별개로 간단한 인메모리 제한만 사용
+        redis_client,
         identifier=rate_identifier,
         max_requests=getattr(settings, "internal_crawl_stats_rate_limit_per_minute", 60),
         window_seconds=60,
@@ -297,10 +297,10 @@ async def get_crawl_stats(
 
 
 def _metrics_allowed_client_ip(request: Request) -> bool:
-    """METRICS_ALLOWED_IPS가 설정된 경우 해당 IP만 허용. 미설정 시 모든 IP 허용."""
+    """METRICS_ALLOWED_IPS가 설정된 경우 해당 IP만 허용. 미설정(빈 값) 시 모든 IP 차단(fail-closed)."""
     allowed_ips_str = getattr(settings, "metrics_allowed_ips", "") or ""
     if not allowed_ips_str.strip():
-        return True
+        return False
     allowed = {ip.strip() for ip in allowed_ips_str.split(",") if ip.strip()}
     client_ip = request.client.host if request and request.client else ""
     return client_ip in allowed
@@ -308,7 +308,7 @@ def _metrics_allowed_client_ip(request: Request) -> bool:
 
 @router.get("/metrics")
 async def get_metrics(request: Request) -> Response:
-    """Prometheus 텍스트 포맷으로 메트릭 노출. METRICS_ALLOWED_IPS 설정 시 해당 IP만 허용."""
+    """Prometheus 텍스트 포맷으로 메트릭 노출. METRICS_ALLOWED_IPS 미설정(빈 값) 시 모든 IP 차단(fail-closed)."""
     if not _metrics_allowed_client_ip(request):
         raise HTTPException(status_code=403, detail="Metrics access not allowed for this client")
     data = metrics.get_all()

@@ -44,6 +44,9 @@ def get_client_ip(request: Request) -> str | None:
     클라이언트 IP. 역순 훑기: X-Forwarded-For를 오른쪽→왼쪽으로 훑어 신뢰 목록에 없는 첫 IP 채택.
     직전 피어가 trusted가 아니면 request.client.host만 사용.
     신뢰 프록시 경유 시 헤더 규격 이탈(파싱 실패·초과 등)이면 InvalidForwardedHeaderError 발생 → 400 Drop.
+
+    보안: trusted_proxy_ips_set에는 반드시 실제 프록시/ALB IP만 포함할 것. 과도하게 넣으면
+    X-Forwarded-For 스푸핑으로 Rate limit 우회·해시 충돌 유도가 가능해짐. docs/CAUTIONS.md 참고.
     """
     if not request.client:
         return None

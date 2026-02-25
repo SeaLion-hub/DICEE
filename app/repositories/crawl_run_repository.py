@@ -1,4 +1,9 @@
-"""CrawlRun Repository. crawl_run_tasks(idempotency) + crawl_runs(run data)."""
+"""
+CrawlRun Repository. crawl_run_tasks(idempotency) + crawl_runs(run data).
+
+crawl_runs 계약: 모델은 복합 PK (id, started_at). 본 Repository는 "run_id(id)당 최대 1행"을
+전제로 조회/갱신 시 id 단독 조건을 사용함. create_or_update는 동일 id 재호출 시 기존 행 갱신만 수행.
+"""
 
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -51,7 +56,10 @@ def create_or_update_crawl_run_sync(
     run_id: uuid.UUID,
     college_id: uuid.UUID,
 ) -> CrawlRun:
-    """run_id로 crawl_runs 1건 생성 또는 재시도 시 갱신(상태 초기화, started_at은 최초 값 유지)."""
+    """
+    run_id로 crawl_runs 1건 생성 또는 재시도 시 갱신(상태 초기화, started_at은 최초 값 유지).
+    계약: id당 최대 1행. 조회는 id 단독 사용(복합 PK이지만 현재 생성 전략상 1행만 존재).
+    """
     now = datetime.now(UTC)
     existing = session.execute(select(CrawlRun).where(CrawlRun.id == run_id).limit(1)).scalar_one_or_none()
     if existing:
@@ -86,7 +94,10 @@ def update_crawl_run_sync(
     notices_upserted: int | None = None,
     error_message: str | None = None,
 ) -> CrawlRun | None:
-    """run_id로 crawl_runs 1건 갱신 (동기, 워커용)."""
+    """
+    run_id로 crawl_runs 1건 갱신 (동기, 워커용).
+    계약: id 단독 조회. run_id당 1행 전제.
+    """
     row = session.execute(select(CrawlRun).where(CrawlRun.id == run_id).limit(1)).scalar_one_or_none()
     if not row:
         return None

@@ -139,7 +139,7 @@
 | **OAuth 핸드쉐이크 미정** | 프론트(Vercel)와 백(Railway)이 다른 도메인인데, 토큰 주고받는 방식을 6단계에서만 정하면 CORS·보안으로 일주일 낭비. | **2단계에서** "프론트가 code를 백으로 전달 → 백이 JWT 발급 → body JSON vs HttpOnly Cookie" 중 하나로 **핸드쉐이크 확정**. CORS·Credentials를 그에 맞춰 설계. |
 | **토큰 무효화(로그아웃) 원자성** | 로그아웃 시 DB와 Redis가 따로 실패하면 좀비 세션·일관성 깨짐. | **순서 보장**: DB(Refresh 버전 증가) 선행 → Redis(Blocklist 등록). Redis 실패 시 예외 발생·클라이언트 재시도 가능. DB는 이미 반영되어 Refresh 무효화됨. auth_service.logout_user 참고. |
 | **API 버전 없음** | 나중에 필드명 바꾸면 프론트 연쇄 수정. | 공개 API는 **`/v1/` prefix**. 기존 필드 삭제·이름 변경 금지. 추가만 하거나 /v2/로. |
-| **ALLOWED_ORIGINS 누락** | 6단계에서 프론트 도메인을 안 넣으면 CORS 에러. | 6단계 연동 전에 Railway Variables에 **ALLOWED_ORIGINS**(Vercel URL) 설정. |
+| **ALLOWED_ORIGINS 누락** | 6단계에서 프론트 도메인을 안 넣으면 CORS 에러. | 6단계 연동 전에 Railway Variables에 **ALLOWED_ORIGINS** 설정. JSON 배열(`["https://app.example.com"]`) 또는 CSV(쉼표 구분) 형식 지원. |
 
 ---
 
@@ -151,6 +151,7 @@
 | **Start Command 불일치** | 로컬은 `main:app`, Railway는 `app.main:app` 처럼 다르면 배포만 실패. | **DEPLOYMENT와 ROADMAP의 진입점·Start Command** 와 코드가 일치하는지 확인. |
 | **Redis SPOF** | Blocklist와 Trigger 락은 **풀 분리**로 장애 전파를 완화하지만, **단일 Redis 인스턴스는 SPOF**. 인스턴스 다운 시 인증·락 모두 불가. | 문서화·모니터링 필수. 필요 시 Redis HA/Sentinel 등은 별도 검토. |
 | **분산 락 좀비 복구** | 워커 하드 킬·네트워크 파티션 시 `finally`가 실행되지 않아 락이 해제되지 않을 수 있음. **TTL이 유일한 복구 수단**. Compare-and-del은 "정상 종료 시 타인 락 삭제 방지"용. | `TRIGGER_LOCK_TTL_SECONDS`는 최대 크롤 소요 시간보다 크게, 그러나 죽은 워커가 락을 붙잡는 시간은 짧게 유지. 워커 정상 완료 시에는 반드시 compare-and-del로 조기 해제. |
+| **X-Forwarded-For 신뢰 모델** | `TRUSTED_PROXY_IPS`에 실제 프록시/ALB IP가 아닌 대역을 넣거나 과도하게 넣으면, 클라이언트가 `X-Forwarded-For`를 스푸핑해 Rate limit 우회·다른 사용자 IP로 위장 가능. | **실제 직전 홉(프록시/로드밸런서) IP만** 포함. DEPLOYMENT.md의 TRUSTED_PROXY_IPS 설명 및 app/core/network.get_client_ip docstring 참고. |
 
 **배포 직전 10초 체크리스트**
 
