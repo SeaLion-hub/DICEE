@@ -24,15 +24,9 @@ def test_ready_returns_200_or_503(client):
 
 
 def test_health_returns_200(client):
-    """GET /health → 200 + status, db, redis_blocklist, redis_trigger_lock."""
+    """GET /health → 200 + status만 노출(요약)."""
     response = client.get("/health")
     assert response.status_code == 200
     data = response.json()
     assert "status" in data
     assert data["status"] in ("ok", "degraded")
-    assert "db" in data
-    assert data["db"] in ("ok", "error")
-    assert "redis_blocklist" in data
-    assert data["redis_blocklist"] in ("ok", "error")
-    assert "redis_trigger_lock" in data
-    assert data["redis_trigger_lock"] in ("ok", "error")

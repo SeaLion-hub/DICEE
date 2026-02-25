@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import ssl
 import time
 import uuid
 
@@ -61,6 +62,17 @@ def _redis_pool_kwargs() -> dict:
     }
 
 
+def _redis_ssl_kwargs() -> dict:
+    """rediss:// 사용 시 TLS 검증 옵션을 반환. 그렇지 않으면 빈 dict."""
+    url = getattr(settings, "redis_url", None) or ""
+    if not url.strip().startswith("rediss://"):
+        return {}
+    kwargs: dict = {"ssl_cert_reqs": ssl.CERT_REQUIRED}
+    if getattr(settings, "redis_ca_certs", None):
+        kwargs["ssl_ca_certs"] = settings.redis_ca_certs
+    return kwargs
+
+
 def create_blocklist_client() -> RedisAsyncio | None:
     """
     Blocklist용 비동기 Redis 클라이언트. max_connections·타임아웃 명시.
@@ -77,6 +89,7 @@ def create_blocklist_client() -> RedisAsyncio | None:
         settings.redis_url,
         max_connections=settings.redis_blocklist_max_connections,
         **_redis_pool_kwargs(),
+        **_redis_ssl_kwargs(),
     )
     return redis.Redis(connection_pool=pool)
 
@@ -97,6 +110,7 @@ def create_trigger_lock_client() -> RedisAsyncio | None:
         settings.redis_url,
         max_connections=getattr(settings, "redis_trigger_lock_max_connections", 5),
         **_redis_pool_kwargs(),
+        **_redis_ssl_kwargs(),
     )
     return redis.Redis(connection_pool=pool)
 
@@ -240,14 +254,20 @@ async def try_claim_trigger_idempotency(
     key = f"{TRIGGER_IDEMPOTENCY_KEY_PREFIX}{idempotency_key}:{scope_hash}"
     try:
         ok = await client.set(
-            key, IDEMPOTENCY_VALUE_IN_PROGRESS, nx=True, ex=TRIGGER_IDEMPOTENCY_TTL_SECONDS
+            key,
+            IDEMPOTENCY_VALUE_IN_PROGRESS,
+            nx=True,
+            ex=TRIGGER_IDEMPOTENCY_TTL_SECONDS,
         )
         return bool(ok)
     except Exception as e:
+        # Redis 장애 시 idempotency는 비활성화하고, 실제 크롤 트리거는 진행되도록 허용한다.
         logger.warning(
-            "Trigger idempotency claim failed (key=%s): %s", idempotency_key[:32], e
+            "Trigger idempotency claim failed (key=%s); proceeding without idempotency: %s",
+            idempotency_key[:32],
+            e,
         )
-        return False  # 실패 시 중복 처리 허용하지 않고 202 경로로 유도
+        return True
 
 
 async def get_trigger_idempotency_result(
@@ -300,7 +320,18 @@ def renew_trigger_lock_sync(college_code: str, lock_token: str | None) -> bool:
     ttl = getattr(settings, "redis_trigger_lock_ttl_seconds", 2400)
     try:
         import redis
-        client = redis.Redis.from_url(settings.redis_url, decode_responses=True)
+
+        ssl_kwargs = {}
+        url = settings.redis_url or ""
+        if url.strip().startswith("rediss://"):
+            ssl_kwargs = {"ssl_cert_reqs": ssl.CERT_REQUIRED}
+            if getattr(settings, "redis_ca_certs", None):
+                ssl_kwargs["ssl_ca_certs"] = settings.redis_ca_certs
+        client = redis.Redis.from_url(
+            settings.redis_url,
+            decode_responses=True,
+            **ssl_kwargs,
+        )
         key = f"{TRIGGER_LOCK_KEY_PREFIX}{college_code}"
         n = client.eval(LUA_RENEW_IF_OWNER, 1, key, lock_token, ttl)
         client.close()
@@ -325,7 +356,18 @@ def release_trigger_lock_sync(college_code: str, lock_token: str | None) -> None
         return
     try:
         import redis
-        client = redis.Redis.from_url(settings.redis_url, decode_responses=True)
+
+        ssl_kwargs = {}
+        url = settings.redis_url or ""
+        if url.strip().startswith("rediss://"):
+            ssl_kwargs = {"ssl_cert_reqs": ssl.CERT_REQUIRED}
+            if getattr(settings, "redis_ca_certs", None):
+                ssl_kwargs["ssl_ca_certs"] = settings.redis_ca_certs
+        client = redis.Redis.from_url(
+            settings.redis_url,
+            decode_responses=True,
+            **ssl_kwargs,
+        )
         key = f"{TRIGGER_LOCK_KEY_PREFIX}{college_code}"
         client.eval(LUA_RELEASE_IF_OWNER, 1, key, lock_token)
         client.close()

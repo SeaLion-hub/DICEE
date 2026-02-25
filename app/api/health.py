@@ -79,7 +79,10 @@ async def get_ready(request: Request) -> JSONResponse:
 
 @router.get("/health")
 async def get_health(request: Request) -> dict[str, str]:
-    """헬스 체크. DB·Redis(blocklist/trigger_lock 분리). status: ok | degraded."""
+    """
+    헬스 체크(공개용). DB·Redis 세부 상태는 숨기고 요약 status만 노출.
+    status: ok | degraded.
+    """
     db_status = await _check_db(request)
     redis_blocklist = await _check_redis_blocklist(request)
     redis_trigger_lock = await _check_redis_trigger_lock(request)
@@ -89,9 +92,4 @@ async def get_health(request: Request) -> dict[str, str]:
         or redis_trigger_lock == "error"
     )
     status = "ok" if not any_error else "degraded"
-    return {
-        "status": status,
-        "db": db_status,
-        "redis_blocklist": redis_blocklist,
-        "redis_trigger_lock": redis_trigger_lock,
-    }
+    return {"status": status}

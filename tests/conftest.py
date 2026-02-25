@@ -19,4 +19,5 @@ def client() -> TestClient:
     """FastAPI TestClient. DB 없이 /health 등 테스트용."""
     from app.main import app
 
-    return TestClient(app)
+    with TestClient(app) as c:
+        yield c

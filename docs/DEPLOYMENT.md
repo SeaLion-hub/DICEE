@@ -202,6 +202,10 @@ CORS: `ALLOWED_ORIGINS`에 프론트 도메인 등록. credentials: 프론트가
 | `DB_API_INSTANCES`, `DB_UVICORN_WORKERS`, `DB_WORKER_INSTANCES`, `DB_CELERY_CONCURRENCY` | 예산 검사용 인스턴스/워커 수. 기본 1. | 2단계 (선택) |
 | `REDIS_URL` | Redis 연결 URL. Railway는 **rediss://**(TLS) 제공 가능. Celery broker가 rediss 시 SSL 옵션 적용. | 3단계~ |
 | `CRAWL_TRIGGER_SECRET` | Cron이 POST /internal/trigger-crawl 호출 시 검증용 시크릿 (헤더 또는 쿼리로 전달) | 3단계 Cron 연동 시 |
+| `AUTH_GOOGLE_RATE_LIMIT_PER_MINUTE` | 동일 IP 기준 `/v1/auth/google` 분당 최대 호출 수. 기본 10. | 2단계 Auth (선택) |
+| `AUTH_REFRESH_RATE_LIMIT_PER_MINUTE` | 동일 IP 기준 `/v1/auth/refresh` 분당 최대 호출 수. 기본 60. | 2단계 Auth (선택) |
+| `INTERNAL_TRIGGER_CRAWL_RATE_LIMIT_PER_MINUTE` | 동일 IP 기준 `/internal/trigger-crawl` 분당 최대 호출 수. 기본 30. | 3단계 Cron 연동 시 (선택) |
+| `INTERNAL_CRAWL_STATS_RATE_LIMIT_PER_MINUTE` | 동일 IP 기준 `/internal/crawl-stats` 분당 최대 호출 수. 기본 60. | 3단계 운영 모니터링 (선택) |
 | `POLITE_DELAY_SECONDS` | 요청/페이지 간 최소 딜레이(초). 대상 서버 부하·IP 차단 완화. 기본 1. | 3단계 (선택) |
 | `JWT_SECRET` | JWT 서명용 비밀키 (강한 랜덤 문자열). RS256 사용 시 불필요. | 2단계 Auth 후 (HS256 시) |
 | `JWT_PRIVATE_KEY_PEM` | JWT RS256 개인키 PEM(한 줄로 `\n` 포함 가능). RS256 사용 시 `JWT_PUBLIC_KEY_PEM`과 쌍으로 필수. | 2단계 Auth (RS256 선택 시) |
@@ -212,7 +216,7 @@ CORS: `ALLOWED_ORIGINS`에 프론트 도메인 등록. credentials: 프론트가
 | `JWT_REFRESH_EXPIRE_DAYS` | Refresh 토큰 만료(일). 기본 7. | 2단계 (선택) |
 | `GOOGLE_CLIENT_ID` | 구글 OAuth 2.0 클라이언트 ID | 2단계 Auth (구글 먼저) |
 | `GOOGLE_CLIENT_SECRET` | 구글 OAuth 2.0 클라이언트 시크릿 | 2단계 Auth |
-| `ALLOWED_ORIGINS` | 프론트 도메인. **CSV**(`a,b,c`) 또는 **JSON**(`["a","b"]`) 둘 다 지원. 빈 문자열이면 허용 오리진 없음. | 6단계 연동 시 |
+| `ALLOWED_ORIGINS` | 프론트 도메인. **JSON 배열만** 지원(`["https://app.example.com"]`). `*`는 허용하지 않으며, allow_credentials=True + 명시 오리진만 허용. | 6단계 연동 시 |
 | `STRICT_STARTUP_DB_CHECK` | `true`(기본): DB 연결 실패 시 부팅 중단. `false`: soft-start(기동은 하고 readiness에서 차단). | 선택 |
 | `ENVIRONMENT` | `production` \| `staging` \| `development`. production 시 스토리지 s3 강제. | 선택 |
 | `CONTENT_STORAGE_TYPE` | `s3` \| `local`. **production에서는 s3 필수.** | 본문 스토리지 사용 시 |

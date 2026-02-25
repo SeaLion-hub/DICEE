@@ -28,6 +28,7 @@ from app.core.constants import CrawlRunStatus
 from app.core.crawl_http import HtmlTooLargeError
 from app.core.crawl_rate_limit import (
     HostRateLimiter,
+    get_host_rate_limiter_async,
     get_host_rate_limiter_sync,
     host_from_url,
 )
@@ -438,7 +439,7 @@ async def _collect_payloads_async(
     """
     if seen is None:
         seen = set()
-    rate_limiter = HostRateLimiter(delay_sec)
+    rate_limiter = get_host_rate_limiter_async(delay_sec)
     sem = asyncio.Semaphore(COLLECT_ASYNC_CONCURRENCY)
     attempted = 0
     parser_failures = 0

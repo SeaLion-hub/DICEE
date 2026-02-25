@@ -5,17 +5,22 @@ Query 파라미터 시크릿 미지원(Access Log 유출 방지). college별 분
 
 import asyncio
 import logging
-import secrets
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 from redis.asyncio import Redis as RedisAsyncio
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.api_rate_limit import check_rate_limit
 from app.core.config import settings
 from app.core.crawler_config import COLLEGE_CODE_TO_MODULE
 from app.core.database import get_db
 from app.core.deps import get_redis_trigger_lock
+from app.core.internal_auth import (
+    CrawlTriggerNotConfiguredError,
+    InvalidCrawlTriggerSecretError,
+    check_crawl_trigger_secret,
+)
 from app.core.redis import (
     RedisLockUnavailableError,
     acquire_trigger_lock,
@@ -33,23 +38,24 @@ logger = logging.getLogger(__name__)
 CRAWL_STAGGER_SECONDS = 300
 
 
-def _validate_trigger_secret(
-    x_crawl_trigger_secret: str | None = Header(None, alias="X-Crawl-Trigger-Secret"),
-    authorization: str | None = Header(None),
+def _log_internal_auth_failure(
+    request: Request,
+    reason: str,
+    error: Exception | None = None,
 ) -> None:
-    """CRAWL_TRIGGER_SECRET 검증. Header만 사용(Query 미허용). timing-safe 비교. 실패 시 HTTPException."""
-    if not settings.crawl_trigger_secret:
-        raise HTTPException(
-            status_code=503,
-            detail="Crawl trigger not configured (CRAWL_TRIGGER_SECRET missing)",
-        )
-    provided = (
-        x_crawl_trigger_secret
-        or (authorization and authorization.startswith("Bearer ") and authorization[7:].strip())
-    ) or ""
-    expected = settings.crawl_trigger_secret.get_secret_value()
-    if not secrets.compare_digest(provided, expected):
-        raise HTTPException(status_code=401, detail="Invalid or missing crawl trigger secret")
+    """구조화 로그로 내부 인증 실패 기록. 시크릿 값은 절대 로깅하지 않는다."""
+    client_ip = request.client.host if request and request.client else None
+    request_id = getattr(request.state, "request_id", None) if request else None
+    extra = {
+        "path": getattr(request.url, "path", None) if request else None,
+        "client_ip": client_ip,
+        "request_id": request_id,
+        "reason": reason,
+    }
+    if error is not None:
+        logger.warning("internal auth failed", extra=extra, exc_info=error)
+    else:
+        logger.warning("internal auth failed", extra=extra)
 
 
 @router.post("/trigger-crawl")
@@ -68,7 +74,38 @@ async def post_trigger_crawl(
     크롤 태스크 enqueue. 보안 키는 Header만 필수. college별 Redis 분산락(SET NX EX)으로 중복 enqueue 방지.
     Idempotency-Key 있으면 동일 키 재요청 시 202 + 캐시된 결과. 부분 실패 시에도 200으로 enqueued/skipped/failed 반환.
     """
-    _validate_trigger_secret(x_crawl_trigger_secret, authorization)
+    client_ip = request.client.host if request and request.client else "unknown"
+    rate_identifier = f"internal_trigger_crawl:{client_ip}"
+    allowed = await check_rate_limit(
+        redis_client,
+        identifier=rate_identifier,
+        max_requests=getattr(settings, "internal_trigger_crawl_rate_limit_per_minute", 30),
+        window_seconds=60,
+    )
+    if not allowed:
+        _log_internal_auth_failure(
+            request,
+            reason="rate_limited_trigger_crawl",
+            error=None,
+        )
+        raise HTTPException(
+            status_code=429,
+            detail="Too many internal trigger requests, please try again later.",
+        )
+    try:
+        check_crawl_trigger_secret(x_crawl_trigger_secret, authorization)
+    except CrawlTriggerNotConfiguredError as e:
+        _log_internal_auth_failure(request, reason="trigger_not_configured", error=e)
+        raise HTTPException(
+            status_code=503,
+            detail="Crawl trigger not configured (CRAWL_TRIGGER_SECRET missing)",
+        ) from None
+    except InvalidCrawlTriggerSecretError as e:
+        _log_internal_auth_failure(request, reason="invalid_or_missing_secret", error=e)
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid or missing crawl trigger secret",
+        ) from None
 
     # Idempotency: 요청 스코프(route+college_code)별로 별도 캐시. 동일 키라도 college_code가 다르면 다른 결과.
     idempotency_scope = (college_code.strip() if college_code and college_code.strip() else "all")
@@ -157,15 +194,53 @@ async def post_trigger_crawl(
 
 @router.get("/crawl-stats")
 async def get_crawl_stats(
+    request: Request,
     limit: int = Query(50, ge=1, le=200, description="최근 N건"),
     x_crawl_trigger_secret: str | None = Header(None, alias="X-Crawl-Trigger-Secret"),
     authorization: str | None = Header(None),
     session: AsyncSession = Depends(get_db),
 ) -> dict:
     """
-    최근 크롤 실행 이력. 단과대별 last_run_at, status, notices_upserted, error_message.
+    최근 크롤 실행 이력. 단과대별 last_run_at, status, notices_upserted, has_error.
     보안 키 필수. Header만 사용 (X-Crawl-Trigger-Secret 또는 Authorization: Bearer).
     """
-    _validate_trigger_secret(x_crawl_trigger_secret, authorization)
+    client_ip = request.client.host if request and request.client else "unknown"
+    rate_identifier = f"internal_crawl_stats:{client_ip}"
+    # crawl-stats는 운영자용이라 조금 더 완화된 제한을 둔다.
+    allowed = await check_rate_limit(
+        None,  # Redis Trigger Lock과 별개로 간단한 인메모리 제한만 사용
+        identifier=rate_identifier,
+        max_requests=getattr(settings, "internal_crawl_stats_rate_limit_per_minute", 60),
+        window_seconds=60,
+    )
+    if not allowed:
+        _log_internal_auth_failure(
+            request,
+            reason="rate_limited_crawl_stats",
+            error=None,
+        )
+        raise HTTPException(
+            status_code=429,
+            detail="Too many internal stats requests, please try again later.",
+        )
+    try:
+        check_crawl_trigger_secret(x_crawl_trigger_secret, authorization)
+    except CrawlTriggerNotConfiguredError as e:
+        # Request 객체는 Depends로 주입되지 않으므로 로깅 없이 HTTP 오류만 변환
+        raise HTTPException(
+            status_code=503,
+            detail="Crawl trigger not configured (CRAWL_TRIGGER_SECRET missing)",
+        ) from None
+    except InvalidCrawlTriggerSecretError:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid or missing crawl trigger secret",
+        ) from None
     runs = await get_recent_crawl_runs(session, limit=limit)
-    return {"runs": runs, "limit": limit}
+    sanitized: list[dict] = []
+    for run in runs:
+        # 원본 error_message는 응답에서 제거하고, has_error로만 실패 여부를 노출.
+        item = {k: v for k, v in run.items() if k != "error_message"}
+        item["has_error"] = bool(run.get("error_message"))
+        sanitized.append(item)
+    return {"runs": sanitized, "limit": limit}

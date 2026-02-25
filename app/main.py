@@ -103,8 +103,14 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.allowed_origins_list,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=[
+        "Authorization",
+        "Content-Type",
+        "X-Request-ID",
+        "X-Crawl-Trigger-Secret",
+        "Idempotency-Key",
+    ],
 )
 
 app.add_exception_handler(RequestValidationError, validation_exception_handler)

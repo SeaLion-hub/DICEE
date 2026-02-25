@@ -2,7 +2,7 @@
 
 ## 상태
 
-**부분 적용.** 현재 구현은 인메모리 `HostRateLimiter`만 사용. Redis + Lua 기반 다중 워커 공유 limiter는 미구현.
+**적용 완료.** 동기 크롤 경로는 `RedisHostRateLimiterSync`, 비동기 크롤 경로는 `RedisHostRateLimiterAsync`를 통해 Redis + Lua 기반 다중 워커 공유 limiter를 사용하며, Redis 미설정/장애 시 인메모리 `HostRateLimiter`로 degrade 된다.
 
 ## 배경
 
@@ -16,5 +16,5 @@
 
 ## 참고
 
-- [app/core/crawl_rate_limit.py](../../app/core/crawl_rate_limit.py): **현재** HostRateLimiter(인메모리)만 구현. RedisHostRateLimiterSync/Async·Lua 스크립트는 추후 구현 시 추가.
-- [app/core/redis.py](../../app/core/redis.py): Trigger lock·Blocklist용 클라이언트. Rate Limit 전용 클라이언트는 Redis+Lua 구현 시 추가.
+- [app/core/crawl_rate_limit.py](../../app/core/crawl_rate_limit.py): 인메모리 `HostRateLimiter` + Redis 기반 `RedisHostRateLimiterSync/Async` 구현.
+- [app/core/redis.py](../../app/core/redis.py): Trigger lock·Blocklist용 클라이언트. 동일 Redis 인스턴스를 rate limit에서도 사용하며, 장애 시 in-memory fallback이 작동한다.

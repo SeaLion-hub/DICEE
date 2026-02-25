@@ -135,3 +135,71 @@ def get_host_rate_limiter_sync(min_interval_sec: float):
     except Exception:
         pass
     return HostRateLimiter(min_interval_sec)
+
+
+class RedisHostRateLimiterAsync:
+    """
+    호스트별 최소 요청 간격을 Redis + Lua로 적용(다중 워커 공유, 비동기).
+    Redis 미설정/실패 시 내부 HostRateLimiter로 degrade.
+    """
+
+    __slots__ = ("min_interval_sec", "_client", "_fallback")
+
+    def __init__(self, min_interval_sec: float, redis_url: str | None = None):
+        self.min_interval_sec = min_interval_sec
+        self._fallback = HostRateLimiter(min_interval_sec)
+        self._client = None
+        if redis_url and (redis_url or "").strip():
+            try:
+                import redis.asyncio as redis
+
+                self._client = redis.Redis.from_url(
+                    redis_url.strip(),
+                    decode_responses=True,
+                )
+            except Exception as e:
+                logger.warning(
+                    "Redis async rate limit client init failed; using in-memory fallback: %s",
+                    e,
+                )
+
+    async def wait_async(self, host: str) -> None:
+        """비동기: 호스트에 대해 min_interval_sec 이상 경과할 때까지 대기. Redis 실패 시 fallback."""
+        if not host:
+            return
+        if self._client is None:
+            await self._fallback.wait_async(host)
+            return
+        key = f"{RATE_LIMIT_KEY_PREFIX}{host}"
+        try:
+            now = time.monotonic()
+            result = await self._client.eval(
+                LUA_RATE_LIMIT,
+                1,
+                key,
+                str(now),
+                str(self.min_interval_sec),
+            )
+            wait_sec = float(result)
+            if wait_sec > 0:
+                await asyncio.sleep(wait_sec)
+        except Exception as e:
+            logger.debug(
+                "Redis async rate limit failed (host=%s); using fallback: %s",
+                host,
+                e,
+            )
+            await self._fallback.wait_async(host)
+
+
+def get_host_rate_limiter_async(min_interval_sec: float):
+    """비동기 크롤용 limiter. Redis URL 있으면 RedisHostRateLimiterAsync, 없으면 HostRateLimiter."""
+    try:
+        from app.core.config import settings
+
+        redis_url = getattr(settings, "redis_url", None) or ""
+        if (redis_url or "").strip():
+            return RedisHostRateLimiterAsync(min_interval_sec, redis_url.strip())
+    except Exception:
+        pass
+    return HostRateLimiter(min_interval_sec)

@@ -1,9 +1,13 @@
 """Auth API. 구글 OAuth + JWT."""
 
+import ipaddress
+import logging
+
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
+from app.core.api_rate_limit import check_rate_limit
 from app.core.config import settings
 from app.core.database import get_db
 from app.core.deps import get_google_key_fetcher, get_httpx_client, get_redis_blocklist
@@ -18,6 +22,7 @@ from app.services.auth_service import (
 )
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+logger = logging.getLogger(__name__)
 security = HTTPBearer(auto_error=False)
 
 
@@ -62,24 +67,16 @@ async def get_current_user_id_and_jti(
 # X-Forwarded-For 역순 훑기: 최대 IP 개수. 초과 시 request.client.host 사용.
 _XFF_MAX_IPS = 32
 
-# RFC 1918 사설 대역. 후보 IP가 여기 있으면 클라이언트 IP로 사용하지 않고 fallback.
+# RFC 1918 사설 대역 + IPv6 private/loopback. 후보 IP가 여기 있으면 클라이언트 IP로 사용하지 않고 fallback.
 def _is_private_ip(ip: str) -> bool:
     if not ip or not ip.strip():
         return True
-    parts = ip.strip().split(".")
-    if len(parts) != 4:
-        return True
     try:
-        a, b, c, d = (int(p) for p in parts)
+        addr = ipaddress.ip_address(ip.strip())
     except ValueError:
+        # 파싱 실패 시 보수적으로 private 처리하여 fallback을 사용.
         return True
-    if a == 10:
-        return True
-    if a == 172 and 16 <= b <= 31:
-        return True
-    if a == 192 and b == 168:
-        return True
-    if a == 127:
+    if addr.is_private or addr.is_loopback:
         return True
     return False
 
@@ -115,19 +112,37 @@ async def post_google_auth(
     payload: TokenPayload,
     http_client: httpx.AsyncClient = Depends(get_httpx_client),
     key_fetcher=Depends(get_google_key_fetcher),
+    redis_rate=Depends(get_redis_blocklist),
 ) -> TokenResponse:
     """
     구글 OAuth Authorization Code로 로그인.
     code를 받아 검증 후 Access/Refresh JWT 반환.
     외부 API 장애(타임아웃 등) → 503, 클라이언트 인증 오류 → 400.
     """
+    client_ip = _client_ip_from_request(request) or "unknown"
+    identifier = f"auth_google:{client_ip}"
+    allowed = await check_rate_limit(
+        redis_rate,
+        identifier=identifier,
+        max_requests=getattr(settings, "auth_google_rate_limit_per_minute", 10),
+        window_seconds=60,
+    )
+    if not allowed:
+        logger.warning(
+            "auth google rate limit exceeded",
+            extra={"client_ip": client_ip, "identifier": identifier},
+        )
+        raise HTTPException(
+            status_code=429,
+            detail="Too many authentication attempts, please try again later.",
+        )
     try:
         return await google_login(
             code=payload.code,
             redirect_uri=payload.redirect_uri,
             http_client=http_client,
             key_fetcher=key_fetcher,
-            client_ip=_client_ip_from_request(request),
+            client_ip=client_ip,
         )
     except AuthServiceUnavailableError as e:
         raise HTTPException(status_code=503, detail=str(e)) from e
@@ -137,13 +152,32 @@ async def post_google_auth(
 
 @router.post("/refresh", response_model=TokenResponse)
 async def post_refresh(
+    request: Request,
     payload: RefreshTokenPayload,
     session=Depends(get_db),
+    redis_rate=Depends(get_redis_blocklist),
 ) -> TokenResponse:
     """
     Refresh 토큰으로 새 Access/Refresh JWT 발급.
     type=refresh, token_version 검증 후 새 쌍 반환. 무효화된 토큰 시 401.
     """
+    client_ip = _client_ip_from_request(request) or "unknown"
+    identifier = f"auth_refresh:{client_ip}"
+    allowed = await check_rate_limit(
+        redis_rate,
+        identifier=identifier,
+        max_requests=getattr(settings, "auth_refresh_rate_limit_per_minute", 60),
+        window_seconds=60,
+    )
+    if not allowed:
+        logger.warning(
+            "auth refresh rate limit exceeded",
+            extra={"client_ip": client_ip, "identifier": identifier},
+        )
+        raise HTTPException(
+            status_code=429,
+            detail="Too many refresh requests, please try again later.",
+        )
     try:
         return await refresh_tokens(payload.refresh_token, session)
     except AuthError as e:

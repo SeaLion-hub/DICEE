@@ -94,6 +94,20 @@ class Settings(BaseSettings):
     # 허용 redirect_uri 목록(쉼표 구분). 비어 있으면 검사 생략. 예: http://localhost:3000/callback,https://app.example.com/callback
     google_redirect_uris: str = ""
 
+    # 인증·내부 API Rate Limit (분당 최대 호출 수)
+    auth_google_rate_limit_per_minute: int = Field(
+        10,
+        ge=1,
+        le=1000,
+        description="동일 IP에 대한 /v1/auth/google 분당 최대 호출 수.",
+    )
+    auth_refresh_rate_limit_per_minute: int = Field(
+        60,
+        ge=1,
+        le=5000,
+        description="동일 IP에 대한 /v1/auth/refresh 분당 최대 호출 수.",
+    )
+
     # 3단계 Crawler & Worker (변수 추가)
     redis_url: str | None = None
     # rediss:// 사용 시 CA 번들 경로(선택). 미설정 시 시스템 기본 CA 사용.
@@ -116,6 +130,18 @@ class Settings(BaseSettings):
     # True면 Redis 미설정/실패 시 락 없이 진행하지 않고 503. 운영 모드에서만 True 권장.
     redis_trigger_lock_required: bool = False
     crawl_trigger_secret: SecretStr | None = None
+    internal_trigger_crawl_rate_limit_per_minute: int = Field(
+        30,
+        ge=1,
+        le=1000,
+        description="동일 IP에 대한 /internal/trigger-crawl 분당 최대 호출 수.",
+    )
+    internal_crawl_stats_rate_limit_per_minute: int = Field(
+        60,
+        ge=1,
+        le=1000,
+        description="동일 IP에 대한 /internal/crawl-stats 분당 최대 호출 수.",
+    )
     # True일 때만 AI 파이프라인(Gemini 등) 실행 및 done 저장. False면 process_notice_ai_task는 스킵(pending 유지).
     ai_pipeline_enabled: bool = False
     # 요청/페이지 간 최소 딜레이(초). 대상 서버 부하·IP 차단 완화용.

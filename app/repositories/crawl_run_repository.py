@@ -51,11 +51,10 @@ def create_or_update_crawl_run_sync(
     run_id: uuid.UUID,
     college_id: uuid.UUID,
 ) -> CrawlRun:
-    """run_id로 crawl_runs 1건 생성 또는 재시도 시 갱신(초기화)."""
+    """run_id로 crawl_runs 1건 생성 또는 재시도 시 갱신(상태 초기화, started_at은 최초 값 유지)."""
     now = datetime.now(UTC)
     existing = session.execute(select(CrawlRun).where(CrawlRun.id == run_id).limit(1)).scalar_one_or_none()
     if existing:
-        existing.started_at = now
         existing.status = CrawlRunStatus.RUNNING.value
         existing.notices_upserted = 0
         existing.finished_at = None
