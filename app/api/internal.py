@@ -29,6 +29,7 @@ from app.core.internal_auth import (
 from app.core.ip_hmac import compute_ip_hmac
 from app.core.network import get_client_ip
 from app.core.redis import (
+    RedisIdempotencyUnavailableError,
     RedisLockUnavailableError,
     acquire_trigger_lock,
     get_trigger_idempotency_result,
@@ -104,14 +105,19 @@ async def _claim_idempotency(
     redis_client: RedisAsyncio | None,
     idempotency_key: str | None,
     scope: str,
+    *,
+    fail_closed: bool = False,
 ) -> tuple[bool, dict | None]:
     """
     Idempotency 슬롯 점유 시도. 반환 (claimed, cached_or_none).
     claimed=True면 이번 요청이 처리 담당. claimed=False면 cached에 202 응답용 payload(캐시 결과 또는 in_progress).
+    fail_closed=True이면 Redis 예외 시 RedisIdempotencyUnavailableError 발생.
     """
     if not idempotency_key or redis_client is None:
         return (True, None)
-    claimed = await try_claim_trigger_idempotency(redis_client, idempotency_key, scope)
+    claimed = await try_claim_trigger_idempotency(
+        redis_client, idempotency_key, scope, fail_closed=fail_closed
+    )
     if claimed:
         return (True, None)
     cached = await get_trigger_idempotency_result(redis_client, idempotency_key, scope)
@@ -176,11 +182,15 @@ async def _enqueue_crawls(
             out["skipped"] = skipped
         if failed:
             out["failed"] = failed
-        # P0: enqueue가 전부 실패하면 200이 아닌 503으로 응답해 스케줄러가 장애로 인지하도록 함.
-        if codes and len(task_ids) == 0 and len(failed) > 0:
+        # failed가 하나라도 있으면 503으로 스케줄러/모니터가 실패로 인지하도록 함.
+        if failed:
             status_code = 503
-            out["code"] = "ALL_ENQUEUES_FAILED"
-            out["detail"] = "All crawl enqueues failed; check broker and worker logs."
+            out["code"] = "ALL_ENQUEUES_FAILED" if len(task_ids) == 0 else "PARTIAL_ENQUEUE_FAILURE"
+            out["detail"] = (
+                "All crawl enqueues failed; check broker and worker logs."
+                if len(task_ids) == 0
+                else "One or more colleges failed to enqueue; retry recommended."
+            )
     return (out, status_code)
 
 
@@ -240,7 +250,21 @@ async def post_trigger_crawl(
     idempotency_scope = codes[0] if len(codes) == 1 else "all"
     key_stripped = idempotency_key.strip() if idempotency_key and idempotency_key.strip() else None
 
-    claimed, cached = await _claim_idempotency(redis_client, key_stripped, idempotency_scope)
+    try:
+        claimed, cached = await _claim_idempotency(
+            redis_client,
+            key_stripped,
+            idempotency_scope,
+            fail_closed=settings.redis_trigger_idempotency_required,
+        )
+    except RedisIdempotencyUnavailableError:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "detail": "Service temporarily unavailable",
+                "code": "REDIS_IDEMPOTENCY_UNAVAILABLE",
+            },
+        )
     if not claimed:
         return JSONResponse(status_code=202, content=cached or {})
 
@@ -258,12 +282,15 @@ async def post_trigger_crawl(
     try:
         out, status_code = await _enqueue_crawls(request, redis_client, codes)
     finally:
+        # 부분 실패/스킵이 있으면 캐시하지 않음(재요청 시 복구 가능하도록).
         should_cache = (
             claimed
             and redis_client is not None
             and key_stripped is not None
             and status_code == 200
             and bool(out)
+            and not out.get("failed")
+            and not out.get("skipped")
         )
         if should_cache and key_stripped is not None:
             await set_trigger_idempotency_result(

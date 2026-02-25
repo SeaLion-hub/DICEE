@@ -99,12 +99,17 @@ def _upload_s3(html_content: str, key: str) -> str | None:
         return None
     try:
         client = boto3.client("s3", region_name=settings.s3_region)
-        client.put_object(
-            Bucket=bucket,
-            Key=key,
-            Body=html_content.encode("utf-8"),
-            ContentType="text/html; charset=utf-8",
-        )
+        put_kw: dict = {
+            "Bucket": bucket,
+            "Key": key,
+            "Body": html_content.encode("utf-8"),
+            "ContentType": "text/html; charset=utf-8",
+            "ServerSideEncryption": "aws:kms",
+        }
+        kms_key_id = getattr(settings, "s3_sse_kms_key_id", None)
+        if kms_key_id and str(kms_key_id).strip():
+            put_kw["SSEKMSKeyId"] = str(kms_key_id).strip()
+        client.put_object(**put_kw)
         return f"https://{bucket}.s3.{settings.s3_region}.amazonaws.com/{key}"
     except ClientError as e:
         logger.exception("S3 upload failed: key=%s error=%s", key, e)

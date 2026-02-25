@@ -55,6 +55,12 @@ class RedisLockUnavailableError(Exception):
     pass
 
 
+class RedisIdempotencyUnavailableError(Exception):
+    """Redis 인프라 오류로 idempotency 클레임 불가. Router에서 503 + code REDIS_IDEMPOTENCY_UNAVAILABLE으로 변환."""
+
+    pass
+
+
 class BlocklistUnavailableError(Exception):
     """Blocklist(Redis) 회로 open 또는 일시 불가. 로그아웃 등에서 호출자가 재시도/503 응답 가능."""
 
@@ -258,12 +264,17 @@ def _idempotency_scope_hash(scope: str) -> str:
 
 
 async def try_claim_trigger_idempotency(
-    client: RedisAsyncio | None, idempotency_key: str, scope: str
+    client: RedisAsyncio | None,
+    idempotency_key: str,
+    scope: str,
+    *,
+    fail_closed: bool = False,
 ) -> bool:
     """
     Idempotency-Key 슬롯을 원자적으로 점유. SET key NX EX.
     scope(예: college_code 또는 "all")별로 별도 캐시. 동일 키라도 스코프가 다르면 다른 슬롯.
     성공 시 True(이번 요청이 처리 담당), 이미 존재 시 False(다른 요청이 점유 중 또는 완료).
+    fail_closed=True이면 Redis 예외 시 False 대신 RedisIdempotencyUnavailableError 발생(503 권장).
     """
     if client is None or not idempotency_key:
         return True  # Redis 없으면 클레임 검사 생략, 기존처럼 진행
@@ -278,7 +289,10 @@ async def try_claim_trigger_idempotency(
         )
         return bool(ok)
     except Exception as e:
-        # Redis 장애 시 idempotency는 비활성화하고, 실제 크롤 트리거는 진행되도록 허용한다.
+        if fail_closed:
+            raise RedisIdempotencyUnavailableError(
+                f"Trigger idempotency claim failed (key={idempotency_key[:32]}...): {e}"
+            ) from e
         logger.warning(
             "Trigger idempotency claim failed (key=%s); proceeding without idempotency: %s",
             idempotency_key[:32],

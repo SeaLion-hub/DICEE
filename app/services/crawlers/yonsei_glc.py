@@ -169,7 +169,7 @@ def scrape_glc_detail(url):
 
     except HtmlTooLargeError:
         logger.warning("scrape_glc_detail HTML too large: url=%s", url[:200] if url else "")
-        return "제목 없음", "날짜 없음", "", [], []
+        return ScrapeResult("제목 없음", "날짜 없음", "", [], [])
     except RequestException:
         raise
     except Exception as e:

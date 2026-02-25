@@ -2,12 +2,29 @@
 
 import json
 import logging
+import sys
 from typing import NamedTuple
 
 from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 logger = logging.getLogger(__name__)
+
+
+def _is_celery_entry_process() -> bool:
+    """Celery worker/beat 등 진입점인지 여부. 이 경우 JWT는 API에서만 쓰이므로 부팅 시 필수 아님."""
+    try:
+        argv = sys.argv or []
+        if not argv:
+            return False
+        first = (argv[0] or "").lower()
+        if "celery" in first:
+            return True
+        if len(argv) >= 2 and "celery" in (argv[1] or "").lower():
+            return True
+        return False
+    except Exception:
+        return False
 
 
 class _DatabaseConfig(NamedTuple):
@@ -48,6 +65,7 @@ class _RedisConfig(NamedTuple):
     redis_trigger_lock_max_connections: int
     redis_trigger_lock_ttl_seconds: int
     redis_trigger_lock_required: bool
+    redis_trigger_idempotency_required: bool
 
 
 def _parse_allowed_origins(value: str) -> list[str]:
@@ -186,6 +204,8 @@ class Settings(BaseSettings):
     redis_trigger_lock_ttl_seconds: int = Field(2400, ge=60, le=86400)
     # True면 Redis 미설정/실패 시 락 없이 진행하지 않고 503. 운영 반영값 True.
     redis_trigger_lock_required: bool = True
+    # True면 idempotency 클레임 Redis 실패 시 503(fail-closed). production 권장. 기본 False.
+    redis_trigger_idempotency_required: bool = False
     crawl_trigger_secret: SecretStr | None = None
     internal_trigger_crawl_rate_limit_per_minute: int = Field(
         10,
@@ -220,6 +240,8 @@ class Settings(BaseSettings):
     s3_bucket: str | None = None
     s3_region: str = "ap-northeast-2"
     s3_content_prefix: str = "notice-contents"
+    # S3 SSE-KMS. 설정 시 put_object에 ServerSideEncryption='aws:kms', SSEKMSKeyId 전달.
+    s3_sse_kms_key_id: str | None = None
     # 로컬 스토리지 시 디렉터리 및 URL 접두사 (개발용)
     content_storage_local_path: str = "storage/contents"
     content_storage_base_url: str = ""  # 예: https://api.example.com/content
@@ -234,8 +256,21 @@ class Settings(BaseSettings):
     allowed_origins: str = ""
 
     @model_validator(mode="after")
+    def fail_fast_s3_bucket_when_s3(self: "Settings") -> "Settings":
+        """content_storage_type이 s3일 때 s3_bucket 필수. 미설정 시 부팅 실패(로컬 폴백 방지)."""
+        if (self.content_storage_type or "").strip().lower() == "s3":
+            if not (self.s3_bucket or "").strip():
+                raise ValueError(
+                    "content_storage_type is 's3' but S3_BUCKET is not set. "
+                    "Set S3_BUCKET or use content_storage_type=local."
+                )
+        return self
+
+    @model_validator(mode="after")
     def fail_fast_jwt_secret_at_boot(self: "Settings") -> "Settings":
-        """JWT 시크릿 누락 시 부팅 시점에 즉시 크래시(Fail-Fast). 모든 환경 적용."""
+        """JWT 시크릿 누락 시 부팅 시점에 즉시 크래시(Fail-Fast). Celery worker/beat 등은 JWT 미사용이므로 제외."""
+        if _is_celery_entry_process():
+            return self
         has_jwt_secret = (self.jwt_secret.get_secret_value() or "").strip()
         has_rs256 = (
             self.jwt_private_key_pem
@@ -252,7 +287,7 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def fail_fast_production(self: "Settings") -> "Settings":
-        """프로덕션 환경 시 공통 필수 변수만 검사. JWT/Google은 워커에서 불필요하므로 여기서는 요구하지 않음."""
+        """프로덕션 환경 시 공통 필수 변수만 검사. JWT/IP_HMAC/Google은 워커에서 불필요하므로 Celery 진입 시 제외."""
         if (self.environment or "").strip().lower() != "production":
             return self
         missing: list[str] = []
@@ -260,17 +295,31 @@ class Settings(BaseSettings):
             missing.append("DATABASE_URL")
         if not (self.redis_url or "").strip():
             missing.append("REDIS_URL")
-        has_jwt_secret = (self.jwt_secret.get_secret_value() or "").strip()
-        has_rs256 = (
-            self.jwt_private_key_pem
-            and (self.jwt_private_key_pem.get_secret_value() or "").strip()
-            and self.jwt_public_key_pem
-            and (self.jwt_public_key_pem.get_secret_value() or "").strip()
-        )
-        if not has_jwt_secret and not has_rs256:
-            missing.append("JWT_SECRET or (JWT_PRIVATE_KEY_PEM + JWT_PUBLIC_KEY_PEM)")
-        if not (self.ip_hmac_key.get_secret_value() or "").strip():
-            missing.append("IP_HMAC_KEY")
+        is_celery = _is_celery_entry_process()
+        if not is_celery:
+            has_jwt_secret = (self.jwt_secret.get_secret_value() or "").strip()
+            has_rs256 = (
+                self.jwt_private_key_pem
+                and (self.jwt_private_key_pem.get_secret_value() or "").strip()
+                and self.jwt_public_key_pem
+                and (self.jwt_public_key_pem.get_secret_value() or "").strip()
+            )
+            if not has_jwt_secret and not has_rs256:
+                missing.append("JWT_SECRET or (JWT_PRIVATE_KEY_PEM + JWT_PUBLIC_KEY_PEM)")
+            if not (self.ip_hmac_key.get_secret_value() or "").strip():
+                missing.append("IP_HMAC_KEY")
+        try:
+            cv = (
+                self.crawl_trigger_secret.get_secret_value()
+                if self.crawl_trigger_secret
+                else ""
+            )
+        except Exception:
+            cv = ""
+        if not (cv or "").strip():
+            missing.append("CRAWL_TRIGGER_SECRET")
+        if (self.content_upload_failure_policy or "").strip().lower() == "allow_none":
+            missing.append("CONTENT_UPLOAD_FAILURE_POLICY must be 'fail' in production")
         if missing:
             raise ValueError(
                 f"Production environment requires these variables to be set: {', '.join(missing)}. "
@@ -370,6 +419,7 @@ class Settings(BaseSettings):
             redis_trigger_lock_max_connections=self.redis_trigger_lock_max_connections,
             redis_trigger_lock_ttl_seconds=self.redis_trigger_lock_ttl_seconds,
             redis_trigger_lock_required=self.redis_trigger_lock_required,
+            redis_trigger_idempotency_required=self.redis_trigger_idempotency_required,
         )
 
 

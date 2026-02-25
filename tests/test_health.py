@@ -25,9 +25,9 @@ def test_ready_returns_200_or_503(client):
         assert data["status"] == "not_ready"
 
 
-@pytest.mark.parametrize("redis_blocklist_fail_closed,expect_ready_ok", [(False, True), (True, False)])
-def test_ready_fail_open_blocklist(client, monkeypatch, redis_blocklist_fail_closed, expect_ready_ok):
-    """Fail-Open이면 blocklist Redis 장애만으로는 /ready 200. Fail-Closed면 503."""
+@pytest.mark.parametrize("redis_blocklist_fail_closed", [False, True])
+def test_ready_blocklist_error_returns_503(client, monkeypatch, redis_blocklist_fail_closed):
+    """Readiness는 의존성 상태 그대로 노출. blocklist Redis 장애 시 fail_closed와 무관하게 항상 503."""
     from app.api import health as health_module
     from app.core.config import settings
 
@@ -49,12 +49,8 @@ def test_ready_fail_open_blocklist(client, monkeypatch, redis_blocklist_fail_clo
     response = client.get("/ready")
     data = response.json()
     assert data["redis_blocklist"] == "error"
-    if expect_ready_ok:
-        assert response.status_code == 200
-        assert data["status"] == "ok"
-    else:
-        assert response.status_code == 503
-        assert data["status"] == "not_ready"
+    assert response.status_code == 503
+    assert data["status"] == "not_ready"
 
 
 def test_health_returns_200(client):

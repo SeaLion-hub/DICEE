@@ -9,6 +9,7 @@ Repository·파서는 이미 열린 세션으로 쿼리만 수행하며, 세션 
 import asyncio
 import logging
 import random
+import time
 import uuid
 from collections import deque
 from collections.abc import Callable, Iterator
@@ -349,11 +350,23 @@ async def _collect_payloads_async(
     tracker = CrawlErrorTracker()
     remaining = deque(links)
     post_retries: dict[str, int] = {}  # url -> retry count (Exponential Backoff + Jitter)
+    retry_queue: list[tuple[dict, float]] = []  # (post, ready_at_ts) 재시도 예약; 이벤트 루프 블로킹 방지
 
     def _task(post: dict) -> asyncio.Task:
         return asyncio.create_task(
             _fetch_one_async(client, post, scrape_async_fn, rate_limiter, sem)
         )
+
+    def _refill_pending() -> None:
+        nonlocal retry_queue
+        now_ts = time.monotonic()
+        still_deferred = [(p, t) for p, t in retry_queue if t > now_ts]
+        for p, t in retry_queue:
+            if t <= now_ts:
+                pending.add(_task(p))
+        retry_queue = still_deferred
+        while len(pending) < COLLECT_ASYNC_CONCURRENCY and remaining:
+            pending.add(_task(remaining.popleft()))
 
     pending: set[asyncio.Task] = set()
     for _ in range(min(COLLECT_ASYNC_CONCURRENCY, len(remaining))):
@@ -362,9 +375,22 @@ async def _collect_payloads_async(
         pending.add(_task(remaining.popleft()))
 
     try:
-        while pending:
+        while pending or retry_queue or remaining:
+            _refill_pending()
+            if not pending:
+                if retry_queue:
+                    now_ts = time.monotonic()
+                    earliest = min(ready_at for _, ready_at in retry_queue)
+                    await asyncio.sleep(max(0.0, min(earliest - now_ts, CRAWL_RETRY_MAX_SEC)))
+                continue
+            timeout_sec = None
+            if retry_queue:
+                now_ts = time.monotonic()
+                earliest = min(ready_at for _, ready_at in retry_queue)
+                if earliest > now_ts:
+                    timeout_sec = min(earliest - now_ts, CRAWL_RETRY_MAX_SEC)
             done, pending = await asyncio.wait(
-                pending, return_when=asyncio.FIRST_COMPLETED
+                pending, return_when=asyncio.FIRST_COMPLETED, timeout=timeout_sec
             )
             for task in done:
                 try:
@@ -391,8 +417,7 @@ async def _collect_payloads_async(
                             + random.uniform(0, CRAWL_RETRY_JITTER_SEC),
                             CRAWL_RETRY_MAX_SEC,
                         )
-                        await asyncio.sleep(backoff)
-                        pending.add(_task(post))
+                        retry_queue.append((post, time.monotonic() + backoff))
                     elif remaining:
                         pending.add(_task(remaining.popleft()))
                     continue

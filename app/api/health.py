@@ -69,15 +69,15 @@ async def get_live() -> dict[str, str]:
 @router.get("/ready")
 async def get_ready(request: Request) -> JSONResponse:
     """Readiness: DB 및 Redis(blocklist·trigger_lock) 준비 시 200. 실패 시 503.
-    Fail-Open(redis_blocklist_fail_closed=False)인 경우 blocklist Redis 장애·예외만으로는 503이 아님.
-    blocklist 체크 예외 시 fail_closed=False면 blocklist_ok=True로 판정."""
+    의존성 상태를 그대로 노출하며, blocklist Redis 장애 시에도 503으로 반환(오토스케일러/모니터 정확한 판단).
+    redis_blocklist_fail_closed는 인증 경로(JWT blocklist 체크)에서만 사용."""
     db_status = await _check_db(request)
     try:
         redis_blocklist = await _check_redis_blocklist(request)
     except Exception as e:
         logger.warning("Readiness blocklist check exception: %s", e, exc_info=True)
         redis_blocklist = "error"
-    blocklist_ok = (redis_blocklist == "ok") or not settings.redis_blocklist_fail_closed
+    blocklist_ok = redis_blocklist == "ok"
     redis_trigger_lock = await _check_redis_trigger_lock(request)
     ok = (
         db_status == "ok"

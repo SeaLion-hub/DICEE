@@ -48,7 +48,7 @@
 
 **운영 설정**  
 - 플랫폼 헬스체크/오토스케일 프로브는 **/health** 사용. Redis 장애 시에도 인스턴스가 비정상 판정되지 않는다.  
-- **/ready**는 내부 모니터링·경보 및 배포 롤링 시 "새 인스턴스가 트래픽 받을 준비가 되었는지" 판단용. Fail-Open(`redis_blocklist_fail_closed=false`)인 경우 blocklist Redis 장애만으로는 /ready가 실패하지 않는다.
+- **/ready**는 내부 모니터링·경보 및 배포 롤링 시 "새 인스턴스가 트래픽 받을 준비가 되었는지" 판단용. 의존성 상태를 그대로 노출하므로 blocklist Redis 장애 시에도 503을 반환한다. `redis_blocklist_fail_closed`는 인증 경로(JWT blocklist 체크)에서만 사용한다.
 - **롤링 배포**: 동시 교체 인스턴스 수 1개로 제한. 새 인스턴스가 /ready 200을 반환한 뒤에만 다음 인스턴스 교체.  
 - 모니터링에 `active_connections / App_budget` 비율 메트릭을 두고, 0.7·0.85 초과 시 경고를 권장한다.
 
@@ -323,7 +323,8 @@ CORS: `ALLOWED_ORIGINS`에 프론트 도메인 등록. credentials: 프론트가
 | `ENVIRONMENT` | `production` \| `staging` \| `development`. production 시 스토리지 s3 강제. | 선택 |
 | `CONTENT_STORAGE_TYPE` | `s3` \| `local`. **production에서는 s3 필수.** | 본문 스토리지 사용 시 |
 | `S3_BUCKET` | S3 버킷 이름. production + s3 시 필수. | 본문 스토리지 S3 시 |
-| `CONTENT_UPLOAD_FAILURE_POLICY` | `allow_none`: 업로드 실패 시 None 반환(크롤 계속). `fail`: 예외 전파(데이터 유실 방지). | 선택 |
+| `S3_SSE_KMS_KEY_ID` | S3 SSE-KMS 키 ID. 설정 시 업로드 시 `ServerSideEncryption=aws:kms`, `SSEKMSKeyId` 적용. 미설정 시 기본 KMS 키 사용. | S3 암호화 시 |
+| `CONTENT_UPLOAD_FAILURE_POLICY` | `allow_none`: 업로드 실패 시 None 반환(크롤 계속). `fail`: 예외 전파(데이터 유실 방지). production에서는 `fail` 필수. | 선택 |
 | 기타 | Gemini API 키 등 | 해당 기능 단계 |
 
 (나중에 카카오 등 추가 시 `KAKAO_CLIENT_ID` 등 동일 방식으로 Variables + `.env.example`에 추가.)
@@ -382,7 +383,7 @@ Private Key 내용을 `JWT_PRIVATE_KEY_PEM`, Public Key 내용을 `JWT_PUBLIC_KE
 
 **첨부파일 저장 원칙:** 첨부파일은 **원격 URL(또는 파일명) 리스트만** DB(Notice.attachments JSONB)에 보관한다. **로컬 파일시스템에 다운로드·저장하지 않는다.** (Railway 등 컨테이너는 휘발성 파일시스템이므로 재시작 시 파일이 사라진다.) 클라이언트가 직접 원본 URL로 다운로드하거나, 백엔드를 거칠 경우 **S3 등 외부 오브젝트 스토리지**로 업로드하는 파이프라인만 사용한다.
 
-**본문 스토리지(production):** `ENVIRONMENT=production`이면 **CONTENT_STORAGE_TYPE=s3**, **S3_BUCKET** 설정 필수. `local`은 dev/test만 허용. **CONTENT_UPLOAD_FAILURE_POLICY**: 업로드 실패 시 `allow_none`이면 None 반환(본문 유실 가능, 크롤 계속), `fail`이면 예외 전파(데이터 유실 방지, 크롤/파이프라인 중단 가능).
+**본문 스토리지(production):** `ENVIRONMENT=production`이면 **CONTENT_STORAGE_TYPE=s3**, **S3_BUCKET** 설정 필수. `local`은 dev/test만 허용. **CONTENT_UPLOAD_FAILURE_POLICY**: production에서는 `fail` 필수(업로드 실패 시 예외 전파, 데이터 유실 방지). **S3 암호화:** 업로드 시 `ServerSideEncryption=aws:kms` 적용. `S3_SSE_KMS_KEY_ID` 설정 시 해당 KMS 키 사용. **버킷 보안:** S3 버킷은 **퍼블릭 액세스 차단(Block all public access)** 을 반드시 적용하고, 본문 URL 접근은 서명된 URL 또는 앱 경유로만 제공할 것(규제/보안 감사 대비).
 
 **DB 부팅·Liveness/Readiness:** `STRICT_STARTUP_DB_CHECK=true`(기본)면 DB 연결 실패 시 부팅 중단. `false`면 soft-start: 기동은 하고 **readiness**(`/ready`)가 실패해 DB 의존 API에 트래픽이 가지 않도록 인그레스/프로브에서 제어. 플랫폼 프로브는 **/health** 사용(DB/Redis 미체크로 장애 전파 완화). 상세는 [헬스체크·장애 전파 방지](#헬스체크장애-전파-방지) 참고.
 

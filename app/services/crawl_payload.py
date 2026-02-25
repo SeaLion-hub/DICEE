@@ -60,8 +60,11 @@ def _content_hash_from_title_and_html(
     title: str,
     content_html: str | None,
     body_text: str | None = None,
+    *,
+    attachments: list | None = None,
+    images: list | None = None,
 ) -> str:
-    """제목 + 순수 본문 텍스트만으로 sha256. body_text가 있으면 파싱 생략."""
+    """제목 + 본문 텍스트 + 첨부/이미지 시그니처로 sha256. 첨부·이미지 변경 시 갱신 감지."""
     if body_text is not None:
         text_for_hash = body_text
     else:
@@ -69,7 +72,20 @@ def _content_hash_from_title_and_html(
         if content_html:
             soup = BeautifulSoup(content_html, "html.parser")
             text_for_hash = soup.get_text(separator="\n", strip=True)
-    raw = f"{title}\n{text_for_hash}"
+    parts = [title or "", text_for_hash]
+    if attachments:
+        names = sorted(
+            str(a.get("name", a) if isinstance(a, dict) else a) for a in attachments
+        )
+        parts.append("\n".join(names))
+    if images:
+        urls = sorted(
+            str(img.get("url", img.get("src", "")))
+            for img in images
+            if isinstance(img, dict)
+        )
+        parts.append("\n".join(urls))
+    raw = "\n".join(parts)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
@@ -159,11 +175,15 @@ def build_notice_payload(
         )
         return None
     external_id_value = external_id or post.get("no") or _external_id_from_url(detail_url)
+    att_dicts = _attachments_to_dicts(attachments or [])
     content_hash = _content_hash_from_title_and_html(
-        title, html_content, body_text_for_hash
+        title,
+        html_content,
+        body_text_for_hash,
+        attachments=attachments or [],
+        images=images or [],
     )
     published_at = _parse_published_at(date_str)
-    att_dicts = _attachments_to_dicts(attachments or [])
     content_url = upload_notice_html(
         html_content,
         college_id=college_id,

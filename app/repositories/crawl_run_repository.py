@@ -22,13 +22,15 @@ from app.models.crawl_run_task import CrawlRunTask
 
 
 def _task_id_to_uuid(task_id: str) -> uuid.UUID:
-    """Celery task_id string to UUID. Handles empty string."""
-    if not task_id:
-        return uuid.uuid4()
+    """Celery task_id string to UUID. 빈 문자열 또는 비정상 형식 시 ValueError 발생(idempotency/재시도 추적 유지)."""
+    if not task_id or not str(task_id).strip():
+        raise ValueError("task_id is required and must be a non-empty valid UUID string")
     try:
-        return uuid.UUID(task_id)
-    except (ValueError, TypeError):
-        return uuid.uuid4()
+        return uuid.UUID(str(task_id).strip())
+    except (ValueError, TypeError) as e:
+        raise ValueError(
+            f"task_id must be a valid UUID string (got {type(task_id).__name__!r}): {e}"
+        ) from e
 
 
 def ensure_crawl_run_task_sync(session: Session, task_id: str) -> uuid.UUID:
