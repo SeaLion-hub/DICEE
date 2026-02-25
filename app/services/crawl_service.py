@@ -9,6 +9,7 @@ import logging
 import re
 import time
 import uuid
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor, as_completed, wait, FIRST_COMPLETED
 from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
@@ -327,7 +328,7 @@ def _collect_payloads_sync(
     attempted = 0
     parser_failures = 0
     consecutive_parser_failures = 0
-    remaining = list(links)
+    remaining = deque(links)
 
     def process_result(post: dict, detail_url: str, data: tuple | None, exc: BaseException | None) -> dict | None:
         nonlocal attempted, parser_failures, consecutive_parser_failures
@@ -393,7 +394,7 @@ def _collect_payloads_sync(
         for _ in range(min(COLLECT_IN_FLIGHT_LIMIT, len(remaining))):
             if not remaining:
                 break
-            post = remaining.pop(0)
+            post = remaining.popleft()
             rate_limiter.wait_sync(host_from_url(post.get("url") or "") or "_")
             fut = executor.submit(_scrape_one_sync, post, scrape_fn)
             futures[fut] = post
@@ -407,7 +408,7 @@ def _collect_payloads_sync(
                 except Exception as e:
                     logger.warning("scrape future exception: %s", e, exc_info=True)
                     if remaining:
-                        next_post = remaining.pop(0)
+                        next_post = remaining.popleft()
                         rate_limiter.wait_sync(host_from_url(next_post.get("url") or "") or "_")
                         futures[executor.submit(_scrape_one_sync, next_post, scrape_fn)] = next_post
                     continue
@@ -418,7 +419,7 @@ def _collect_payloads_sync(
                 if payload is not None:
                     yield payload
                 if remaining:
-                    next_post = remaining.pop(0)
+                    next_post = remaining.popleft()
                     rate_limiter.wait_sync(host_from_url(next_post.get("url") or "") or "_")
                     futures[executor.submit(_scrape_one_sync, next_post, scrape_fn)] = next_post
 
@@ -442,7 +443,7 @@ async def _collect_payloads_async(
     attempted = 0
     parser_failures = 0
     consecutive_parser_failures = 0
-    remaining = list(links)
+    remaining = deque(links)
 
     async def fetch_one(post: dict) -> tuple[dict, str, tuple | None, BaseException | None]:
         async with sem:
@@ -458,7 +459,7 @@ async def _collect_payloads_async(
     for _ in range(min(COLLECT_ASYNC_CONCURRENCY, len(remaining))):
         if not remaining:
             break
-        t = asyncio.create_task(fetch_one(remaining.pop(0)))
+        t = asyncio.create_task(fetch_one(remaining.popleft()))
         pending.add(t)
 
     while pending:
@@ -469,7 +470,7 @@ async def _collect_payloads_async(
             except Exception as e:
                 logger.warning("scrape task exception: %s", e, exc_info=True)
                 if remaining:
-                    pending.add(asyncio.create_task(fetch_one(remaining.pop(0))))
+                    pending.add(asyncio.create_task(fetch_one(remaining.popleft())))
                 continue
             attempted += 1
             if exc is not None:
@@ -511,7 +512,7 @@ async def _collect_payloads_async(
                 else:
                     raise exc
                 if remaining:
-                    pending.add(asyncio.create_task(fetch_one(remaining.pop(0))))
+                    pending.add(asyncio.create_task(fetch_one(remaining.popleft())))
                 continue
             consecutive_parser_failures = 0
             title, date_str, html_content, images, attachments = data
@@ -525,7 +526,7 @@ async def _collect_payloads_async(
                 body_text_for_hash=body_text_for_hash or None,
             )
             if remaining:
-                pending.add(asyncio.create_task(fetch_one(remaining.pop(0))))
+                pending.add(asyncio.create_task(fetch_one(remaining.popleft())))
             if payload is None or payload["external_id"] in seen:
                 continue
             seen.add(payload["external_id"])

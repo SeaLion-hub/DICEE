@@ -25,11 +25,14 @@ def test_try_claim_trigger_idempotency_atomic():
             return True
 
     client = MockRedis()
-    ok1 = asyncio.run(try_claim_trigger_idempotency(client, "idem-key-1"))
+    ok1 = asyncio.run(try_claim_trigger_idempotency(client, "idem-key-1", "all"))
     assert ok1 is True
-    assert stored.get("dicee:trigger_idempotency:idem-key-1") == IDEMPOTENCY_VALUE_IN_PROGRESS
+    assert any(
+        k.startswith("dicee:trigger_idempotency:idem-key-1:") and stored[k] == IDEMPOTENCY_VALUE_IN_PROGRESS
+        for k in stored
+    )
 
-    ok2 = asyncio.run(try_claim_trigger_idempotency(client, "idem-key-1"))
+    ok2 = asyncio.run(try_claim_trigger_idempotency(client, "idem-key-1", "all"))
     assert ok2 is False
 
 
@@ -45,8 +48,9 @@ def test_get_set_trigger_idempotency_result_roundtrip():
             stored[key] = value
             return True
 
+    client = MockRedis()
     payload = {"enqueued": 2, "tasks": [{"college_code": "engineering", "task_id": "t1"}]}
-    asyncio.run(set_trigger_idempotency_result(MockRedis(), "key-1", payload))
-    assert "dicee:trigger_idempotency:key-1" in stored
-    out = asyncio.run(get_trigger_idempotency_result(MockRedis(), "key-1"))
+    asyncio.run(set_trigger_idempotency_result(client, "key-1", "engineering", payload))
+    assert any(k.startswith("dicee:trigger_idempotency:key-1:") for k in stored)
+    out = asyncio.run(get_trigger_idempotency_result(client, "key-1", "engineering"))
     assert out == payload

@@ -106,8 +106,11 @@ def init_db() -> None:
     except Exception as e:
         logger.warning("DB URL parse check failed: %s", e)
 
+    # 연결 단위 statement_timeout 적용. docs/decisions/database-pool-capacity.md.
     connect_args: dict = {}
-    
+    timeout_ms = getattr(settings, "db_statement_timeout_ms", 30000)
+    connect_args["server_settings"] = {"statement_timeout": str(timeout_ms)}
+
     _db_holder.engine = create_async_engine(
         _async_database_url(settings.database_url),
         echo=False,

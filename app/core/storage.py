@@ -66,7 +66,7 @@ def _upload_s3(html_content: str, key: str) -> str | None:
 
 
 def _upload_local(html_content: str, key: str) -> str:
-    """로컬 디렉터리에 저장 후 file 또는 base_url 경로 반환."""
+    """로컬 디렉터리에 저장 후 base_url 또는 상대 경로 반환. file:// 절대 경로는 노출하지 않음."""
     base = Path(settings.content_storage_local_path or "storage/contents")
     path = base / key
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -74,4 +74,4 @@ def _upload_local(html_content: str, key: str) -> str:
     base_url = (settings.content_storage_base_url or "").strip()
     if base_url:
         return f"{base_url.rstrip('/')}/{key}"
-    return str(path.absolute().as_uri())
+    return f"/{key}"

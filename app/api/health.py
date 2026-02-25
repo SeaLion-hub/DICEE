@@ -6,6 +6,8 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
+from app.core.config import settings
+
 router = APIRouter(tags=["health"])
 
 HEALTH_REDIS_PING_TIMEOUT = 2.0
@@ -42,8 +44,10 @@ async def _check_redis_blocklist(request: Request) -> str:
 
 
 async def _check_redis_trigger_lock(request: Request) -> str:
-    """Trigger 락용 Redis 연결 상태. 부분 장애 노출."""
+    """Trigger 락용 Redis 연결 상태. 부분 장애 노출. Redis 필수인데 None이면 error."""
     client = getattr(request.app.state, "redis_trigger_lock_client", None)
+    if client is None and getattr(settings, "redis_trigger_lock_required", False):
+        return "error"
     return await _ping_redis(client)
 
 

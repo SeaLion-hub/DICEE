@@ -70,12 +70,13 @@ async def post_trigger_crawl(
     """
     _validate_trigger_secret(x_crawl_trigger_secret, authorization)
 
-    # Idempotency: 원자적 슬롯 점유(SET NX). 점유 실패 시 202(in_progress 또는 캐시된 결과).
+    # Idempotency: 요청 스코프(route+college_code)별로 별도 캐시. 동일 키라도 college_code가 다르면 다른 결과.
+    idempotency_scope = (college_code.strip() if college_code and college_code.strip() else "all")
     key_stripped = idempotency_key.strip() if idempotency_key and idempotency_key.strip() else None
     if key_stripped and redis_client is not None:
-        claimed = await try_claim_trigger_idempotency(redis_client, key_stripped)
+        claimed = await try_claim_trigger_idempotency(redis_client, key_stripped, idempotency_scope)
         if not claimed:
-            cached = await get_trigger_idempotency_result(redis_client, key_stripped)
+            cached = await get_trigger_idempotency_result(redis_client, key_stripped, idempotency_scope)
             if cached is not None:
                 return JSONResponse(status_code=202, content=cached)
             return JSONResponse(
@@ -150,7 +151,7 @@ async def post_trigger_crawl(
     if failed:
         out["failed"] = failed
     if key_stripped and redis_client is not None:
-        await set_trigger_idempotency_result(redis_client, key_stripped, out)
+        await set_trigger_idempotency_result(redis_client, key_stripped, idempotency_scope, out)
     return JSONResponse(status_code=200, content=out)
 
 

@@ -1,6 +1,7 @@
 """Redis 비동기 클라이언트. Blocklist(Access Token 무효화)용. 풀 크기 명시로 동시 처리량 대응."""
 
 import asyncio
+import hashlib
 import json
 import logging
 import time
@@ -220,16 +221,23 @@ async def release_trigger_lock(
 IDEMPOTENCY_VALUE_IN_PROGRESS = "in_progress"
 
 
+def _idempotency_scope_hash(scope: str) -> str:
+    """요청 스코프(route+college_code 등)를 짧은 안정적 해시로 변환. 키 길이 제한용."""
+    return hashlib.sha256(scope.encode()).hexdigest()[:16]
+
+
 async def try_claim_trigger_idempotency(
-    client: RedisAsyncio | None, idempotency_key: str
+    client: RedisAsyncio | None, idempotency_key: str, scope: str
 ) -> bool:
     """
     Idempotency-Key 슬롯을 원자적으로 점유. SET key NX EX.
+    scope(예: college_code 또는 "all")별로 별도 캐시. 동일 키라도 스코프가 다르면 다른 슬롯.
     성공 시 True(이번 요청이 처리 담당), 이미 존재 시 False(다른 요청이 점유 중 또는 완료).
     """
     if client is None or not idempotency_key:
         return True  # Redis 없으면 클레임 검사 생략, 기존처럼 진행
-    key = f"{TRIGGER_IDEMPOTENCY_KEY_PREFIX}{idempotency_key}"
+    scope_hash = _idempotency_scope_hash(scope)
+    key = f"{TRIGGER_IDEMPOTENCY_KEY_PREFIX}{idempotency_key}:{scope_hash}"
     try:
         ok = await client.set(
             key, IDEMPOTENCY_VALUE_IN_PROGRESS, nx=True, ex=TRIGGER_IDEMPOTENCY_TTL_SECONDS
@@ -243,12 +251,13 @@ async def try_claim_trigger_idempotency(
 
 
 async def get_trigger_idempotency_result(
-    client: RedisAsyncio | None, idempotency_key: str
+    client: RedisAsyncio | None, idempotency_key: str, scope: str
 ) -> dict | None:
-    """동일 Idempotency-Key로 이미 처리된 결과가 있으면 반환. 없으면 None. in_progress 값은 완료가 아니므로 None으로 취급하지 않고 별도 처리."""
+    """동일 Idempotency-Key+scope로 이미 처리된 결과가 있으면 반환. 없으면 None. in_progress 값은 완료가 아니므로 None으로 취급하지 않고 별도 처리."""
     if client is None or not idempotency_key:
         return None
-    key = f"{TRIGGER_IDEMPOTENCY_KEY_PREFIX}{idempotency_key}"
+    scope_hash = _idempotency_scope_hash(scope)
+    key = f"{TRIGGER_IDEMPOTENCY_KEY_PREFIX}{idempotency_key}:{scope_hash}"
     try:
         raw = await client.get(key)
         if raw is None:
@@ -262,12 +271,13 @@ async def get_trigger_idempotency_result(
 
 
 async def set_trigger_idempotency_result(
-    client: RedisAsyncio | None, idempotency_key: str, payload: dict
+    client: RedisAsyncio | None, idempotency_key: str, scope: str, payload: dict
 ) -> None:
-    """Idempotency-Key에 결과 저장. TTL 24h. 재요청 시 202로 캐시된 결과 반환용."""
+    """Idempotency-Key+scope에 결과 저장. TTL 24h. 재요청 시 202로 캐시된 결과 반환용."""
     if client is None or not idempotency_key:
         return
-    key = f"{TRIGGER_IDEMPOTENCY_KEY_PREFIX}{idempotency_key}"
+    scope_hash = _idempotency_scope_hash(scope)
+    key = f"{TRIGGER_IDEMPOTENCY_KEY_PREFIX}{idempotency_key}:{scope_hash}"
     try:
         await client.set(
             key, json.dumps(payload), ex=TRIGGER_IDEMPOTENCY_TTL_SECONDS
