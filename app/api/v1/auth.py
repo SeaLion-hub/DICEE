@@ -5,6 +5,7 @@ import logging
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.api_rate_limit import check_rate_limit
 from app.core.config import settings
@@ -78,7 +79,12 @@ async def post_google_auth(
     code를 받아 검증 후 Access/Refresh JWT 반환.
     외부 API 장애(타임아웃 등) → 503, 클라이언트 인증 오류 → 400.
     """
-    client_ip = get_client_ip(request) or "unknown"
+    client_ip = get_client_ip(request)
+    if client_ip is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Client IP could not be determined; rate limiting requires a valid client identity.",
+        )
     identifier = f"auth_google:{client_ip}"
     allowed = await check_rate_limit(
         redis_rate,
@@ -121,14 +127,19 @@ async def post_google_auth(
 async def post_refresh(
     request: Request,
     payload: RefreshTokenPayload,
-    session=Depends(get_db),
+    session: AsyncSession = Depends(get_db),
     redis_rate=Depends(get_redis_blocklist),
 ) -> TokenResponse:
     """
     Refresh 토큰으로 새 Access/Refresh JWT 발급.
     type=refresh, token_version 검증 후 새 쌍 반환. 무효화된 토큰 시 401.
     """
-    client_ip = get_client_ip(request) or "unknown"
+    client_ip = get_client_ip(request)
+    if client_ip is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Client IP could not be determined; rate limiting requires a valid client identity.",
+        )
     identifier = f"auth_refresh:{client_ip}"
     allowed = await check_rate_limit(
         redis_rate,
@@ -146,8 +157,11 @@ async def post_refresh(
             detail="Too many refresh requests, please try again later.",
         )
     try:
-        return await refresh_tokens(payload.refresh_token, session)
+        tokens = await refresh_tokens(payload.refresh_token, session)
+        await session.commit()
+        return tokens
     except AuthError as e:
+        await session.rollback()
         logger.warning("Refresh token error: %s", e)
         raise HTTPException(
             status_code=401,

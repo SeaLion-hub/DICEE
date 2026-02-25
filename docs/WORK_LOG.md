@@ -4,6 +4,7 @@
 
 - [작성 규칙](#작성-규칙)
 - [작성 형식](#작성-형식)
+- [2026-02-25](#2026-02-25)
 - [2026-02-24](#2026-02-24)
 - [2026-02-23](#2026-02-23)
 - [2026-02-22](#2026-02-22)
@@ -23,6 +24,12 @@
 ## 작성 형식
 
 - `- [단계 또는 영역] 무엇을 했는지 (어떤 파일/기능). 왜 또는 결과 한 줄.`
+
+---
+
+## 2026-02-25
+
+- [아키텍처·보안·확장성·가독성 개선 계획 구현] **(보안)** auth.py: IP 없을 때 레이트 리밋 키로 "unknown" 사용 금지 — get_client_ip()가 None이면 503 반환(Fail-closed). config.py: JWT 시크릿 부팅 시 Fail-Fast — fail_fast_jwt_secret_at_boot validator 추가, 모든 환경에서 jwt_secret 또는 RS256 미설정 시 부팅 실패. **(확장성)** crawl_service: seen.clear() 제거 + _BoundedSeenSet(최대 10,000개, deque 기반 evict) 도입으로 OOM 방지. 비동기 재시도 Exponential Backoff + Jitter(CRAWL_RETRY_* 상수, post_retries, asyncio.sleep) 적용. **(가독성)** crawl_policy: CrawlErrorTracker 클래스 추가(attempted/parser_failures/consecutive 캡슐화). crawl_service: _process_scrape_result 공통 함수 + _fetch_one_async 모듈 레벨 승격, sync/async 모두 CrawlErrorTracker·_process_scrape_result 사용. crawl_payload.py 신규 — build_notice_payload·_external_id_from_url 등 파싱/페이로드 빌드 분리. **(아키텍처)** config: _DatabaseConfig·_RedisConfig NamedTuple 뷰, settings.db·settings.redis property 추가. docs/decisions/config-domain-split.md ADR(마이그레이션 기한·구형 접근 하드 리밋). crawl_service: 트랜잭션 경계는 오케스트레이터만 통제 명시(run_crawl_job_sync·crawl_college_sync docstring). pytest 35 passed, 2 skipped.
 
 ---
 

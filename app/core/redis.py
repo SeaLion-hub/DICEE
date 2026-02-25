@@ -321,6 +321,36 @@ async def set_trigger_idempotency_result(
         logger.warning("Trigger idempotency set failed (key=%s): %s", idempotency_key[:32], e)
 
 
+_sync_redis_client = None
+
+
+def _get_sync_redis_client():
+    """heartbeat용 동기 Redis 클라이언트 싱글톤. 연결 churn 방지."""
+    global _sync_redis_client
+    if _sync_redis_client is None:
+        import redis
+
+        raw_url = getattr(settings, "redis_url", None) or ""
+        if not raw_url.strip():
+            return None
+        url_stripped = raw_url.strip()
+        ssl_kwargs = {}
+        if url_stripped.startswith("rediss://"):
+            ssl_kwargs = {"ssl_cert_reqs": ssl.CERT_REQUIRED}
+            if getattr(settings, "redis_ca_certs", None):
+                ssl_kwargs["ssl_ca_certs"] = settings.redis_ca_certs
+        socket_timeout = getattr(settings, "redis_socket_timeout", 5.0)
+        socket_connect_timeout = getattr(settings, "redis_socket_connect_timeout", 2.0)
+        _sync_redis_client = redis.Redis.from_url(
+            url_stripped,
+            decode_responses=True,
+            socket_timeout=socket_timeout,
+            socket_connect_timeout=socket_connect_timeout,
+            **ssl_kwargs,
+        )
+    return _sync_redis_client
+
+
 def renew_trigger_lock_sync(college_code: str, lock_token: str | None) -> bool:
     """
     단과대별 크롤 트리거 락 TTL 갱신(소유자만). 워커 장시간 실행/재시도 중 heartbeat용.
@@ -334,26 +364,10 @@ def renew_trigger_lock_sync(college_code: str, lock_token: str | None) -> bool:
     if not raw_url.strip():
         return False
     ttl = getattr(settings, "redis_trigger_lock_ttl_seconds", 2400)
-    client = None
+    client = _get_sync_redis_client()
+    if client is None:
+        return False
     try:
-        import redis
-
-        ssl_kwargs = {}
-        url = raw_url
-        url_stripped = url.strip()
-        if url_stripped.startswith("rediss://"):
-            ssl_kwargs = {"ssl_cert_reqs": ssl.CERT_REQUIRED}
-            if getattr(settings, "redis_ca_certs", None):
-                ssl_kwargs["ssl_ca_certs"] = settings.redis_ca_certs
-        socket_timeout = getattr(settings, "redis_socket_timeout", 5.0)
-        socket_connect_timeout = getattr(settings, "redis_socket_connect_timeout", 2.0)
-        client = redis.Redis.from_url(
-            url_stripped or url,
-            decode_responses=True,
-            socket_timeout=socket_timeout,
-            socket_connect_timeout=socket_connect_timeout,
-            **ssl_kwargs,
-        )
         key = f"{TRIGGER_LOCK_KEY_PREFIX}{college_code}"
         n = client.eval(LUA_RENEW_IF_OWNER, 1, key, lock_token, ttl)
         return n == 1
@@ -362,13 +376,6 @@ def renew_trigger_lock_sync(college_code: str, lock_token: str | None) -> bool:
             "Trigger lock renew failed (college=%s): %s", college_code, e, exc_info=True
         )
         return False
-    finally:
-        if client is not None:
-            try:
-                client.close()
-            except Exception:
-                # 연결 종료 실패는 치명적이지 않으므로 무시
-                pass
 
 
 def release_trigger_lock_sync(college_code: str, lock_token: str | None) -> None:

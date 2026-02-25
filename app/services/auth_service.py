@@ -267,25 +267,25 @@ async def revoke_refresh_tokens_for_user(
 
 def _normalize_redirect_uri(uri: str) -> str:
     """
-    redirect_uri 정규화: scheme·netloc 소문자, path 한 번만 unquote, query·fragment 있으면 거부.
+    redirect_uri 정규화: scheme·host 소문자, path 한 번만 unquote, query·fragment·userinfo 거부.
     더블 인코딩 방어: unquote 1회 후 path에 '%'가 남아 있으면 거부.
     """
     s = (uri or "").strip()
     if not s:
         raise AuthError("redirect_uri required")
     parsed = urlparse(s)
-    scheme = (parsed.scheme or "").lower()
-    if scheme not in ("http", "https"):
+    if (parsed.scheme or "").lower() not in ("http", "https"):
         raise AuthError("redirect_uri must be http or https")
-    netloc = (parsed.netloc or "").lower()
-    path = parsed.path or "/"
-    path_unescaped = unquote(path)
-    if "%" in path_unescaped:
-        raise AuthError("redirect_uri invalid encoding")
-    path = path_unescaped.rstrip("/") or "/"
+    if parsed.username or parsed.password or not parsed.hostname:
+        raise AuthError("redirect_uri host is invalid")
     if parsed.query or parsed.fragment:
         raise AuthError("redirect_uri must not contain query or fragment")
-    return f"{scheme}://{netloc}{path}"
+    host = parsed.hostname.lower()
+    port = f":{parsed.port}" if parsed.port else ""
+    path = (unquote(parsed.path or "/").rstrip("/") or "/")
+    if "%" in path:
+        raise AuthError("redirect_uri invalid encoding")
+    return f"{parsed.scheme.lower()}://{host}{port}{path}"
 
 
 @lru_cache(maxsize=1)

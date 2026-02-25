@@ -231,11 +231,21 @@ async def post_trigger_crawl(
         )
 
     out: dict = {}
+    status_code = 500
     try:
         out, status_code = await _enqueue_crawls(request, redis_client, codes)
     finally:
-        if claimed and redis_client is not None and key_stripped:
-            await set_trigger_idempotency_result(redis_client, key_stripped, idempotency_scope, out)
+        should_cache = (
+            claimed
+            and redis_client is not None
+            and key_stripped
+            and 200 <= status_code < 500
+            and bool(out)
+        )
+        if should_cache:
+            await set_trigger_idempotency_result(
+                redis_client, key_stripped, idempotency_scope, out
+            )
     return JSONResponse(status_code=status_code, content=out)
 
 

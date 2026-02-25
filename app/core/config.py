@@ -1,12 +1,53 @@
-"""환경 변수 기반 설정. pydantic-settings 사용."""
+"""환경 변수 기반 설정. pydantic-settings 사용. 도메인별 그룹은 .db, .redis 등으로 노출(ADR: config-domain-split)."""
 
 import json
 import logging
+from typing import NamedTuple
 
 from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 logger = logging.getLogger(__name__)
+
+
+class _DatabaseConfig(NamedTuple):
+    """DB 관련 설정 뷰. settings.db.database_url 등으로 접근. 마이그레이션 후 구형 평탄화 접근은 금지(ADR)."""
+    database_url: str | None
+    db_connect_retries: int
+    db_connect_retry_interval_sec: float
+    strict_startup_db_check: bool
+    db_pool_size_async: int
+    db_pool_max_overflow_async: int
+    db_pool_timeout_async: float
+    db_statement_timeout_ms: int
+    db_pool_size_sync: int
+    db_pool_max_overflow_sync: int
+    db_pool_timeout_sync: float
+    db_pool_recycle_sync: int
+    db_max_connections: int | None
+    db_reserved: int
+    db_pool_strict_budget: bool
+    deploy_surge_factor: float
+    db_api_instances: int
+    db_uvicorn_workers: int
+    db_worker_instances: int
+    db_celery_concurrency: int
+
+
+class _RedisConfig(NamedTuple):
+    """Redis 관련 설정 뷰. settings.redis.redis_url 등으로 접근."""
+    redis_url: str | None
+    redis_ca_certs: str | None
+    redis_socket_timeout: float
+    redis_socket_connect_timeout: float
+    redis_blocklist_fail_closed: bool
+    redis_blocklist_circuit_failure_threshold: int
+    redis_blocklist_circuit_open_seconds: float
+    redis_blocklist_circuit_half_open_interval_seconds: float
+    redis_blocklist_max_connections: int
+    redis_trigger_lock_max_connections: int
+    redis_trigger_lock_ttl_seconds: int
+    redis_trigger_lock_required: bool
 
 
 def _parse_allowed_origins(value: str) -> list[str]:
@@ -170,6 +211,23 @@ class Settings(BaseSettings):
     allowed_origins: str = ""
 
     @model_validator(mode="after")
+    def fail_fast_jwt_secret_at_boot(self: "Settings") -> "Settings":
+        """JWT 시크릿 누락 시 부팅 시점에 즉시 크래시(Fail-Fast). 모든 환경 적용. '첫 JWT 사용 시점' 검사는 사용하지 않음."""
+        has_jwt_secret = (self.jwt_secret.get_secret_value() or "").strip()
+        has_rs256 = (
+            self.jwt_private_key_pem
+            and (self.jwt_private_key_pem.get_secret_value() or "").strip()
+            and self.jwt_public_key_pem
+            and (self.jwt_public_key_pem.get_secret_value() or "").strip()
+        )
+        if not has_jwt_secret and not has_rs256:
+            raise ValueError(
+                "JWT_SECRET or (JWT_PRIVATE_KEY_PEM + JWT_PUBLIC_KEY_PEM) must be set at boot. "
+                "Secret key omission causes immediate crash (Fail-Fast). Set in environment or .env."
+            )
+        return self
+
+    @model_validator(mode="after")
     def fail_fast_production(self: "Settings") -> "Settings":
         """프로덕션 환경 시 공통 필수 변수만 검사. JWT/Google은 워커에서 불필요하므로 여기서는 요구하지 않음."""
         if (self.environment or "").strip().lower() != "production":
@@ -207,6 +265,50 @@ class Settings(BaseSettings):
         """X-Forwarded-For 신뢰 시 사용할 직전 피어 IP 집합. 빈 문자열이면 빈 집합(헤더 미신뢰)."""
         return frozenset(
             ip.strip() for ip in (self.trusted_proxy_ips or "").split(",") if ip.strip()
+        )
+
+    @property
+    def db(self) -> _DatabaseConfig:
+        """DB 관련 설정 뷰. 마이그레이션 후 settings.db.* 만 사용(ADR config-domain-split)."""
+        return _DatabaseConfig(
+            database_url=self.database_url,
+            db_connect_retries=self.db_connect_retries,
+            db_connect_retry_interval_sec=self.db_connect_retry_interval_sec,
+            strict_startup_db_check=self.strict_startup_db_check,
+            db_pool_size_async=self.db_pool_size_async,
+            db_pool_max_overflow_async=self.db_pool_max_overflow_async,
+            db_pool_timeout_async=self.db_pool_timeout_async,
+            db_statement_timeout_ms=self.db_statement_timeout_ms,
+            db_pool_size_sync=self.db_pool_size_sync,
+            db_pool_max_overflow_sync=self.db_pool_max_overflow_sync,
+            db_pool_timeout_sync=self.db_pool_timeout_sync,
+            db_pool_recycle_sync=self.db_pool_recycle_sync,
+            db_max_connections=self.db_max_connections,
+            db_reserved=self.db_reserved,
+            db_pool_strict_budget=self.db_pool_strict_budget,
+            deploy_surge_factor=self.deploy_surge_factor,
+            db_api_instances=self.db_api_instances,
+            db_uvicorn_workers=self.db_uvicorn_workers,
+            db_worker_instances=self.db_worker_instances,
+            db_celery_concurrency=self.db_celery_concurrency,
+        )
+
+    @property
+    def redis(self) -> _RedisConfig:
+        """Redis 관련 설정 뷰. 마이그레이션 후 settings.redis.* 만 사용(ADR config-domain-split)."""
+        return _RedisConfig(
+            redis_url=self.redis_url,
+            redis_ca_certs=self.redis_ca_certs,
+            redis_socket_timeout=self.redis_socket_timeout,
+            redis_socket_connect_timeout=self.redis_socket_connect_timeout,
+            redis_blocklist_fail_closed=self.redis_blocklist_fail_closed,
+            redis_blocklist_circuit_failure_threshold=self.redis_blocklist_circuit_failure_threshold,
+            redis_blocklist_circuit_open_seconds=self.redis_blocklist_circuit_open_seconds,
+            redis_blocklist_circuit_half_open_interval_seconds=self.redis_blocklist_circuit_half_open_interval_seconds,
+            redis_blocklist_max_connections=self.redis_blocklist_max_connections,
+            redis_trigger_lock_max_connections=self.redis_trigger_lock_max_connections,
+            redis_trigger_lock_ttl_seconds=self.redis_trigger_lock_ttl_seconds,
+            redis_trigger_lock_required=self.redis_trigger_lock_required,
         )
 
 

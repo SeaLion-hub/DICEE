@@ -37,11 +37,14 @@ async def _check_rate_limit_inmemory(
     """프로세스 로컬 인메모리 카운터 기반 rate limit. 키 수 상한 초과 시 오래된 키 정리."""
     now = time.monotonic()
     async with _inmemory_lock:
-        if len(_inmemory_counts) > _MAX_INMEMORY_KEYS:
+        if len(_inmemory_counts) >= _MAX_INMEMORY_KEYS:
             cutoff = now - window_seconds
             stale_keys = [k for k, (ws, _) in _inmemory_counts.items() if ws < cutoff]
             for k in stale_keys:
                 _inmemory_counts.pop(k, None)
+            while len(_inmemory_counts) >= _MAX_INMEMORY_KEYS:
+                oldest_key = min(_inmemory_counts.items(), key=lambda kv: kv[1][0])[0]
+                _inmemory_counts.pop(oldest_key, None)
 
         window_start, count = _inmemory_counts.get(identifier, (now, 0))
         if now - window_start >= window_seconds:
@@ -54,14 +57,11 @@ async def _check_rate_limit_inmemory(
 
 _LUA_API_RATE_LIMIT: Final[str] = """
 local key = KEYS[1]
-local now = tonumber(ARGV[1])
-local window = tonumber(ARGV[2])
-local max_req = tonumber(ARGV[3])
-local current = tonumber(redis.call('GET', key) or '0')
-current = current + 1
-redis.call('SET', key, tostring(current), 'EX', window)
-if current > max_req then
-  return current
+local window = tonumber(ARGV[1])
+local max_req = tonumber(ARGV[2])
+local current = redis.call('INCR', key)
+if current == 1 then
+  redis.call('EXPIRE', key, window)
 end
 return current
 """
@@ -93,13 +93,11 @@ async def check_rate_limit(
 
     key = f"{API_RATE_LIMIT_KEY_PREFIX}{identifier}"
     try:
-        now = int(time.time())
         # eval은 Redis 측에서 Lua 스크립트 캐시를 사용하므로 반복 호출해도 됨.
         result = await client.eval(
             _LUA_API_RATE_LIMIT,
             1,
             key,
-            str(now),
             str(window_seconds),
             str(max_requests),
         )
