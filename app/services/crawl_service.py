@@ -128,8 +128,13 @@ async def crawl_college(session: AsyncSession, college_code: str) -> int:
 
     async with httpx.AsyncClient(timeout=CRAWL_PAGE_TIMEOUT_SECONDS) as client:
         links = await get_links_async_fn(client, list_url)
+        total_links = len(links)
 
         if not links:
+            logger.info(
+                "crawl finished college_code=%s total_links=0 upserted=0",
+                college_code,
+            )
             return 0
 
         total_count = 0
@@ -145,6 +150,13 @@ async def crawl_college(session: AsyncSession, college_code: str) -> int:
         if chunk:
             ids = await upsert_notices_bulk(session, chunk)
             total_count += len(ids)
+
+        logger.info(
+            "crawl finished college_code=%s total_links=%d upserted=%d",
+            college_code,
+            total_links,
+            total_count,
+        )
     return total_count
 
 
@@ -474,7 +486,12 @@ def crawl_college_sync(
     list_url = config["url"]
     get_links_fn, scrape_fn = get_crawler(module_name)
     links = get_links_fn(list_url)
+    total_links = len(links)
     if not links:
+        logger.info(
+            "crawl finished college_code=%s total_links=0 upserted=0",
+            college_code,
+        )
         return (0, [])
 
     seen = _BoundedSeenSet(CRAWL_SEEN_MAX_SIZE)
@@ -504,6 +521,13 @@ def crawl_college_sync(
             on_chunk_processed(ids)
         else:
             notice_ids_to_process.extend(ids)
+
+    logger.info(
+        "crawl finished college_code=%s total_links=%d upserted=%d",
+        college_code,
+        total_links,
+        total_upserted,
+    )
     if on_chunk_processed is not None:
         return (total_upserted, [])
     return (total_upserted, notice_ids_to_process)
