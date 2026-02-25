@@ -463,17 +463,23 @@ def crawl_college_sync(
         if len(chunk) >= UPSERT_CHUNK_SIZE:
             ids = upsert_notices_bulk_sync(session, chunk)
             total_upserted += len(ids)
-            notice_ids_to_process.extend(ids)
+            if on_chunk_processed is not None:
+                session.commit()
+                session.expunge_all()
+                on_chunk_processed(ids)
+            else:
+                notice_ids_to_process.extend(ids)
             chunk.clear()
     if chunk:
         ids = upsert_notices_bulk_sync(session, chunk)
         total_upserted += len(ids)
-        notice_ids_to_process.extend(ids)
-    # 커밋 후 한 번에 enqueue (AI 워커가 notice 조회 전에 커밋이 보이도록)
+        if on_chunk_processed is not None:
+            session.commit()
+            session.expunge_all()
+            on_chunk_processed(ids)
+        else:
+            notice_ids_to_process.extend(ids)
     if on_chunk_processed is not None:
-        session.commit()
-        session.expunge_all()
-        on_chunk_processed(notice_ids_to_process)
         return (total_upserted, [])
     return (total_upserted, notice_ids_to_process)
 

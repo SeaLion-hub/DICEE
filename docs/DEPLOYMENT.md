@@ -308,7 +308,8 @@ CORS: `ALLOWED_ORIGINS`에 프론트 도메인 등록. credentials: 프론트가
 | `JWT_PRIVATE_KEY_PEM` | JWT RS256 개인키 PEM(한 줄로 `\n` 포함 가능). RS256 사용 시 `JWT_PUBLIC_KEY_PEM`과 쌍으로 필수. | 2단계 Auth (RS256 선택 시) |
 | `JWT_PUBLIC_KEY_PEM` | JWT RS256 공개키 PEM. 검증 서비스는 공개키만 보유하면 됨. | 2단계 Auth (RS256 선택 시) |
 | `JWT_ACCESS_EXPIRE_SECONDS` | Access 토큰 만료(초). 기본 600(10분). 탈퇴/탈취 시 노출 시간 최소화. | 2단계 (선택) |
-| `REDIS_BLOCKLIST_FAIL_CLOSED` | Redis 장애 시 True=인증 거부(Fail-Closed), False=서명만 검증 후 통과(Fail-Open). 운영 권장 False(가용성 우선). 기본 False. | 2단계 Auth (Blocklist 사용 시) |
+| `REDIS_BLOCKLIST_FAIL_CLOSED` | Redis 장애 시 True=인증 거부(Fail-Closed), False=서명만 검증 후 통과(Fail-Open). 멀티 인스턴스·방어력 유지 시 true 권장. 기본 False. | 2단계 Auth (Blocklist 사용 시) |
+| `API_RATE_LIMIT_REQUIRE_REDIS` | True면 Redis 미설정/장애 시 레이트리밋 검사 대신 503. 멀티 인스턴스 운영 시 true 권장(Redis 없으면 인메모리 fallback만 되어 인스턴스별로만 적용됨). 기본 False. | 2단계 Auth·Internal API |
 | `REDIS_BLOCKLIST_CIRCUIT_FAILURE_THRESHOLD` | Blocklist Circuit Breaker: 연속 실패 N회 시 열림. 기본 3. | 2단계 (선택) |
 | `REDIS_BLOCKLIST_CIRCUIT_OPEN_SECONDS` | Circuit 열림 유지 시간(초). 기본 60. | 2단계 (선택) |
 | `REDIS_BLOCKLIST_CIRCUIT_HALF_OPEN_INTERVAL_SECONDS` | Half-open 시도 간격(초). 기본 15. | 2단계 (선택) |

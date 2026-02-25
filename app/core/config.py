@@ -167,7 +167,12 @@ class Settings(BaseSettings):
     # Redis 소켓/연결 타임아웃(초). 풀 포화·장애 시 무한 대기 방지.
     redis_socket_timeout: float = Field(5.0, ge=1.0, le=60.0)
     redis_socket_connect_timeout: float = Field(2.0, ge=0.5, le=30.0)
-    # Blocklist: Redis 장애 시. True=Fail-Closed, False=Fail-Open(서명만 검증 후 통과). 운영 권장 False.
+    # API 레이트리밋: Redis 미설정/장애 시 True면 503(fail-closed), False면 인메모리 fallback(멀티 인스턴스 시 방어력 감소).
+    api_rate_limit_require_redis: bool = Field(
+        False,
+        description="True면 Redis 없거나 장애 시 레이트리밋 검사 대신 503 반환. 멀티 인스턴스 운영 시 True 권장.",
+    )
+    # Blocklist: Redis 장애 시. True=Fail-Closed, False=Fail-Open(서명만 검증 후 통과). 프로덕션에서는 True 권장.
     redis_blocklist_fail_closed: bool = False
     # Blocklist Circuit Breaker: 연속 실패 N회 시 열림, open_seconds 동안 Fail-open.
     redis_blocklist_circuit_failure_threshold: int = Field(3, ge=1, le=50)
@@ -277,6 +282,38 @@ class Settings(BaseSettings):
                 "set it to the proxy IP(s) so X-Forwarded-For is trusted; otherwise all clients may be seen "
                 "as one IP and rate limiting can block everyone."
             )
+        # Google OAuth 사용 시 redirect allowlist 필수 (비어 있으면 검증 비활성화되어 보안 취약).
+        has_google_client = bool(
+            (self.google_client_id or "").strip()
+            or (self.google_client_secret.get_secret_value() or "").strip()
+        )
+        if has_google_client:
+            raw_uris = (self.google_redirect_uris or "").strip()
+            if not raw_uris:
+                raise ValueError(
+                    "Production with Google OAuth requires GOOGLE_REDIRECT_URIS to be set (comma-separated). "
+                    "Empty value disables redirect allowlist validation. Set in environment or .env."
+                )
+            # 최소 1개 유효한 URI 형태(scheme + netloc) 확인.
+            from urllib.parse import urlparse
+
+            valid_count = 0
+            for u in raw_uris.split(","):
+                u = u.strip()
+                if not u:
+                    continue
+                try:
+                    p = urlparse(u)
+                    if p.scheme in ("http", "https") and p.netloc:
+                        valid_count += 1
+                        break
+                except Exception:
+                    continue
+            if valid_count == 0:
+                raise ValueError(
+                    "Production with Google OAuth requires at least one valid redirect URI in GOOGLE_REDIRECT_URIS "
+                    "(http(s) with host). Fix configuration."
+                )
         return self
 
     @property

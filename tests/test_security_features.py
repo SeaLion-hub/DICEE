@@ -97,7 +97,9 @@ def test_auth_google_rate_limit_returns_429(client, monkeypatch):
     """Rate limiter가 차단(True→False)일 때 /v1/auth/google이 429를 반환한다."""
     from app.api.v1 import auth as auth_module
 
-    async def _deny_rate_limit(_client, *, identifier: str, max_requests: int, window_seconds: int) -> bool:
+    async def _deny_rate_limit(
+        _client, *, identifier: str, max_requests: int, window_seconds: int, require_redis: bool = False, **kwargs: object
+    ) -> bool:
         return False
 
     # google_login이 호출되지 않도록 더미로 대체

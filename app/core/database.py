@@ -43,13 +43,13 @@ _db_holder = _DbHolder()
 # verify_db_connection()에서 조회한 DB max_connections. check_pool_budget 오버라이드용.
 _resolved_max_connections: int | None = None
 
-# 프로파일 R (권장 풀 크기). 예산 검사 시 이 상수로 Peak 계산. DEPLOYMENT.md / docs/decisions/database-pool-capacity.md.
+# 프로파일 R (권장 풀 크기 참고용). 예산 검사는 실제 설정값(settings) 사용. DEPLOYMENT.md / docs/decisions/database-pool-capacity.md.
 POOL_PROFILE_R = (4, 6, 2, 0)  # (P_async, O_async, P_sync, O_sync)
 
 
 @dataclass(frozen=True)
 class PoolBudgetResult:
-    """풀 예산 검사 결과. 프로파일 R 기준 Peak_pool_conn vs App_budget."""
+    """풀 예산 검사 결과. 실제 풀 설정값 기준 Peak_pool_conn vs App_budget."""
 
     within_budget: bool
     app_budget: int
@@ -60,10 +60,10 @@ class PoolBudgetResult:
 
 def check_pool_budget(effective_max_conn: int | None) -> PoolBudgetResult:
     """
-    풀 예산 검사(프로파일 R 기준). effective_max_conn이 None이면 검사 생략(within_budget=True, 0 값 반환).
+    풀 예산 검사(실제 설정값 기준). effective_max_conn이 None이면 검사 생략(within_budget=True, 0 값 반환).
     산식: App_budget = floor((max_conn - DB_RESERVED) * 0.7),
-    API_conn = N_api * N_uvicorn_workers * (P_async + O_async),
-    Worker_conn = N_worker * N_celery_concurrency * (P_sync + O_sync),
+    API_conn = N_api * N_uvicorn_workers * (db_pool_size_async + db_pool_max_overflow_async),
+    Worker_conn = N_worker * N_celery_concurrency * (db_pool_size_sync + db_pool_max_overflow_sync),
     Total = API_conn + Worker_conn, Peak = Total * DEPLOY_SURGE_FACTOR.
     통과 조건: Peak_pool_conn <= App_budget.
     """
@@ -75,18 +75,17 @@ def check_pool_budget(effective_max_conn: int | None) -> PoolBudgetResult:
             peak_pool_conn=0,
             message="Pool budget check skipped (no effective max_connections).",
         )
-    p_async, o_async, p_sync, o_sync = POOL_PROFILE_R
     reserved = settings.db_reserved
     app_budget = int((effective_max_conn - reserved) * 0.7)
     api_conn = (
         settings.db_api_instances
         * settings.db_uvicorn_workers
-        * (p_async + o_async)
+        * (settings.db_pool_size_async + settings.db_pool_max_overflow_async)
     )
     worker_conn = (
         settings.db_worker_instances
         * settings.db_celery_concurrency
-        * (p_sync + o_sync)
+        * (settings.db_pool_size_sync + settings.db_pool_max_overflow_sync)
     )
     total_pool_conn = api_conn + worker_conn
     peak_pool_conn = int(total_pool_conn * settings.deploy_surge_factor)

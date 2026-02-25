@@ -7,7 +7,10 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.api_rate_limit import check_rate_limit
+from app.core.api_rate_limit import (
+    RateLimitUnavailableError,
+    check_rate_limit,
+)
 from app.core.config import settings
 from app.core.database import get_db
 from app.core.deps import get_google_key_fetcher, get_httpx_client, get_redis_blocklist
@@ -87,12 +90,19 @@ async def post_google_auth(
             detail="Client IP could not be determined; rate limiting requires a valid client identity.",
         )
     identifier = f"auth_google:{client_ip}"
-    allowed = await check_rate_limit(
-        redis_rate,
-        identifier=identifier,
-        max_requests=getattr(settings, "auth_google_rate_limit_per_minute", 10),
-        window_seconds=60,
-    )
+    try:
+        allowed = await check_rate_limit(
+            redis_rate,
+            identifier=identifier,
+            max_requests=getattr(settings, "auth_google_rate_limit_per_minute", 10),
+            window_seconds=60,
+            require_redis=getattr(settings, "api_rate_limit_require_redis", False),
+        )
+    except RateLimitUnavailableError:
+        raise HTTPException(
+            status_code=503,
+            detail="Rate limiting is temporarily unavailable. Try again later.",
+        ) from None
     if not allowed:
         logger.warning(
             "auth google rate limit exceeded",
@@ -145,12 +155,19 @@ async def post_refresh(
             detail="Client IP could not be determined; rate limiting requires a valid client identity.",
         )
     identifier = f"auth_refresh:{client_ip}"
-    allowed = await check_rate_limit(
-        redis_rate,
-        identifier=identifier,
-        max_requests=getattr(settings, "auth_refresh_rate_limit_per_minute", 60),
-        window_seconds=60,
-    )
+    try:
+        allowed = await check_rate_limit(
+            redis_rate,
+            identifier=identifier,
+            max_requests=getattr(settings, "auth_refresh_rate_limit_per_minute", 60),
+            window_seconds=60,
+            require_redis=getattr(settings, "api_rate_limit_require_redis", False),
+        )
+    except RateLimitUnavailableError:
+        raise HTTPException(
+            status_code=503,
+            detail="Rate limiting is temporarily unavailable. Try again later.",
+        ) from None
     if not allowed:
         logger.warning(
             "auth refresh rate limit exceeded",

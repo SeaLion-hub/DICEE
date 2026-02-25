@@ -4,6 +4,7 @@
 
 - [작성 규칙](#작성-규칙)
 - [작성 형식](#작성-형식)
+- [2026-02-26](#2026-02-26)
 - [2026-02-25](#2026-02-25)
 - [2026-02-24](#2026-02-24)
 - [2026-02-23](#2026-02-23)
@@ -24,6 +25,12 @@
 ## 작성 형식
 
 - `- [단계 또는 영역] 무엇을 했는지 (어떤 파일/기능). 왜 또는 결과 한 줄.`
+
+---
+
+## 2026-02-26
+
+- [주요 결함 개선 계획 구현] **(1)** on_chunk_processed 계약 준수 — crawl_service.crawl_college_sync에서 청크 단위로 commit → expunge_all → on_chunk_processed(ids) 호출, 누적 리스트 제거. **(2)** METRICS_ALLOWED_IPS 문서 정합 — .env.example "비우면 모든 IP 차단(fail-closed)"으로 수정. **(3)** DB 풀 예산 — database.check_pool_budget를 실제 설정값(db_pool_size_async 등) 기준으로 변경, docs/decisions/database-pool-capacity.md 섹션 2 갱신. **(4)** Production fail-fast — config.fail_fast_production에서 Google OAuth 사용 시 GOOGLE_REDIRECT_URIS 비어있지 않음·최소 1개 유효 URI(urlparse) 검사 추가. **(5)** Redis fallback — api_rate_limit: RateLimitUnavailableError·require_redis 옵션, Redis 없/장애 시 503 반환; config.api_rate_limit_require_redis 추가; auth.py·internal.py에서 503 처리; .env.example·DEPLOYMENT.md 문서화, blocklist 프로덕션 권장 문구. **(6)** crawl_runs 계약 — docs/decisions/crawl-runs-composite-pk-contract.md 추가. tests: test_security_features mock에 require_redis/**kwargs 수용. pytest 60 passed, 3 skipped.
 
 ---
 

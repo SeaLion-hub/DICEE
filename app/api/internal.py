@@ -13,7 +13,10 @@ from redis.asyncio import Redis as RedisAsyncio
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import metrics
-from app.core.api_rate_limit import check_rate_limit
+from app.core.api_rate_limit import (
+    RateLimitUnavailableError,
+    check_rate_limit,
+)
 from app.core.config import settings
 from app.core.crawler_config import COLLEGE_CODE_TO_MODULE
 from app.core.database import get_db
@@ -209,12 +212,19 @@ async def post_trigger_crawl(
         request.client.host if request and request.client else "unknown"
     )
     rate_identifier = f"internal_trigger_crawl:{client_ip}"
-    allowed = await check_rate_limit(
-        redis_client,
-        identifier=rate_identifier,
-        max_requests=getattr(settings, "internal_trigger_crawl_rate_limit_per_minute", 30),
-        window_seconds=60,
-    )
+    try:
+        allowed = await check_rate_limit(
+            redis_client,
+            identifier=rate_identifier,
+            max_requests=getattr(settings, "internal_trigger_crawl_rate_limit_per_minute", 30),
+            window_seconds=60,
+            require_redis=getattr(settings, "api_rate_limit_require_redis", False),
+        )
+    except RateLimitUnavailableError:
+        raise HTTPException(
+            status_code=503,
+            detail="Rate limiting is temporarily unavailable. Try again later.",
+        ) from None
     if not allowed:
         _log_internal_auth_failure(
             request,
@@ -282,12 +292,19 @@ async def get_crawl_stats(
         request.client.host if request and request.client else "unknown"
     )
     rate_identifier = f"internal_crawl_stats:{client_ip}"
-    allowed = await check_rate_limit(
-        redis_client,
-        identifier=rate_identifier,
-        max_requests=getattr(settings, "internal_crawl_stats_rate_limit_per_minute", 60),
-        window_seconds=60,
-    )
+    try:
+        allowed = await check_rate_limit(
+            redis_client,
+            identifier=rate_identifier,
+            max_requests=getattr(settings, "internal_crawl_stats_rate_limit_per_minute", 60),
+            window_seconds=60,
+            require_redis=getattr(settings, "api_rate_limit_require_redis", False),
+        )
+    except RateLimitUnavailableError:
+        raise HTTPException(
+            status_code=503,
+            detail="Rate limiting is temporarily unavailable. Try again later.",
+        ) from None
     if not allowed:
         _log_internal_auth_failure(
             request,

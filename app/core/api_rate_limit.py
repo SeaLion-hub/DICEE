@@ -3,7 +3,8 @@
 
 특징:
 - Redis + Lua 기반 분산 카운터 (슬라이딩 윈도우 유사) 우선.
-- Redis 미설정/장애 시 프로세스 로컬 인메모리 카운터로 degrade.
+- Redis 미설정/장애 시: api_rate_limit_require_redis=True면 503(RateLimitUnavailableError),
+  False면 프로세스 로컬 인메모리 카운터로 degrade(멀티 인스턴스에서는 방어력 감소).
 """
 
 from __future__ import annotations
@@ -39,6 +40,10 @@ def _shard_index(identifier: str) -> int:
 
 class RateLimitExceededError(Exception):
     """Rate limit 초과 시 사용 가능한 예외."""
+
+
+class RateLimitUnavailableError(Exception):
+    """Redis 필수 모드에서 Redis 미설정/장애로 레이트리밋 검사를 수행할 수 없을 때. 라우터에서 503 변환."""
 
 
 def _evict_expired_shard(shard: int, now: float, window_seconds: int) -> None:
@@ -102,27 +107,31 @@ async def check_rate_limit(
     identifier: str,
     max_requests: int,
     window_seconds: int,
+    require_redis: bool = False,
 ) -> bool:
     """
     주어진 identifier에 대해 window 내 호출 횟수가 max_requests를 넘지 않았는지 검사.
 
     - Redis가 있으면 Lua 스크립트로 분산 카운터 사용.
-    - Redis 미설정/장애 시 프로세스 로컬 인메모리 카운터로 degrade.
+    - Redis 미설정/장애 시: require_redis=True면 RateLimitUnavailableError(503 변환), False면 인메모리 fallback.
 
     반환:
         True  - 허용
         False - 차단 (rate limit 초과)
     """
     if max_requests <= 0 or window_seconds <= 0:
-        # 0 이하 설정은 무제한으로 해석.
         return True
 
     if client is None:
+        if require_redis:
+            raise RateLimitUnavailableError(
+                "Rate limit requires Redis but client is not configured. "
+                "Set REDIS_URL or set api_rate_limit_require_redis=False."
+            )
         return await _check_rate_limit_inmemory(identifier, max_requests, window_seconds)
 
     key = f"{API_RATE_LIMIT_KEY_PREFIX}{identifier}"
     try:
-        # eval은 Redis 측에서 Lua 스크립트 캐시를 사용하므로 반복 호출해도 됨.
         raw_result = await cast(
             Awaitable[Any],
             client.eval(
@@ -137,7 +146,10 @@ async def check_rate_limit(
         try:
             current = int(result)
         except (TypeError, ValueError):
-            # 비정상 응답 시 보수적으로 fallback 사용.
+            if require_redis:
+                raise RateLimitUnavailableError(
+                    "Rate limit Redis returned invalid response; require_redis=True."
+                ) from None
             logger.debug(
                 "api rate limit eval returned non-int (identifier=%s, result=%r); using in-memory fallback",
                 identifier,
@@ -145,7 +157,13 @@ async def check_rate_limit(
             )
             return await _check_rate_limit_inmemory(identifier, max_requests, window_seconds)
         return current <= max_requests
+    except RateLimitUnavailableError:
+        raise
     except Exception as e:
+        if require_redis:
+            raise RateLimitUnavailableError(
+                "Rate limit Redis failed; require_redis=True."
+            ) from e
         logger.debug(
             "api rate limit failed (identifier=%s); using in-memory fallback: %s",
             identifier,
