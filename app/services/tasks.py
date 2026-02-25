@@ -7,12 +7,14 @@ import logging
 import threading
 import time
 
-from celery import shared_task
 from requests.exceptions import RequestException
 
+from app.core.celery_app import app
+from app.core.config import settings
 from app.core.database_sync import get_sync_session
 from app.core.metrics import CRAWL_DURATION_SECONDS, set_gauge
 from app.core.redis import release_trigger_lock_sync, renew_trigger_lock_sync
+from app.repositories.crawl_run_repository import close_stale_running_runs_sync
 from app.repositories.notice_repository import get_notice_for_ai_sync, update_ai_result_sync
 from app.services.crawl_service import run_crawl_job_sync
 
@@ -34,13 +36,6 @@ def _set_task_context(task_id: str | None, college_code: str | None = None):
         pass
 
 
-@shared_task(
-    name="app.services.tasks.crawl_college_task",
-    autoretry_for=(RequestException, ConnectionError, TimeoutError, OSError),
-    retry_backoff=True,
-    retry_backoff_max=600,
-    retry_jitter=True,
-)
 def _heartbeat_loop(
     college_code: str,
     lock_token: str | None,
@@ -52,9 +47,17 @@ def _heartbeat_loop(
             logger.debug("Trigger lock heartbeat renewed: college=%s", college_code)
 
 
-def crawl_college_task(college_code: str, lock_token: str | None = None):
-    """Celery 크롤 태스크. 동기 세션·crawl_college_sync. 성공 시에만 락 해제; 장시간 실행 중 heartbeat로 TTL 갱신."""
-    task_id = getattr(crawl_college_task.request, "id", None) or ""
+@app.task(
+    bind=True,
+    name="app.services.tasks.crawl_college_task",
+    autoretry_for=(RequestException, ConnectionError, TimeoutError, OSError),
+    retry_backoff=True,
+    retry_backoff_max=600,
+    retry_jitter=True,
+)
+def crawl_college_task(self, college_code: str, lock_token: str | None = None):
+    """Celery 크롤 태스크. 동기 세션·crawl_college_sync. finally에서 락 해제 보장; 장시간 실행 중 heartbeat로 TTL 갱신."""
+    task_id = getattr(self.request, "id", None) or ""
     _set_task_context(str(task_id) if task_id else None, college_code)
     lock_hint = (lock_token[:8] + "…") if lock_token else "none"
     logger.info(
@@ -63,6 +66,7 @@ def crawl_college_task(college_code: str, lock_token: str | None = None):
     )
     count = 0
     enqueued_ai = 0
+    failed_enqueues = 0
     started_at = time.monotonic()
     stop_heartbeat = threading.Event()
     heartbeat_thread: threading.Thread | None = None
@@ -75,28 +79,59 @@ def crawl_college_task(college_code: str, lock_token: str | None = None):
         heartbeat_thread.start()
     try:
         def on_chunk(ids: list) -> None:
+            nonlocal enqueued_ai, failed_enqueues
             for nid in ids:
-                process_notice_ai_task.delay(str(nid))
+                try:
+                    process_notice_ai_task.delay(str(nid))
+                    enqueued_ai += 1
+                except Exception as e:
+                    failed_enqueues += 1
+                    logger.warning(
+                        "Failed to enqueue AI task for notice_id=%s (task_id=%s college=%s): %s",
+                        nid,
+                        task_id,
+                        college_code,
+                        e,
+                        exc_info=True,
+                    )
 
         with get_sync_session() as session:
-            count, enqueued_ai = run_crawl_job_sync(
+            count, _ = run_crawl_job_sync(
                 session, college_code, task_id, on_chunk
             )
         set_gauge(CRAWL_DURATION_SECONDS, time.monotonic() - started_at)
         msg = (
             f"Crawling {college_code} completed. Upserted {count} notices, "
-            f"enqueued AI for {enqueued_ai}."
+            f"enqueued AI for {enqueued_ai} (failed_enqueues={failed_enqueues})."
         )
         logger.info(msg)
-        release_trigger_lock_sync(college_code, lock_token)
-        return {"upserted": count, "enqueued_ai": enqueued_ai}
+        return {
+            "upserted": count,
+            "enqueued_ai": enqueued_ai,
+            "failed_enqueues": failed_enqueues,
+        }
     finally:
+        release_trigger_lock_sync(college_code, lock_token)
         stop_heartbeat.set()
         if heartbeat_thread is not None:
             heartbeat_thread.join(timeout=2.0)
 
 
-@shared_task(
+@app.task(name="app.services.tasks.close_stale_crawl_runs_task")
+def close_stale_crawl_runs_task():
+    """
+    Stale RUNNING 정리: started_at이 crawl_run_stale_seconds보다 오래된 crawl_runs를 FAILED로 닫음.
+    Celery Beat에서 주기 호출 권장(예: 15분마다). CRAWL_RUN_STALE_SECONDS로 임계값 설정.
+    """
+    older_than = getattr(settings, "crawl_run_stale_seconds", 3600.0)
+    with get_sync_session() as session:
+        count = close_stale_running_runs_sync(session, older_than)
+    if count:
+        logger.info("close_stale_crawl_runs_task: closed %d stale RUNNING run(s)", count)
+    return {"closed": count}
+
+
+@app.task(
     name="app.services.tasks.process_notice_ai_task",
     bind=True,
     autoretry_for=(RequestException, ConnectionError, TimeoutError, OSError),
@@ -107,9 +142,17 @@ def crawl_college_task(college_code: str, lock_token: str | None = None):
 def process_notice_ai_task(self, notice_id: str):
     """
     AI 처리 태스크. FOR UPDATE SKIP LOCKED + ai_status 선점으로 동시 워커 중복 처리 방지.
-    선점 실패(이미 처리 중/완료) 시 스킵. 4단계에서 Gemini 호출 구현 시 여기서 호출 후 update_ai_result_sync.
+    AI_PIPELINE_ENABLED가 False면 선점·done 저장 없이 스킵(pending 유지). True일 때만 Gemini 호출 후 update_ai_result_sync.
     notice_id: UUID 문자열 (Celery 직렬화용).
     """
+    from app.core.config import settings
+
+    if not getattr(settings, "ai_pipeline_enabled", False):
+        logger.debug(
+            "process_notice_ai_task: ai_pipeline_enabled=False; skipping notice_id=%s (pending preserved)",
+            notice_id,
+        )
+        return
     import uuid as uuid_mod
     notice_uuid = uuid_mod.UUID(notice_id)
     task_id = getattr(self.request, "id", None) or ""
@@ -122,6 +165,6 @@ def process_notice_ai_task(self, notice_id: str):
                 notice_id,
             )
             return
-        # 4단계: Gemini 호출 후 ai_extracted_json 생성. 현재는 스텁으로 done + 빈 결과 저장.
-        logger.info("process_notice_ai_task: task_id=%s notice_id=%s (stub)", task_id, notice_id)
+        # 4단계: Gemini 호출 후 ai_extracted_json 생성. ai_pipeline_enabled=True일 때만 여기 도달.
+        logger.info("process_notice_ai_task: task_id=%s notice_id=%s", task_id, notice_id)
         update_ai_result_sync(session, notice_uuid, {})

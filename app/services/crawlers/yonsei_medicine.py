@@ -12,6 +12,7 @@ from requests.exceptions import RequestException
 
 from app.core.crawler_config import CRAWLER_HEADERS
 from app.core.crawl_http import HtmlTooLargeError, fetch_html, fetch_html_async
+from app.services.crawlers.base import ScrapeResult
 
 logger = logging.getLogger(__name__)
 
@@ -107,8 +108,12 @@ def get_medicine_notice_links(list_url):
                         if q.get(key):
                             no_text = str(q[key][0])
                             break
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning(
+                        "get_medicine_notice_links: failed to parse query params for url=%s: %s",
+                        full_url,
+                        e,
+                    )
                 # 중복 방지 (set 기반 O(1))
                 if full_url not in seen_urls:
                     seen_urls.add(full_url)
@@ -203,7 +208,12 @@ def scrape_medicine_detail(url):
                             if "jpeg" in head:
                                 ext = "jpg"
                             images.append({"type": "base64", "data": enc, "name": f"img.{ext}"})
-                        except Exception:
+                        except Exception as e:
+                            logger.warning(
+                                "scrape_medicine_detail: failed to parse inline image url=%s: %s",
+                                url,
+                                e,
+                            )
                             continue
                     else:
                         if any(x in src for x in ["icon", "btn", "blank"]):
@@ -233,7 +243,7 @@ def scrape_medicine_detail(url):
                         attachment_names_med.add(fname)
                         attachments.append(fname)
 
-        return title, date, content_html, images, attachments
+        return ScrapeResult(title, date, content_html, images, attachments)
 
     except RequestException:
         raise
@@ -268,8 +278,12 @@ async def get_medicine_notice_links_async(client: httpx.AsyncClient, list_url: s
                         if q.get(key):
                             no_text = str(q[key][0])
                             break
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning(
+                        "get_medicine_notice_links_async: failed to parse query params for url=%s: %s",
+                        full_url,
+                        e,
+                    )
                 if full_url not in seen_urls_async:
                     seen_urls_async.add(full_url)
                     links.append({"url": full_url, "no": no_text if no_text else "Post"})
@@ -324,7 +338,12 @@ async def scrape_medicine_detail_async(client: httpx.AsyncClient, url: str):
                         head, enc = src.split(",", 1)
                         ext = "jpg" if "jpeg" in head else "png"
                         images.append({"type": "base64", "data": enc, "name": f"img.{ext}"})
-                    except Exception:
+                    except Exception as e:
+                        logger.warning(
+                            "scrape_medicine_detail_async: failed to parse inline image url=%s: %s",
+                            url,
+                            e,
+                        )
                         continue
                 else:
                     if any(x in src for x in ["icon", "btn", "blank"]):
@@ -347,7 +366,7 @@ async def scrape_medicine_detail_async(client: httpx.AsyncClient, url: str):
                     if fname and fname not in attachment_names_med_async:
                         attachment_names_med_async.add(fname)
                         attachments.append(fname)
-        return title, date, content_html, images, attachments
+        return ScrapeResult(title, date, content_html, images, attachments)
     except Exception as e:
         logger.exception("scrape_medicine_detail_async error url=%s", url)
         raise

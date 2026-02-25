@@ -1,28 +1,32 @@
 """Health check 엔드포인트. Redis는 app.state 비동기 클라이언트 재사용(스레드 풀/동기 클라이언트 미사용)."""
 
 import asyncio
+import logging
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
-from app.core.database import get_async_session_maker
+from app.core.config import settings
 
 router = APIRouter(tags=["health"])
 
 HEALTH_REDIS_PING_TIMEOUT = 2.0
 
+logger = logging.getLogger(__name__)
+
 
 async def _check_db(request: Request) -> str:
-    """DB 연결 상태. SELECT 1 실행. app.state 또는 _db_holder에서 세션 팩토리 사용."""
-    maker = getattr(request.app.state, "async_session_maker", None) or get_async_session_maker()
+    """DB 연결 상태. SELECT 1 실행. app.state.async_session_maker 단일 경로만 사용."""
+    maker = getattr(request.app.state, "async_session_maker", None)
     if not maker:
         return "error"
     try:
         async with maker() as session:
             await session.execute(text("SELECT 1"))
         return "ok"
-    except Exception:
+    except Exception as e:
+        logger.warning("Health DB check failed: %s", e, exc_info=True)
         return "error"
 
 
@@ -33,7 +37,11 @@ async def _ping_redis(client: object | None) -> str:
     try:
         await asyncio.wait_for(client.ping(), timeout=HEALTH_REDIS_PING_TIMEOUT)
         return "ok"
-    except (asyncio.TimeoutError, Exception):
+    except asyncio.TimeoutError as e:
+        logger.warning("Health Redis ping timeout: %s", e, exc_info=True)
+        return "error"
+    except Exception as e:
+        logger.warning("Health Redis ping failed: %s", e, exc_info=True)
         return "error"
 
 
@@ -44,8 +52,10 @@ async def _check_redis_blocklist(request: Request) -> str:
 
 
 async def _check_redis_trigger_lock(request: Request) -> str:
-    """Trigger 락용 Redis 연결 상태. 부분 장애 노출."""
+    """Trigger 락용 Redis 연결 상태. 부분 장애 노출. Redis 필수인데 None이면 error."""
     client = getattr(request.app.state, "redis_trigger_lock_client", None)
+    if client is None and getattr(settings, "redis_trigger_lock_required", False):
+        return "error"
     return await _ping_redis(client)
 
 
@@ -76,20 +86,10 @@ async def get_ready(request: Request) -> JSONResponse:
 
 
 @router.get("/health")
-async def get_health(request: Request) -> dict[str, str]:
-    """헬스 체크. DB·Redis(blocklist/trigger_lock 분리). status: ok | degraded."""
-    db_status = await _check_db(request)
-    redis_blocklist = await _check_redis_blocklist(request)
-    redis_trigger_lock = await _check_redis_trigger_lock(request)
-    any_error = (
-        db_status == "error"
-        or redis_blocklist == "error"
-        or redis_trigger_lock == "error"
-    )
-    status = "ok" if not any_error else "degraded"
-    return {
-        "status": status,
-        "db": db_status,
-        "redis_blocklist": redis_blocklist,
-        "redis_trigger_lock": redis_trigger_lock,
-    }
+async def get_health() -> dict[str, str]:
+    """
+    플랫폼 헬스체크용(로드밸런서·오토스케일러). 프로세스 기동 여부만 확인.
+    DB/Redis 미체크 → Redis·DB 장애 시에도 인스턴스가 비정상 판정되지 않아 장애 전파를 줄인다.
+    종속성 준비 상태는 /ready, 상세 진단은 /ready (503 시 body) 사용.
+    """
+    return {"status": "ok"}

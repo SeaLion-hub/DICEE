@@ -3,6 +3,7 @@
 새 단과대 추가 시 이 프로토콜만 구현하면 되도록 O(1) 유지보수.
 """
 
+from dataclasses import dataclass
 from typing import Any, Protocol, TypedDict
 
 import httpx
@@ -17,8 +18,15 @@ class LinkItem(_LinkItemOptional):
     url: str
 
 
-# 상세 스크래핑 결과: (title, date_str, html_content, images, attachments)
-ScrapeResult = tuple[str, str, str, list[dict[str, Any]], list[str]]
+@dataclass(slots=True)
+class ScrapeResult:
+    """상세 스크래핑 결과. 내부 모듈 간 전달용. dataclass(slots=True)로 메모리·속도 우선."""
+
+    title: str | None
+    date_str: str
+    html_content: str | None
+    images: list[dict[str, Any]]
+    attachments: list[str]
 
 
 class CrawlerStrategy(Protocol):

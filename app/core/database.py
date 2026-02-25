@@ -3,9 +3,11 @@
 import asyncio
 import logging
 import sys
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
+from enum import Enum
+from dataclasses import dataclass
 from typing import Any
 
 from fastapi import Request
@@ -22,6 +24,15 @@ from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
+
+class Propagation(str, Enum):
+    """중첩 트랜잭션 전파 정책. SessionScope에서만 사용."""
+
+    REQUIRED = "required"  # 기존 세션 참여, 없으면 새로 생성. 내부 commit/rollback은 외부에 전파하지 않음.
+    REQUIRES_NEW = "requires_new"  # 항상 새 세션. 독립 commit/rollback. ContextVar에 넣지 않음.
+    NESTED = "nested"  # 기존 세션 있으면 savepoint, 없으면 REQUIRED와 동일.
+
+
 # Holder: 테스트에서 오버라이드 가능. 전역 뮤테이션 대신 getter로 접근.
 class _DbHolder:
     engine: AsyncEngine | None = None
@@ -30,7 +41,82 @@ class _DbHolder:
 
 _db_holder = _DbHolder()
 
-# 동일 컨텍스트 내 세션 전파. transaction() 진입 시 set, finally에서 reset(token)으로 누수 방지.
+# verify_db_connection()에서 조회한 DB max_connections. check_pool_budget 오버라이드용.
+_resolved_max_connections: int | None = None
+
+# 프로파일 R (권장 풀 크기). 예산 검사 시 이 상수로 Peak 계산. DEPLOYMENT.md / docs/decisions/database-pool-capacity.md.
+POOL_PROFILE_R = (4, 6, 2, 0)  # (P_async, O_async, P_sync, O_sync)
+
+
+@dataclass(frozen=True)
+class PoolBudgetResult:
+    """풀 예산 검사 결과. 프로파일 R 기준 Peak_pool_conn vs App_budget."""
+
+    within_budget: bool
+    app_budget: int
+    total_pool_conn: int
+    peak_pool_conn: int
+    message: str
+
+
+def check_pool_budget(effective_max_conn: int | None) -> PoolBudgetResult:
+    """
+    풀 예산 검사(프로파일 R 기준). effective_max_conn이 None이면 검사 생략(within_budget=True, 0 값 반환).
+    산식: App_budget = floor((max_conn - DB_RESERVED) * 0.7),
+    API_conn = N_api * N_uvicorn_workers * (P_async + O_async),
+    Worker_conn = N_worker * N_celery_concurrency * (P_sync + O_sync),
+    Total = API_conn + Worker_conn, Peak = Total * DEPLOY_SURGE_FACTOR.
+    통과 조건: Peak_pool_conn <= App_budget.
+    """
+    if effective_max_conn is None or effective_max_conn < 1:
+        return PoolBudgetResult(
+            within_budget=True,
+            app_budget=0,
+            total_pool_conn=0,
+            peak_pool_conn=0,
+            message="Pool budget check skipped (no effective max_connections).",
+        )
+    p_async, o_async, p_sync, o_sync = POOL_PROFILE_R
+    reserved = settings.db_reserved
+    app_budget = int((effective_max_conn - reserved) * 0.7)
+    api_conn = (
+        settings.db_api_instances
+        * settings.db_uvicorn_workers
+        * (p_async + o_async)
+    )
+    worker_conn = (
+        settings.db_worker_instances
+        * settings.db_celery_concurrency
+        * (p_sync + o_sync)
+    )
+    total_pool_conn = api_conn + worker_conn
+    peak_pool_conn = int(total_pool_conn * settings.deploy_surge_factor)
+    within_budget = peak_pool_conn <= app_budget
+    if within_budget:
+        msg = (
+            f"Pool budget OK: peak={peak_pool_conn} <= app_budget={app_budget} "
+            f"(total={total_pool_conn}, max_conn={effective_max_conn})."
+        )
+    else:
+        msg = (
+            f"Pool budget exceeded: peak_pool_conn={peak_pool_conn} > app_budget={app_budget}. "
+            "Adjust DB_API_INSTANCES or DB_MAX_CONNECTIONS. See DEPLOYMENT.md."
+        )
+    return PoolBudgetResult(
+        within_budget=within_budget,
+        app_budget=app_budget,
+        total_pool_conn=total_pool_conn,
+        peak_pool_conn=peak_pool_conn,
+        message=msg,
+    )
+
+
+def get_resolved_max_connections() -> int | None:
+    """부팅 시 DB에서 조회한 max_connections. 미조회 시 None."""
+    return _resolved_max_connections
+
+
+# SessionScope를 통해서만 set/reset. 직접 _session_context.set/reset 호출 금지.
 _session_context: ContextVar[AsyncSession | None] = ContextVar(
     "session_context", default=None
 )
@@ -67,13 +153,14 @@ def get_async_session_maker() -> async_sessionmaker[AsyncSession] | None:
 
 def init_db() -> None:
     """DATABASE_URL이 있으면 엔진·세션 팩토리 초기화. Holder에 설정."""
-    if not settings.database_url:
-        logger.warning("DATABASE_URL not set. DB features disabled.")
+    raw_url = (settings.database_url or "").strip()
+    if not raw_url:
+        logger.warning("DATABASE_URL not set or empty. DB features disabled.")
         return
 
     # 배포 환경 디버깅: 앱이 실제로 쓰는 호스트만 로그 (비밀번호·user 제외). warning으로 해야 Railway stderr에 출력됨.
     try:
-        parsed = make_url(settings.database_url.strip())
+        parsed = make_url(raw_url)
         has_username = bool(parsed.username)
         has_password = bool(parsed.password)
         logger.warning(
@@ -87,22 +174,14 @@ def init_db() -> None:
     except Exception as e:
         logger.warning("DB URL parse check failed: %s", e)
 
-    from app.core.config import check_pool_budget
-
-    within_budget, peak_conn, app_budget = check_pool_budget()
-    if not within_budget and peak_conn > 0 and app_budget >= 0:
-        msg = (
-            f"Pool budget exceeded: peak_conn={peak_conn} > app_budget={app_budget}. "
-            "Adjust pool sizes or DB_MAX_CONNECTIONS. See DEPLOYMENT.md."
-        )
-        if settings.db_pool_strict_budget:
-            raise ValueError(msg)
-        logger.warning(msg)
-
+    # 연결 단위 statement_timeout 적용. docs/decisions/database-pool-capacity.md.
+    # psycopg3 (postgresql+psycopg)는 server_settings 미지원 → libpq options 사용.
     connect_args: dict = {}
-    
+    timeout_ms = getattr(settings, "db_statement_timeout_ms", 30000)
+    connect_args["options"] = f"-c statement_timeout={timeout_ms}"
+
     _db_holder.engine = create_async_engine(
-        _async_database_url(settings.database_url),
+        _async_database_url(raw_url),
         echo=False,
         pool_pre_ping=True,
         pool_size=settings.db_pool_size_async,
@@ -140,10 +219,20 @@ async def verify_db_connection() -> None:
     retries = max(1, settings.db_connect_retries)
     interval = max(0.5, settings.db_connect_retry_interval_sec)
 
+    global _resolved_max_connections
     for attempt in range(1, retries + 1):
         try:
             async with maker() as session:
                 await session.execute(text("SELECT 1"))
+                try:
+                    result = await session.execute(
+                        text("SELECT current_setting('max_connections')::int")
+                    )
+                    val = result.scalar_one_or_none()
+                    if val is not None:
+                        _resolved_max_connections = int(val)
+                except Exception as e:
+                    logger.debug("Could not fetch max_connections: %s", e)
             return
         except Exception as exc:
             last_exc = exc
@@ -166,7 +255,10 @@ async def verify_db_connection() -> None:
             scope.set_tag("context", "database_connection_check")
             scope.set_context(
                 "database",
-                {"url_set": bool(settings.database_url), "retries": retries},
+                {
+                    "url_set": bool((settings.database_url or "").strip()),
+                    "retries": retries,
+                },
             )
             sentry_sdk.capture_exception(last_exc)
     except ImportError:
@@ -186,9 +278,9 @@ async def verify_db_connection() -> None:
 
 async def get_db(request: Request) -> AsyncGenerator[AsyncSession, None]:
     """
-    FastAPI Depends용 비동기 DB 세션 생성기.
+    FastAPI Depends용 비동기 DB 세션 생성기. app.state.async_session_maker 단일 경로만 사용.
     """
-    maker = getattr(request.app.state, "async_session_maker", None) or get_async_session_maker()
+    maker = getattr(request.app.state, "async_session_maker", None)
     if not maker:
         raise RuntimeError("Database not initialized. Set DATABASE_URL.")
 
@@ -197,24 +289,36 @@ async def get_db(request: Request) -> AsyncGenerator[AsyncSession, None]:
 
 
 @asynccontextmanager
-async def transaction() -> AsyncGenerator[AsyncSession, None]:
+async def session_scope(
+    session_factory: async_sessionmaker[AsyncSession] | None,
+    propagation: Propagation = Propagation.REQUIRED,
+) -> AsyncGenerator[AsyncSession, None]:
     """
-    서비스 레이어용 트랜잭션 컨텍스트 매니저. 성공 시 commit, 예외 시 rollback.
+    세션 스코프. ContextVar는 이 매니저를 통해서만 set/reset됨.
+    REQUIRED: 기존 세션 참여 또는 새로 생성(commit/rollback 소유).
+    REQUIRES_NEW: 항상 새 세션, 독립 commit/rollback.
+    NESTED: 기존 세션 있으면 savepoint, 없으면 REQUIRED와 동일.
     """
-    maker = get_async_session_maker()
-    if not maker:
+    if not session_factory:
         raise RuntimeError("Database not initialized. Set DATABASE_URL.")
 
     existing = _session_context.get()
-    if existing is not None:
+    if propagation == Propagation.REQUIRED and existing is not None:
         yield existing
         return
 
+    if propagation == Propagation.NESTED and existing is not None:
+        async with existing.begin_nested():
+            yield existing
+        return
+
+    # REQUIRES_NEW 또는 REQUIRED/NESTED에서 기존 세션 없음: 새 세션 생성
     session: AsyncSession | None = None
     token: Any = None
     try:
-        session = maker()
-        token = _session_context.set(session)
+        session = session_factory()
+        if propagation == Propagation.REQUIRED:
+            token = _session_context.set(session)
         try:
             yield session
             await session.commit()
@@ -226,3 +330,25 @@ async def transaction() -> AsyncGenerator[AsyncSession, None]:
             _session_context.reset(token)
         if session is not None:
             await session.close()
+
+
+@asynccontextmanager
+async def transaction() -> AsyncGenerator[AsyncSession, None]:
+    """서비스 레이어용 트랜잭션. SessionScope(REQUIRED) 호환 레이어."""
+    maker = get_async_session_maker()
+    async with session_scope(maker, Propagation.REQUIRED) as session:
+        yield session
+
+
+async def run_in_session(
+    session_factory: async_sessionmaker[AsyncSession] | None,
+    fn: Callable[[AsyncSession], Awaitable[Any]],
+) -> Any:
+    """
+    비요청 컨텍스트(Celery 등)에서 단일 진입점. 세션 생성 후 fn(session) 호출.
+    fn은 async def(session) 시그니처. 전역 상태에 손대지 않고 세션만 명시 전달.
+    """
+    if not session_factory:
+        raise RuntimeError("Database not initialized. Set DATABASE_URL.")
+    async with session_scope(session_factory, Propagation.REQUIRES_NEW) as session:
+        return await fn(session)

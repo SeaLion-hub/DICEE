@@ -1,10 +1,10 @@
 """CrawlRun Repository. crawl_run_tasks(idempotency) + crawl_runs(run data)."""
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
@@ -51,11 +51,10 @@ def create_or_update_crawl_run_sync(
     run_id: uuid.UUID,
     college_id: uuid.UUID,
 ) -> CrawlRun:
-    """run_id로 crawl_runs 1건 생성 또는 재시도 시 갱신(초기화)."""
+    """run_id로 crawl_runs 1건 생성 또는 재시도 시 갱신(상태 초기화, started_at은 최초 값 유지)."""
     now = datetime.now(UTC)
     existing = session.execute(select(CrawlRun).where(CrawlRun.id == run_id).limit(1)).scalar_one_or_none()
     if existing:
-        existing.started_at = now
         existing.status = CrawlRunStatus.RUNNING.value
         existing.notices_upserted = 0
         existing.finished_at = None
@@ -102,6 +101,33 @@ def update_crawl_run_sync(
     session.flush()
     session.refresh(row)
     return row
+
+
+def close_stale_running_runs_sync(
+    session: Session,
+    older_than_seconds: float,
+) -> int:
+    """
+    status=RUNNING 이면서 started_at이 older_than_seconds보다 오래된 행을 FAILED로 정리.
+    장애로 완료 처리되지 않은 잔존 RUNNING 정리. Celery 주기 태스크에서 호출.
+    반환: 업데이트된 행 수.
+    """
+    now = datetime.now(UTC)
+    threshold = now - timedelta(seconds=older_than_seconds)
+    stmt = (
+        update(CrawlRun)
+        .where(
+            CrawlRun.status == CrawlRunStatus.RUNNING.value,
+            CrawlRun.started_at < threshold,
+        )
+        .values(
+            status=CrawlRunStatus.FAILED.value,
+            error_message="Stale run detected",
+            finished_at=now,
+        )
+    )
+    result = session.execute(stmt)
+    return result.rowcount if result.rowcount is not None else 0
 
 
 async def get_recent_crawl_runs(

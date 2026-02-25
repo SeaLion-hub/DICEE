@@ -18,6 +18,8 @@ def compute_ip_hmac(ip: str) -> tuple[str, str]:
         return "", settings.ip_hmac_key_version
     key = settings.ip_hmac_key.get_secret_value()
     if not key:
+        if (getattr(settings, "environment", "") or "").strip().lower() == "production":
+            raise ValueError("IP_HMAC_KEY is required in production (set in config)")
         logger.warning("IP_HMAC_KEY not set; using empty key (not for production)")
     digest = hmac.new(
         key.encode("utf-8") if key else b"",

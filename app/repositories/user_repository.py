@@ -29,6 +29,24 @@ async def increment_refresh_token_version(
     )
 
 
+async def rotate_refresh_token_version(
+    session: AsyncSession, user_id: uuid.UUID, expected_version: int
+) -> int | None:
+    """
+    Refresh 1회성 사용: expected_version과 일치할 때만 version을 1 증가시키고 새 version 반환.
+    반환된 새 version으로 새 JWT 쌍 발급. 행이 없으면 None(이미 사용됐거나 불일치).
+    """
+    stmt = (
+        update(User)
+        .where(User.id == user_id, User.refresh_token_version == expected_version)
+        .values(refresh_token_version=User.refresh_token_version + 1)
+        .returning(User.refresh_token_version)
+    )
+    result = await session.execute(stmt)
+    row = result.one_or_none()
+    return int(row[0]) if row is not None else None
+
+
 async def get_by_provider_uid(
     session: AsyncSession, provider: str, provider_user_id: str
 ) -> User | None:

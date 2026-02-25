@@ -70,6 +70,9 @@ class Notice(Base):
         default=lambda: datetime.now(UTC),
         onupdate=lambda: datetime.now(UTC),
     )
+    deleted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     college: Mapped["College"] = relationship("College", back_populates="notices")
     notice_content: Mapped["NoticeContent | None"] = relationship(

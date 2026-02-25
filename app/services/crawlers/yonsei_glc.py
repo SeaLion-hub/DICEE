@@ -9,6 +9,7 @@ from bs4 import BeautifulSoup, Tag
 from requests.exceptions import RequestException
 
 from app.core.crawl_http import HtmlTooLargeError, fetch_html, fetch_html_async
+from app.services.crawlers.base import ScrapeResult
 
 logger = logging.getLogger(__name__)
 
@@ -163,7 +164,7 @@ def scrape_glc_detail(url):
                 attachment_names_glc.add(fname)
                 attachments.append(fname)
 
-        return title, date, content_html, images, attachments
+        return ScrapeResult(title, date, content_html, images, attachments)
 
     except HtmlTooLargeError:
         logger.warning("scrape_glc_detail HTML too large: url=%s", url[:200] if url else "")
@@ -260,7 +261,7 @@ async def scrape_glc_detail_async(client: httpx.AsyncClient, url: str):
                 if fname and fname not in attachment_names_glc_async:
                     attachment_names_glc_async.add(fname)
                     attachments.append(fname)
-        return title, date, content_html, images, attachments
+        return ScrapeResult(title, date, content_html, images, attachments)
     except Exception as e:
         logger.exception("scrape_glc_detail_async error url=%s", url)
         raise

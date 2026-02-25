@@ -1,21 +1,30 @@
 """Auth API. 구글 OAuth + JWT."""
 
+import logging
+
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.api_rate_limit import check_rate_limit
 from app.core.config import settings
+from app.core.database import get_db
 from app.core.deps import get_google_key_fetcher, get_httpx_client, get_redis_blocklist
-from app.schemas.auth import TokenPayload, TokenResponse
+from app.core.network import get_client_ip
+from app.core.redis import BlocklistUnavailableError
+from app.schemas.auth import RefreshTokenPayload, TokenPayload, TokenResponse
 from app.services.auth_service import (
     AuthError,
     AuthServiceUnavailableError,
     google_login,
     logout_user,
+    refresh_tokens,
     verify_access_token,
 )
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+logger = logging.getLogger(__name__)
 security = HTTPBearer(auto_error=False)
 
 
@@ -57,46 +66,107 @@ async def get_current_user_id_and_jti(
         raise HTTPException(status_code=401, detail="Invalid or expired token") from None
 
 
-def _client_ip_from_request(request: Request) -> str | None:
-    """
-    클라이언트 IP. 명세 3.2: 평문은 DB에 저장하지 않고 ip_hmac만 저장.
-    직전 피어(request.client.host)가 TRUSTED_PROXY_IPS에 있을 때만 X-Forwarded-For 첫 값을 사용.
-    목록에 없거나 비어 있으면 X-Forwarded-For를 신뢰하지 않고 request.client.host만 반환.
-    """
-    trusted = settings.trusted_proxy_ips_set
-    if request.client and request.client.host in trusted:
-        forwarded = request.headers.get("x-forwarded-for")
-        if forwarded:
-            return forwarded.split(",")[0].strip()
-    if request.client:
-        return request.client.host
-    return None
-
-
 @router.post("/google", response_model=TokenResponse)
 async def post_google_auth(
     request: Request,
     payload: TokenPayload,
     http_client: httpx.AsyncClient = Depends(get_httpx_client),
     key_fetcher=Depends(get_google_key_fetcher),
+    redis_rate=Depends(get_redis_blocklist),
 ) -> TokenResponse:
     """
     구글 OAuth Authorization Code로 로그인.
     code를 받아 검증 후 Access/Refresh JWT 반환.
     외부 API 장애(타임아웃 등) → 503, 클라이언트 인증 오류 → 400.
     """
+    client_ip = get_client_ip(request)
+    if client_ip is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Client IP could not be determined; rate limiting requires a valid client identity.",
+        )
+    identifier = f"auth_google:{client_ip}"
+    allowed = await check_rate_limit(
+        redis_rate,
+        identifier=identifier,
+        max_requests=getattr(settings, "auth_google_rate_limit_per_minute", 10),
+        window_seconds=60,
+    )
+    if not allowed:
+        logger.warning(
+            "auth google rate limit exceeded",
+            extra={"client_ip": client_ip, "identifier": identifier},
+        )
+        raise HTTPException(
+            status_code=429,
+            detail="Too many authentication attempts, please try again later.",
+        )
     try:
         return await google_login(
             code=payload.code,
             redirect_uri=payload.redirect_uri,
             http_client=http_client,
             key_fetcher=key_fetcher,
-            client_ip=_client_ip_from_request(request),
+            client_ip=client_ip,
         )
     except AuthServiceUnavailableError as e:
-        raise HTTPException(status_code=503, detail=str(e)) from e
+        logger.warning("Google auth unavailable: %s", e)
+        raise HTTPException(
+            status_code=503,
+            detail="Authentication service temporarily unavailable",
+        ) from e
     except AuthError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
+        logger.warning("Google login auth error: %s", e)
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid request",
+        ) from e
+
+
+@router.post("/refresh", response_model=TokenResponse)
+async def post_refresh(
+    request: Request,
+    payload: RefreshTokenPayload,
+    session: AsyncSession = Depends(get_db),
+    redis_rate=Depends(get_redis_blocklist),
+) -> TokenResponse:
+    """
+    Refresh 토큰으로 새 Access/Refresh JWT 발급.
+    type=refresh, token_version 검증 후 새 쌍 반환. 무효화된 토큰 시 401.
+    """
+    client_ip = get_client_ip(request)
+    if client_ip is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Client IP could not be determined; rate limiting requires a valid client identity.",
+        )
+    identifier = f"auth_refresh:{client_ip}"
+    allowed = await check_rate_limit(
+        redis_rate,
+        identifier=identifier,
+        max_requests=getattr(settings, "auth_refresh_rate_limit_per_minute", 60),
+        window_seconds=60,
+    )
+    if not allowed:
+        logger.warning(
+            "auth refresh rate limit exceeded",
+            extra={"client_ip": client_ip, "identifier": identifier},
+        )
+        raise HTTPException(
+            status_code=429,
+            detail="Too many refresh requests, please try again later.",
+        )
+    try:
+        tokens = await refresh_tokens(payload.refresh_token, session)
+        await session.commit()
+        return tokens
+    except AuthError as e:
+        await session.rollback()
+        logger.warning("Refresh token error: %s", e)
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid or expired token",
+        ) from e
 
 
 @router.post("/logout", status_code=204)
@@ -109,9 +179,15 @@ async def post_logout(
     Authorization: Bearer <access_token> 필요. 204 No Content.
     """
     user_id, jti = user_id_and_jti
-    await logout_user(
-        user_id,
-        access_jti=jti,
-        ttl_seconds=settings.jwt_access_expire_seconds,
-        redis_blocklist_client=redis_blocklist,
-    )
+    try:
+        await logout_user(
+            user_id,
+            access_jti=jti,
+            ttl_seconds=settings.jwt_access_expire_seconds,
+            redis_blocklist_client=redis_blocklist,
+        )
+    except BlocklistUnavailableError:
+        raise HTTPException(
+            status_code=503,
+            detail="Logout could not revoke token on server; please retry later.",
+        ) from None
