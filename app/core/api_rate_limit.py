@@ -23,6 +23,7 @@ API_RATE_LIMIT_KEY_PREFIX: Final[str] = "dicee:api_rate:"
 _inmemory_counts: dict[str, tuple[float, int]] = {}
 _inmemory_lock = asyncio.Lock()
 _MAX_INMEMORY_KEYS: Final[int] = 100_000
+_EVICT_BATCH_SIZE: Final[int] = 100
 
 
 class RateLimitExceededError(Exception):
@@ -42,9 +43,17 @@ async def _check_rate_limit_inmemory(
             stale_keys = [k for k, (ws, _) in _inmemory_counts.items() if ws < cutoff]
             for k in stale_keys:
                 _inmemory_counts.pop(k, None)
-            while len(_inmemory_counts) >= _MAX_INMEMORY_KEYS:
-                oldest_key = min(_inmemory_counts.items(), key=lambda kv: kv[1][0])[0]
-                _inmemory_counts.pop(oldest_key, None)
+            if len(_inmemory_counts) >= _MAX_INMEMORY_KEYS:
+                # 한 번만 제한된 수 만큼 가장 오래된 항목 제거 (O(N²) while-min 제거)
+                by_age = [(ws, k) for k, (ws, _) in _inmemory_counts.items()]
+                by_age.sort(key=lambda x: x[0])
+                to_evict = min(
+                    _EVICT_BATCH_SIZE,
+                    len(_inmemory_counts) - _MAX_INMEMORY_KEYS // 2,
+                    len(by_age),
+                )
+                for _, k in by_age[:to_evict]:
+                    _inmemory_counts.pop(k, None)
 
         window_start, count = _inmemory_counts.get(identifier, (now, 0))
         if now - window_start >= window_seconds:

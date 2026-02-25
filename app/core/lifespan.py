@@ -45,7 +45,7 @@ def init_sentry() -> None:
             environment=settings.environment,
         )
     except Exception as e:
-        logger.warning("Sentry init skipped: %s", e)
+        logger.warning("Sentry init skipped: %s", e, exc_info=True)
 
 
 async def init_database() -> None:

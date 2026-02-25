@@ -253,6 +253,12 @@ class Settings(BaseSettings):
                 f"Production environment requires these variables to be set: {', '.join(missing)}. "
                 "Set them in Secret Manager or environment before boot."
             )
+        if not (self.trusted_proxy_ips or "").strip():
+            logger.critical(
+                "TRUSTED_PROXY_IPS is empty in production. If the app is behind a reverse proxy (e.g. Railway), "
+                "set it to the proxy IP(s) so X-Forwarded-For is trusted; otherwise all clients may be seen "
+                "as one IP and rate limiting can block everyone."
+            )
         return self
 
     @property
