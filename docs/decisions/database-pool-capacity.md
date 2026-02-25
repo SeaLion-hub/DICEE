@@ -11,10 +11,10 @@
 
 ---
 
-## 2. 프로파일 R 및 예산 검사 산식
+## 2. 예산 검사 산식 (실제 풀 설정값 기준)
 
-* **결정**: 부팅 시 예산 검사는 **프로파일 R** 상수(`P_async=4`, `O_async=6`, `P_sync=2`, `O_sync=0`)로 Peak를 계산한다. 즉 `API_conn = N_api_instances × N_uvicorn_workers × 10`, `Worker_conn = N_worker_instances × N_celery_concurrency × 2`, `Peak_pool_conn = (API_conn + Worker_conn) × DEPLOY_SURGE_FACTOR`, 통과 조건 `Peak_pool_conn ≤ App_budget`.
-* **이유**: 실제 풀 크기 설정과 무관하게 "권장 프로파일로 배포했을 때" 예산을 초과하지 않도록 검사한다. 풀 크기는 별도 환경 변수로 조정 가능하나, 예산 검사는 고정 프로파일로 일관되게 적용한다.
+* **결정**: 부팅 시 예산 검사는 **실제 설정값**(`db_pool_size_async`, `db_pool_max_overflow_async`, `db_pool_size_sync`, `db_pool_max_overflow_sync`)으로 Peak를 계산한다. 즉 `API_conn = N_api_instances × N_uvicorn_workers × (pool_size_async + max_overflow_async)`, `Worker_conn = N_worker_instances × N_celery_concurrency × (pool_size_sync + max_overflow_sync)`, `Peak_pool_conn = (API_conn + Worker_conn) × DEPLOY_SURGE_FACTOR`, 통과 조건 `Peak_pool_conn ≤ App_budget`.
+* **이유**: 운영에서 풀 크기를 변경하면 예산 검사 결과가 그에 맞게 반영되어 용량 판단이 정확해진다. **프로파일 R**(4, 6, 2, 0)은 권장 참고값으로 코드 상수 `POOL_PROFILE_R`에만 남겨 두며, 예산 검사에는 사용하지 않는다.
 
 ---
 

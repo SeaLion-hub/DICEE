@@ -2,12 +2,29 @@
 
 import json
 import logging
+import sys
 from typing import NamedTuple
 
 from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 logger = logging.getLogger(__name__)
+
+
+def _is_celery_entry_process() -> bool:
+    """Celery worker/beat 등 진입점인지 여부. 이 경우 JWT는 API에서만 쓰이므로 부팅 시 필수 아님."""
+    try:
+        argv = sys.argv or []
+        if not argv:
+            return False
+        first = (argv[0] or "").lower()
+        if "celery" in first:
+            return True
+        if len(argv) >= 2 and "celery" in (argv[1] or "").lower():
+            return True
+        return False
+    except Exception:
+        return False
 
 
 class _DatabaseConfig(NamedTuple):
@@ -48,29 +65,33 @@ class _RedisConfig(NamedTuple):
     redis_trigger_lock_max_connections: int
     redis_trigger_lock_ttl_seconds: int
     redis_trigger_lock_required: bool
+    redis_trigger_idempotency_required: bool
 
 
 def _parse_allowed_origins(value: str) -> list[str]:
-    """JSON 배열만 파싱. ALLOWED_ORIGINS는 JSON 배열 형식만 지원. 예: [\"https://a.com\",\"https://b.com\"]"""
+    """
+    ALLOWED_ORIGINS 파싱. JSON 배열 또는 CSV(쉼표 구분) 지원.
+    - '[\"https://a.com\"]' 형태면 JSON 배열로 파싱.
+    - 그 외에는 쉼표로 split 후 strip (배포 파이프라인 따옴표 이스케이핑 오류 완화).
+    """
     if not value or not value.strip():
         return []
     s = value.strip()
-    if not s.startswith("["):
-        raise ValueError(
-            "ALLOWED_ORIGINS must be a JSON array. Example: [\"https://example.com\"]"
-        )
-    try:
-        parsed = json.loads(s)
-    except json.JSONDecodeError as e:
-        raise ValueError(f"ALLOWED_ORIGINS invalid JSON: {e}") from e
-    if not isinstance(parsed, list):
-        raise ValueError("ALLOWED_ORIGINS must be a JSON array.")
-    origins = [str(x).strip() for x in parsed if str(x).strip()]
+    if s.startswith("["):
+        try:
+            parsed = json.loads(s)
+        except json.JSONDecodeError as e:
+            raise ValueError(f"ALLOWED_ORIGINS invalid JSON: {e}") from e
+        if not isinstance(parsed, list):
+            raise ValueError("ALLOWED_ORIGINS must be a JSON array.")
+        origins = [str(x).strip() for x in parsed if str(x).strip()]
+    else:
+        origins = [x.strip() for x in s.split(",") if x.strip()]
     for o in origins:
         if o == "*":
             raise ValueError(
                 "ALLOWED_ORIGINS cannot contain '*' when allow_credentials is True. "
-                "Specify explicit origins as JSON array."
+                "Specify explicit origins (JSON array or comma-separated)."
             )
         if not (o.startswith("http://") or o.startswith("https://")):
             raise ValueError(f"ALLOWED_ORIGINS entry must be http(s) URL: {o!r}")
@@ -99,17 +120,25 @@ class Settings(BaseSettings):
 
     # DB 풀 (용량 계획: DEPLOYMENT.md, 프로파일 R). 미설정 시 아래 기본값 사용.
     db_pool_size_async: int = Field(4, ge=1, le=20, description="Async API 풀 크기(프로세스당). 프로파일 R: 4.")
-    db_pool_max_overflow_async: int = Field(6, ge=0, le=20, description="Async API 풀 오버플로(프로세스당). 프로파일 R: 6.")
+    db_pool_max_overflow_async: int = Field(
+        6, ge=0, le=20, description="Async API 풀 오버플로(프로세스당). 프로파일 R: 6."
+    )
     db_pool_timeout_async: float = Field(5.0, ge=1.0, le=120.0, description="Async 풀 대기 타임아웃(초). 운영 권장: 5.")
     # 쿼리 실행 제한(ms). 장기 쿼리가 풀을 잡고 늘어지는 것 방지. PostgreSQL statement_timeout.
     db_statement_timeout_ms: int = Field(30000, ge=1000, le=300000, description="Statement timeout(ms). 기본 30초.")
     db_pool_size_sync: int = Field(2, ge=1, le=10, description="Celery Sync 풀 크기(워커·자식당).")
     db_pool_max_overflow_sync: int = Field(0, ge=0, le=5, description="Celery Sync 풀 오버플로.")
     db_pool_timeout_sync: float = Field(30.0, ge=5.0, le=120.0, description="Sync 풀 대기 타임아웃(초).")
-    db_pool_recycle_sync: int = Field(300, ge=-1, le=86400, description="Sync 풀 유휴 연결 재활용 주기(초). -1이면 미설정.")
+    db_pool_recycle_sync: int = Field(
+        300, ge=-1, le=86400, description="Sync 풀 유휴 연결 재활용(초). -1이면 미설정."
+    )
     # 용량 검사용(선택). 설정 시 부팅 시 Peak_pool_conn vs App_budget 검사. DB_MAX_CONNECTIONS/DB_RESERVED.
-    db_max_connections: int | None = Field(None, ge=1, le=1000, description="DB max_connections(검사용). 미설정 시 검사 생략.")
-    db_reserved: int = Field(3, ge=0, le=20, description="DB 예약 연결 수(슈퍼유저/관리). App_budget=(max-Reserved)*0.7.")
+    db_max_connections: int | None = Field(
+        None, ge=1, le=1000, description="DB max_connections(검사용). 미설정 시 검사 생략."
+    )
+    db_reserved: int = Field(
+        3, ge=0, le=20, description="DB 예약 연결 수. App_budget=(max-Reserved)*0.7."
+    )
     db_pool_strict_budget: bool = Field(False, description="True면 예산 초과 시 부팅 실패.")
     deploy_surge_factor: float = Field(2.0, ge=1.0, le=4.0, description="롤링/스케일 시 피크 배수. Peak=Total*이값.")
     # 예산 검사용(선택). DEPLOYMENT.md 용량 계획과 동일한 의미. 기본 1.
@@ -118,12 +147,12 @@ class Settings(BaseSettings):
     db_worker_instances: int = Field(1, ge=1, le=100, description="Celery 워커 인스턴스 수(검사용).")
     db_celery_concurrency: int = Field(1, ge=1, le=32, description="Celery concurrency(검사용, prefork 시 자식 수).")
 
-    # X-Forwarded-For: 직전 피어가 이 목록에 있을 때만 X-Forwarded-For 헤더 신뢰. 쉼표 구분. 비어 있으면 항상 request.client.host만 사용.
+    # X-Forwarded-For: 직전 피어가 이 목록에 있을 때만 헤더 신뢰. 비어 있으면 request.client.host만 사용.
     trusted_proxy_ips: str = ""
 
     # 2단계 Auth (워커·Cron 등은 미설정 가능. production 시 validator에서 필수 검사)
     jwt_secret: SecretStr = SecretStr("")
-    # RS256: 둘 다 설정 시 RS256 사용(마이크로서비스 확장 시 검증 서비스는 Public Key만 보유). 미설정 시 JWT_SECRET으로 HS256.
+    # RS256: 둘 다 설정 시 RS256 사용. 미설정 시 JWT_SECRET으로 HS256.
     jwt_private_key_pem: SecretStr | None = None
     jwt_public_key_pem: SecretStr | None = None
     jwt_issuer: str = "dicee"  # JWT iss 클레임 (발급자). 검증 시 사용.
@@ -156,7 +185,12 @@ class Settings(BaseSettings):
     # Redis 소켓/연결 타임아웃(초). 풀 포화·장애 시 무한 대기 방지.
     redis_socket_timeout: float = Field(5.0, ge=1.0, le=60.0)
     redis_socket_connect_timeout: float = Field(2.0, ge=0.5, le=30.0)
-    # Blocklist: Redis 장애 시 정책. True=Fail-Closed(인증 거부), False=Fail-Open(서명만 검증 후 통과). 운영 권장 False(가용성 우선).
+    # API 레이트리밋: Redis 미설정/장애 시 True면 503(fail-closed), False면 인메모리 fallback.
+    api_rate_limit_require_redis: bool = Field(
+        False,
+        description="True면 Redis 없거나 장애 시 레이트리밋 검사 대신 503 반환. 멀티 인스턴스 운영 시 True 권장.",
+    )
+    # Blocklist: Redis 장애 시. True=Fail-Closed, False=Fail-Open(서명만 검증 후 통과). 프로덕션에서는 True 권장.
     redis_blocklist_fail_closed: bool = False
     # Blocklist Circuit Breaker: 연속 실패 N회 시 열림, open_seconds 동안 Fail-open.
     redis_blocklist_circuit_failure_threshold: int = Field(3, ge=1, le=50)
@@ -170,6 +204,8 @@ class Settings(BaseSettings):
     redis_trigger_lock_ttl_seconds: int = Field(2400, ge=60, le=86400)
     # True면 Redis 미설정/실패 시 락 없이 진행하지 않고 503. 운영 반영값 True.
     redis_trigger_lock_required: bool = True
+    # True면 idempotency 클레임 Redis 실패 시 503(fail-closed). production 권장. 기본 False.
+    redis_trigger_idempotency_required: bool = False
     crawl_trigger_secret: SecretStr | None = None
     internal_trigger_crawl_rate_limit_per_minute: int = Field(
         10,
@@ -183,15 +219,17 @@ class Settings(BaseSettings):
         le=1000,
         description="동일 IP에 대한 /internal/crawl-stats 분당 최대 호출 수.",
     )
-    # GET /internal/metrics 허용 IP. 쉼표 구분. 비어 있으면 모든 IP 허용. Prometheus 스크래핑 제한용.
+    # GET /internal/metrics 허용 IP. 쉼표 구분. 비어 있으면 모든 IP 차단(fail-closed). Prometheus 스크래핑 제한용.
     metrics_allowed_ips: str = Field(
         "",
-        description="Comma-separated IPs allowed to scrape /internal/metrics. Empty = allow all.",
+        description="Comma-separated IPs allowed to scrape /internal/metrics. Empty = deny all (fail-closed).",
     )
     # True일 때만 AI 파이프라인(Gemini 등) 실행 및 done 저장. False면 process_notice_ai_task는 스킵(pending 유지).
     ai_pipeline_enabled: bool = False
     # Celery 워커 prefetch. 1=한 번에 하나만. 짧은 태스크 많으면 2~4로 올려 I/O 효율 개선. -O fair와 함께 사용.
-    celery_worker_prefetch_multiplier: int = Field(1, ge=1, le=16, description="Worker prefetch multiplier. Use with -O fair.")
+    celery_worker_prefetch_multiplier: int = Field(
+        1, ge=1, le=16, description="Worker prefetch multiplier. Use with -O fair."
+    )
     # 요청/페이지 간 최소 딜레이(초). 대상 서버 부하·IP 차단 완화용.
     polite_delay_seconds: float = Field(1.0, ge=0.1, le=60.0)
     # Stale RUNNING 정리: started_at이 이 값(초)보다 오래된 RUNNING을 FAILED로 닫음. 크롤 최대 소요의 2~3배 권장.
@@ -202,6 +240,8 @@ class Settings(BaseSettings):
     s3_bucket: str | None = None
     s3_region: str = "ap-northeast-2"
     s3_content_prefix: str = "notice-contents"
+    # S3 SSE-KMS. 설정 시 put_object에 ServerSideEncryption='aws:kms', SSEKMSKeyId 전달.
+    s3_sse_kms_key_id: str | None = None
     # 로컬 스토리지 시 디렉터리 및 URL 접두사 (개발용)
     content_storage_local_path: str = "storage/contents"
     content_storage_base_url: str = ""  # 예: https://api.example.com/content
@@ -216,8 +256,21 @@ class Settings(BaseSettings):
     allowed_origins: str = ""
 
     @model_validator(mode="after")
+    def fail_fast_s3_bucket_when_s3(self: "Settings") -> "Settings":
+        """content_storage_type이 s3일 때 s3_bucket 필수. 미설정 시 부팅 실패(로컬 폴백 방지)."""
+        if (self.content_storage_type or "").strip().lower() == "s3":
+            if not (self.s3_bucket or "").strip():
+                raise ValueError(
+                    "content_storage_type is 's3' but S3_BUCKET is not set. "
+                    "Set S3_BUCKET or use content_storage_type=local."
+                )
+        return self
+
+    @model_validator(mode="after")
     def fail_fast_jwt_secret_at_boot(self: "Settings") -> "Settings":
-        """JWT 시크릿 누락 시 부팅 시점에 즉시 크래시(Fail-Fast). 모든 환경 적용. '첫 JWT 사용 시점' 검사는 사용하지 않음."""
+        """JWT 시크릿 누락 시 부팅 시점에 즉시 크래시(Fail-Fast). Celery worker/beat 등은 JWT 미사용이므로 제외."""
+        if _is_celery_entry_process():
+            return self
         has_jwt_secret = (self.jwt_secret.get_secret_value() or "").strip()
         has_rs256 = (
             self.jwt_private_key_pem
@@ -234,7 +287,7 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def fail_fast_production(self: "Settings") -> "Settings":
-        """프로덕션 환경 시 공통 필수 변수만 검사. JWT/Google은 워커에서 불필요하므로 여기서는 요구하지 않음."""
+        """프로덕션 환경 시 공통 필수 변수만 검사. JWT/IP_HMAC/Google은 워커에서 불필요하므로 Celery 진입 시 제외."""
         if (self.environment or "").strip().lower() != "production":
             return self
         missing: list[str] = []
@@ -242,17 +295,31 @@ class Settings(BaseSettings):
             missing.append("DATABASE_URL")
         if not (self.redis_url or "").strip():
             missing.append("REDIS_URL")
-        has_jwt_secret = (self.jwt_secret.get_secret_value() or "").strip()
-        has_rs256 = (
-            self.jwt_private_key_pem
-            and (self.jwt_private_key_pem.get_secret_value() or "").strip()
-            and self.jwt_public_key_pem
-            and (self.jwt_public_key_pem.get_secret_value() or "").strip()
-        )
-        if not has_jwt_secret and not has_rs256:
-            missing.append("JWT_SECRET or (JWT_PRIVATE_KEY_PEM + JWT_PUBLIC_KEY_PEM)")
-        if not (self.ip_hmac_key.get_secret_value() or "").strip():
-            missing.append("IP_HMAC_KEY")
+        is_celery = _is_celery_entry_process()
+        if not is_celery:
+            has_jwt_secret = (self.jwt_secret.get_secret_value() or "").strip()
+            has_rs256 = (
+                self.jwt_private_key_pem
+                and (self.jwt_private_key_pem.get_secret_value() or "").strip()
+                and self.jwt_public_key_pem
+                and (self.jwt_public_key_pem.get_secret_value() or "").strip()
+            )
+            if not has_jwt_secret and not has_rs256:
+                missing.append("JWT_SECRET or (JWT_PRIVATE_KEY_PEM + JWT_PUBLIC_KEY_PEM)")
+            if not (self.ip_hmac_key.get_secret_value() or "").strip():
+                missing.append("IP_HMAC_KEY")
+        try:
+            cv = (
+                self.crawl_trigger_secret.get_secret_value()
+                if self.crawl_trigger_secret
+                else ""
+            )
+        except Exception:
+            cv = ""
+        if not (cv or "").strip():
+            missing.append("CRAWL_TRIGGER_SECRET")
+        if (self.content_upload_failure_policy or "").strip().lower() == "allow_none":
+            missing.append("CONTENT_UPLOAD_FAILURE_POLICY must be 'fail' in production")
         if missing:
             raise ValueError(
                 f"Production environment requires these variables to be set: {', '.join(missing)}. "
@@ -264,6 +331,38 @@ class Settings(BaseSettings):
                 "set it to the proxy IP(s) so X-Forwarded-For is trusted; otherwise all clients may be seen "
                 "as one IP and rate limiting can block everyone."
             )
+        # Google OAuth 사용 시 redirect allowlist 필수 (비어 있으면 검증 비활성화되어 보안 취약).
+        has_google_client = bool(
+            (self.google_client_id or "").strip()
+            or (self.google_client_secret.get_secret_value() or "").strip()
+        )
+        if has_google_client:
+            raw_uris = (self.google_redirect_uris or "").strip()
+            if not raw_uris:
+                raise ValueError(
+                    "Production with Google OAuth requires GOOGLE_REDIRECT_URIS to be set (comma-separated). "
+                    "Empty value disables redirect allowlist validation. Set in environment or .env."
+                )
+            # 최소 1개 유효한 URI 형태(scheme + netloc) 확인.
+            from urllib.parse import urlparse
+
+            valid_count = 0
+            for u in raw_uris.split(","):
+                u = u.strip()
+                if not u:
+                    continue
+                try:
+                    p = urlparse(u)
+                    if p.scheme in ("http", "https") and p.netloc:
+                        valid_count += 1
+                        break
+                except Exception:
+                    continue
+            if valid_count == 0:
+                raise ValueError(
+                    "Production with Google OAuth requires at least one valid redirect URI in GOOGLE_REDIRECT_URIS "
+                    "(http(s) with host). Fix configuration."
+                )
         return self
 
     @property
@@ -320,6 +419,7 @@ class Settings(BaseSettings):
             redis_trigger_lock_max_connections=self.redis_trigger_lock_max_connections,
             redis_trigger_lock_ttl_seconds=self.redis_trigger_lock_ttl_seconds,
             redis_trigger_lock_required=self.redis_trigger_lock_required,
+            redis_trigger_idempotency_required=self.redis_trigger_idempotency_required,
         )
 
 
@@ -339,4 +439,4 @@ def check_pool_budget(max_conn_override: int | None = None) -> tuple[bool, int, 
     return r.within_budget, r.peak_pool_conn, r.app_budget
 
 
-settings = Settings()
+settings = Settings()  # type: ignore[call-arg]

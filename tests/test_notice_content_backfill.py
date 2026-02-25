@@ -3,8 +3,6 @@
 import uuid
 from unittest.mock import MagicMock
 
-import pytest
-
 from app.repositories.notice_repository import (
     _fill_key_to_id_from_notices_sync,
     _keys_with_content_but_missing,

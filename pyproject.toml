@@ -36,3 +36,6 @@ disallow_untyped_defs = false
 [[tool.mypy.overrides]]
 module = ["celery", "celery.*"]
 ignore_missing_imports = true
+
+# App overrides 제거: Phase 2 타입 수정·헬퍼(ensure_str_attr)·boto3(types-boto3) 적용 후 mypy 0 목표.
+# 필요 시 특정 모듈만 최소 범위로 재추가.

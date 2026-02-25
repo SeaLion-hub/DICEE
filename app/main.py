@@ -2,27 +2,29 @@
 
 import logging
 from contextlib import asynccontextmanager
+from typing import cast
 
 import httpx
 from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
+from starlette.datastructures import State
 
 from app.api import health, internal
 from app.api.v1 import auth as v1_auth
 from app.core.config import settings
+from app.core.exception_handlers import (
+    global_exception_handler,
+    httpx_error_handler,
+    invalid_forwarded_header_handler,
+    validation_exception_handler,
+)
 from app.core.lifespan import (
     check_startup_pool_budget,
     create_app_state,
     init_database,
     init_sentry,
     teardown_state,
-)
-from app.core.exception_handlers import (
-    validation_exception_handler,
-    httpx_error_handler,
-    global_exception_handler,
-    invalid_forwarded_header_handler,
 )
 from app.core.network import InvalidForwardedHeaderError
 from app.middleware import RequestIDMiddleware
@@ -32,12 +34,12 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """앱 수명 주기: init_sentry → init_database → check_startup_pool_budget → create_app_state → yield → teardown_state(병렬 해제)."""
+    """앱 수명 주기: init_sentry → init_database → check_startup_pool_budget → create_app_state → yield → teardown."""
     init_sentry()
     await init_database()
     check_startup_pool_budget()
     state = create_app_state()
-    app.state = state
+    app.state = cast(State, state)
     yield
     await teardown_state(state)
 

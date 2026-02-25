@@ -5,13 +5,12 @@ from typing import Any
 from urllib.parse import urljoin
 
 import httpx
-import requests
 from bs4 import BeautifulSoup, Tag
 from requests.exceptions import RequestException
 
-from app.core.crawler_config import CRAWLER_HEADERS
 from app.core.crawl_http import HtmlTooLargeError, fetch_html, fetch_html_async
 from app.services.crawlers.base import ScrapeResult
+from app.services.crawlers.typing_helpers import ensure_str_attr
 
 logger = logging.getLogger(__name__)
 
@@ -93,7 +92,7 @@ def get_business_notice_links(list_url):
             if not a_tag or not isinstance(a_tag, Tag):
                 continue
 
-            href = a_tag.get("href", "")
+            href = ensure_str_attr(a_tag.get("href", ""))
             title_text = a_tag.get_text(strip=True)
 
             if href:
@@ -187,8 +186,7 @@ def scrape_business_detail(url):
                 for img in raw_cont.find_all("img"):
                     if not isinstance(img, Tag):
                         continue
-                    raw_src = img.get("src", "")
-                    img_src = raw_src if isinstance(raw_src, str) else ""
+                    img_src = ensure_str_attr(img.get("src", ""))
                     if not img_src:
                         continue
 
@@ -250,7 +248,7 @@ async def get_business_notice_links_async(client: httpx.AsyncClient, list_url: s
             a_tag = td.find("a")
             if not a_tag or not isinstance(a_tag, Tag):
                 continue
-            href = a_tag.get("href", "") or ""
+            href = ensure_str_attr(a_tag.get("href", ""))
             title_text = a_tag.get_text(strip=True)
             if href:
                 full_url = urljoin(list_url, href)
@@ -302,7 +300,7 @@ async def scrape_business_detail_async(client: httpx.AsyncClient, url: str):
             for img in raw_cont.find_all("img"):
                 if not isinstance(img, Tag):
                     continue
-                img_src = img.get("src", "") or ""
+                img_src = ensure_str_attr(img.get("src", ""))
                 if not img_src:
                     continue
                 if img_src.startswith("data:image"):
@@ -326,7 +324,7 @@ async def scrape_business_detail_async(client: httpx.AsyncClient, url: str):
         for a in cont.find_all("a"):
             if not isinstance(a, Tag):
                 continue
-            href = a.get("href", "") or ""
+            href = ensure_str_attr(a.get("href", ""))
             if "downloadfile.asp" in href:
                 fname = a.get_text(strip=True)
                 if fname and fname not in attachment_names_async:
@@ -336,6 +334,6 @@ async def scrape_business_detail_async(client: httpx.AsyncClient, url: str):
     except HtmlTooLargeError as e:
         logger.warning("scrape_business_detail_async body too large url=%s: %s", url, e)
         return ScrapeResult(None, "본문 초과", None, [], [])
-    except Exception as e:
+    except Exception:
         logger.exception("scrape_business_detail_async error url=%s", url, exc_info=True)
         raise

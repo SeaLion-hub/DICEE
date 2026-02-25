@@ -12,35 +12,26 @@ import random
 import time
 import uuid
 from collections import deque
-from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
 from collections.abc import Callable, Iterator
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from datetime import UTC, datetime
 
+import httpx
 from bs4 import BeautifulSoup
 from requests.exceptions import RequestException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
-import httpx
-
 from app.core.config import settings
 from app.core.constants import CrawlRunStatus
 from app.core.crawl_http import HtmlTooLargeError
 from app.core.crawl_rate_limit import (
-    HostRateLimiter,
     get_host_rate_limiter_async,
     get_host_rate_limiter_sync,
     host_from_url,
 )
-from app.services.crawl_policy import (
-    CrawlErrorTracker,
-    CrawlThresholdExceeded,
-    PARSER_CONSECUTIVE_FAILURES_THRESHOLD,
-    PARSER_FAILURE_RATIO_THRESHOLD,
-)
 from app.core.crawler_config import COLLEGE_CODE_TO_MODULE, CRAWLER_CONFIG, get_crawler, get_crawler_async
-from app.services.crawlers.base import ScrapeResult
-from app.services.crawl_payload import build_notice_payload, _external_id_from_url
+from app.core.database_sync import get_sync_session
 from app.repositories.college_repository import (
     get_by_external_id as get_college_by_external_id,
 )
@@ -56,6 +47,12 @@ from app.repositories.notice_repository import (
     upsert_notices_bulk,
     upsert_notices_bulk_sync,
 )
+from app.services.crawl_payload import _external_id_from_url, build_notice_payload
+from app.services.crawl_policy import (
+    CrawlErrorTracker,
+    CrawlThresholdExceeded,
+)
+from app.services.crawlers.base import ScrapeResult
 
 logger = logging.getLogger(__name__)
 
@@ -127,7 +124,7 @@ async def crawl_college(session: AsyncSession, college_code: str) -> int:
 
     list_url = config["url"]
     get_links_async_fn, scrape_async_fn = get_crawler_async(module_name)
-    seen: set[str] = set()
+    seen = _BoundedSeenSet(CRAWL_SEEN_MAX_SIZE)
 
     async with httpx.AsyncClient(timeout=CRAWL_PAGE_TIMEOUT_SECONDS) as client:
         links = await get_links_async_fn(client, list_url)
@@ -224,7 +221,7 @@ def _process_scrape_result(
             )
             tracker.record_network_or_skip()
             return (None, None)
-        if isinstance(exc, (ValueError, KeyError, AttributeError, TypeError)):
+        if isinstance(exc, ValueError | KeyError | AttributeError | TypeError):
             logger.warning(
                 "scrape failed (parser): url=%s error=%s",
                 detail_url[:200] if detail_url else "",
@@ -234,8 +231,11 @@ def _process_scrape_result(
             threshold_exc = tracker.record_parser_failure()
             return (None, threshold_exc)
         return (None, exc)
+    assert data is not None
     tracker.record_success()
-    title, date_str, html_content = data.title, data.date_str, data.html_content
+    title = data.title or ""
+    date_str = data.date_str
+    html_content = data.html_content
     images, attachments = data.images, data.attachments
     external_id = post.get("no") or _external_id_from_url(detail_url)
     if external_id in seen:
@@ -320,6 +320,7 @@ def _collect_payloads_sync(
                     )
                     futures[executor.submit(_scrape_one_sync, next_post, scrape_fn)] = next_post
     finally:
+        # 소비자 중단 시에도 shutdown(wait=False, cancel_futures=True)로 대기 최소화. with 미사용으로 블로킹 방지.
         executor.shutdown(wait=False, cancel_futures=True)
         close_fn = getattr(rate_limiter, "close", None)
         if callable(close_fn):
@@ -349,11 +350,23 @@ async def _collect_payloads_async(
     tracker = CrawlErrorTracker()
     remaining = deque(links)
     post_retries: dict[str, int] = {}  # url -> retry count (Exponential Backoff + Jitter)
+    retry_queue: list[tuple[dict, float]] = []  # (post, ready_at_ts) 재시도 예약; 이벤트 루프 블로킹 방지
 
     def _task(post: dict) -> asyncio.Task:
         return asyncio.create_task(
             _fetch_one_async(client, post, scrape_async_fn, rate_limiter, sem)
         )
+
+    def _refill_pending() -> None:
+        nonlocal retry_queue
+        now_ts = time.monotonic()
+        still_deferred = [(p, t) for p, t in retry_queue if t > now_ts]
+        for p, t in retry_queue:
+            if t <= now_ts:
+                pending.add(_task(p))
+        retry_queue = still_deferred
+        while len(pending) < COLLECT_ASYNC_CONCURRENCY and remaining:
+            pending.add(_task(remaining.popleft()))
 
     pending: set[asyncio.Task] = set()
     for _ in range(min(COLLECT_ASYNC_CONCURRENCY, len(remaining))):
@@ -362,9 +375,22 @@ async def _collect_payloads_async(
         pending.add(_task(remaining.popleft()))
 
     try:
-        while pending:
+        while pending or retry_queue or remaining:
+            _refill_pending()
+            if not pending:
+                if retry_queue:
+                    now_ts = time.monotonic()
+                    earliest = min(ready_at for _, ready_at in retry_queue)
+                    await asyncio.sleep(max(0.0, min(earliest - now_ts, CRAWL_RETRY_MAX_SEC)))
+                continue
+            timeout_sec = None
+            if retry_queue:
+                now_ts = time.monotonic()
+                earliest = min(ready_at for _, ready_at in retry_queue)
+                if earliest > now_ts:
+                    timeout_sec = min(earliest - now_ts, CRAWL_RETRY_MAX_SEC)
             done, pending = await asyncio.wait(
-                pending, return_when=asyncio.FIRST_COMPLETED
+                pending, return_when=asyncio.FIRST_COMPLETED, timeout=timeout_sec
             )
             for task in done:
                 try:
@@ -391,8 +417,7 @@ async def _collect_payloads_async(
                             + random.uniform(0, CRAWL_RETRY_JITTER_SEC),
                             CRAWL_RETRY_MAX_SEC,
                         )
-                        await asyncio.sleep(backoff)
-                        pending.add(_task(post))
+                        retry_queue.append((post, time.monotonic() + backoff))
                     elif remaining:
                         pending.add(_task(remaining.popleft()))
                     continue
@@ -463,17 +488,23 @@ def crawl_college_sync(
         if len(chunk) >= UPSERT_CHUNK_SIZE:
             ids = upsert_notices_bulk_sync(session, chunk)
             total_upserted += len(ids)
-            notice_ids_to_process.extend(ids)
+            if on_chunk_processed is not None:
+                session.commit()
+                session.expunge_all()
+                on_chunk_processed(ids)
+            else:
+                notice_ids_to_process.extend(ids)
             chunk.clear()
     if chunk:
         ids = upsert_notices_bulk_sync(session, chunk)
         total_upserted += len(ids)
-        notice_ids_to_process.extend(ids)
-    # 커밋 후 한 번에 enqueue (AI 워커가 notice 조회 전에 커밋이 보이도록)
+        if on_chunk_processed is not None:
+            session.commit()
+            session.expunge_all()
+            on_chunk_processed(ids)
+        else:
+            notice_ids_to_process.extend(ids)
     if on_chunk_processed is not None:
-        session.commit()
-        session.expunge_all()
-        on_chunk_processed(notice_ids_to_process)
         return (total_upserted, [])
     return (total_upserted, notice_ids_to_process)
 
@@ -490,7 +521,6 @@ def run_crawl_job_sync(
     반환: (upserted 개수, enqueued_ai 개수).
     트랜잭션 경계: 세션·커밋/롤백은 이 오케스트레이터에서만 통제. Repository는 전달받은 세션으로 쿼리만 수행.
     """
-    from datetime import UTC, datetime
 
     college = get_college_by_external_id_sync(session, college_code)
     if not college:
@@ -512,14 +542,24 @@ def run_crawl_job_sync(
         session.commit()
         return (count, count)
     except Exception as e:
-        # 실패한 트랜잭션 초기화 → 이후 FAILED 업데이트/커밋 가능 (PendingRollbackError 방지)
+        # 실패한 트랜잭션 초기화 (PendingRollbackError 방지)
         session.rollback()
-        update_crawl_run_sync(
-            session,
-            run_id,
-            finished_at=datetime.now(UTC),
-            status=CrawlRunStatus.FAILED.value,
-            error_message=(str(e))[:2000],
-        )
-        session.commit()
+        # FAILED 기록은 새 세션/새 트랜잭션으로 분리해 원래 트랜잭션이 깨져도 실패 상태가 남도록 함
+        try:
+            with get_sync_session() as fail_session:
+                update_crawl_run_sync(
+                    fail_session,
+                    run_id,
+                    finished_at=datetime.now(UTC),
+                    status=CrawlRunStatus.FAILED.value,
+                    error_message=(str(e))[:2000],
+                )
+                fail_session.commit()
+        except Exception as record_err:
+            logger.warning(
+                "Failed to record crawl run FAILED state (run_id=%s): %s",
+                run_id,
+                record_err,
+                exc_info=True,
+            )
         raise

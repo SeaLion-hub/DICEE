@@ -7,6 +7,7 @@ Redis + Lua 기반 분산 limiter 지원. Redis 미설정/실패 시 인메모�
 import asyncio
 import logging
 import time
+from typing import cast
 from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
@@ -115,7 +116,7 @@ class RedisHostRateLimiterSync:
                 str(now),
                 str(self.min_interval_sec),
             )
-            wait_sec = float(result)
+            wait_sec = float(cast(str, result)) if result is not None else 0.0
             if wait_sec > 0:
                 time.sleep(wait_sec)
         except Exception as e:

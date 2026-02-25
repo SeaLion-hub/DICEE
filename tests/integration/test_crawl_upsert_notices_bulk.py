@@ -6,7 +6,6 @@ Notice.deleted_at이 포함된 bulk upsert 쿼리가 실행되는지 검증. DAT
 import os
 
 import pytest
-
 from sqlalchemy import select
 
 

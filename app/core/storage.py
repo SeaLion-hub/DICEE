@@ -23,12 +23,13 @@ def upload_notice_html(
     공지 본문 HTML을 스토리지에 저장하고 접근 URL을 반환.
     html_content가 None이거나 비면 None 반환.
     """
-    if not (html_content or "").strip():
+    content = (html_content or "").strip()
+    if not content:
         return None
     key = _object_key(college_id, external_id, content_hash)
     if (settings.content_storage_type or "").lower() == "s3" and settings.s3_bucket:
-        return _upload_s3(html_content, key)
-    return _upload_local(html_content, key)
+        return _upload_s3(content, key)
+    return _upload_local(content, key)
 
 
 def _sanitize_external_id_for_key(external_id: str, *, fallback_seed: str | None = None) -> str:
@@ -98,12 +99,17 @@ def _upload_s3(html_content: str, key: str) -> str | None:
         return None
     try:
         client = boto3.client("s3", region_name=settings.s3_region)
-        client.put_object(
-            Bucket=bucket,
-            Key=key,
-            Body=html_content.encode("utf-8"),
-            ContentType="text/html; charset=utf-8",
-        )
+        put_kw: dict = {
+            "Bucket": bucket,
+            "Key": key,
+            "Body": html_content.encode("utf-8"),
+            "ContentType": "text/html; charset=utf-8",
+            "ServerSideEncryption": "aws:kms",
+        }
+        kms_key_id = getattr(settings, "s3_sse_kms_key_id", None)
+        if kms_key_id and str(kms_key_id).strip():
+            put_kw["SSEKMSKeyId"] = str(kms_key_id).strip()
+        client.put_object(**put_kw)
         return f"https://{bucket}.s3.{settings.s3_region}.amazonaws.com/{key}"
     except ClientError as e:
         logger.exception("S3 upload failed: key=%s error=%s", key, e)
@@ -113,8 +119,8 @@ def _upload_s3(html_content: str, key: str) -> str | None:
         return None
 
 
-def _upload_local(html_content: str, key: str) -> str:
-    """로컬 디렉터리에 저장 후 base_url 또는 상대 경로 반환. file:// 절대 경로는 노출하지 않음."""
+def _upload_local(html_content: str, key: str) -> str | None:
+    """로컬 디렉터리에 저장 후 base_url 또는 상대 경로 반환. 이탈 시 None. file:// 절대 경로는 노출하지 않음."""
     base = Path(settings.content_storage_local_path or "storage/contents").resolve()
     path = (base / key).resolve()
 

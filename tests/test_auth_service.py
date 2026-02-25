@@ -4,9 +4,8 @@ import uuid
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from pydantic import SecretStr
-
 from app.services.auth_service import AuthError, create_jwt_pair, decode_google_id_token
+from pydantic import SecretStr
 
 
 def test_create_jwt_pair_returns_two_tokens() -> None:
@@ -42,3 +41,16 @@ async def test_decode_google_id_token_valid() -> None:
         result = await decode_google_id_token("fake-id-token", mock_fetcher)
         assert result["sub"] == "123"
         assert result["email"] == "a@b.com"
+
+
+def test_allowed_redirect_uris_raises_when_config_set_but_all_invalid(monkeypatch: pytest.MonkeyPatch) -> None:
+    """_allowed_redirect_uris: 설정값은 있으나 유효 URI 없으면 AuthError (P0 fail-closed 회귀 방지)."""
+    from app.services.auth_service import AuthError, _allowed_redirect_uris
+
+    monkeypatch.setattr("app.services.auth_service.settings.google_redirect_uris", "http://invalid??,not-a-uri")
+    _allowed_redirect_uris.cache_clear()
+    try:
+        with pytest.raises(AuthError, match="google_redirect_uris.*no valid"):
+            _allowed_redirect_uris()
+    finally:
+        _allowed_redirect_uris.cache_clear()

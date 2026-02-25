@@ -2,12 +2,11 @@
 
 import asyncio
 import logging
-import sys
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
-from enum import Enum
 from dataclasses import dataclass
+from enum import Enum
 from typing import Any
 
 from fastapi import Request
@@ -44,13 +43,13 @@ _db_holder = _DbHolder()
 # verify_db_connection()에서 조회한 DB max_connections. check_pool_budget 오버라이드용.
 _resolved_max_connections: int | None = None
 
-# 프로파일 R (권장 풀 크기). 예산 검사 시 이 상수로 Peak 계산. DEPLOYMENT.md / docs/decisions/database-pool-capacity.md.
+# 프로파일 R (권장 풀 크기 참고용). 예산 검사는 settings 사용. DEPLOYMENT.md, docs/decisions/database-pool-capacity.md.
 POOL_PROFILE_R = (4, 6, 2, 0)  # (P_async, O_async, P_sync, O_sync)
 
 
 @dataclass(frozen=True)
 class PoolBudgetResult:
-    """풀 예산 검사 결과. 프로파일 R 기준 Peak_pool_conn vs App_budget."""
+    """풀 예산 검사 결과. 실제 풀 설정값 기준 Peak_pool_conn vs App_budget."""
 
     within_budget: bool
     app_budget: int
@@ -61,10 +60,10 @@ class PoolBudgetResult:
 
 def check_pool_budget(effective_max_conn: int | None) -> PoolBudgetResult:
     """
-    풀 예산 검사(프로파일 R 기준). effective_max_conn이 None이면 검사 생략(within_budget=True, 0 값 반환).
+    풀 예산 검사(실제 설정값 기준). effective_max_conn이 None이면 검사 생략(within_budget=True, 0 값 반환).
     산식: App_budget = floor((max_conn - DB_RESERVED) * 0.7),
-    API_conn = N_api * N_uvicorn_workers * (P_async + O_async),
-    Worker_conn = N_worker * N_celery_concurrency * (P_sync + O_sync),
+    API_conn = N_api * N_uvicorn_workers * (db_pool_size_async + db_pool_max_overflow_async),
+    Worker_conn = N_worker * N_celery_concurrency * (db_pool_size_sync + db_pool_max_overflow_sync),
     Total = API_conn + Worker_conn, Peak = Total * DEPLOY_SURGE_FACTOR.
     통과 조건: Peak_pool_conn <= App_budget.
     """
@@ -76,18 +75,17 @@ def check_pool_budget(effective_max_conn: int | None) -> PoolBudgetResult:
             peak_pool_conn=0,
             message="Pool budget check skipped (no effective max_connections).",
         )
-    p_async, o_async, p_sync, o_sync = POOL_PROFILE_R
     reserved = settings.db_reserved
     app_budget = int((effective_max_conn - reserved) * 0.7)
     api_conn = (
         settings.db_api_instances
         * settings.db_uvicorn_workers
-        * (p_async + o_async)
+        * (settings.db_pool_size_async + settings.db_pool_max_overflow_async)
     )
     worker_conn = (
         settings.db_worker_instances
         * settings.db_celery_concurrency
-        * (p_sync + o_sync)
+        * (settings.db_pool_size_sync + settings.db_pool_max_overflow_sync)
     )
     total_pool_conn = api_conn + worker_conn
     peak_pool_conn = int(total_pool_conn * settings.deploy_surge_factor)
@@ -117,6 +115,7 @@ def get_resolved_max_connections() -> int | None:
 
 
 # SessionScope를 통해서만 set/reset. 직접 _session_context.set/reset 호출 금지.
+# 요청 경로: Depends(get_db)로 세션 주입 후 서비스에 인자로 전달(권장). 비요청 경로(Celery 등): run_in_session만 사용.
 _session_context: ContextVar[AsyncSession | None] = ContextVar(
     "session_context", default=None
 )
@@ -125,17 +124,17 @@ _session_context: ContextVar[AsyncSession | None] = ContextVar(
 def _async_database_url(url: str) -> str:
     """FastAPI용: 스킴을 비동기 드라이버로 안전하게 변환하고 비밀번호 마스킹을 방지합니다."""
     raw_url = url.strip()
-    
+
     # 1. 다이얼렉트 스킴 동적 정규화 (postgres:// -> postgresql://)
     if raw_url.startswith("postgres://"):
         raw_url = raw_url.replace("postgres://", "postgresql://", 1)
-        
+
     parsed = make_url(raw_url)
-    
+
     # 2. 비동기 드라이버 자동 적용 (drivername 미지정 시 여기서 설정. 배포 시 postgresql+psycopg 권장 — DEPLOYMENT.md)
     if "asyncpg" not in parsed.drivername and "psycopg" not in parsed.drivername:
         parsed = parsed.set(drivername="postgresql+psycopg")
-        
+
     # 3. 핵심 픽스: str() 사용 시 비밀번호가 '***'로 마스킹되는 것을 방지
     # 반드시 hide_password=False 옵션으로 진짜 비밀번호를 반환해야 합니다.
     return parsed.render_as_string(hide_password=False)
@@ -272,7 +271,7 @@ async def verify_db_connection() -> None:
     )
     if settings.strict_startup_db_check:
         raise RuntimeError(
-            "Database connection failed after %d attempts: %s" % (retries, last_exc)
+            f"Database connection failed after {retries} attempts: {last_exc}"
         ) from last_exc
 
 

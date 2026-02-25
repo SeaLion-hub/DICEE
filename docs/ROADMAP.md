@@ -87,6 +87,7 @@
 | [WORK_LOG](WORK_LOG.md) | 실제로 한 수정의 기록. 로드맵 본문 변경 시 여기에만 이력 기록. |
 | [CAUTIONS](CAUTIONS.md) | 코딩 전·중 체크리스트 (구조, 시크릿, 크롤러, AI, Auth, 배포). |
 | [DEPLOYMENT](DEPLOYMENT.md) | Railway·Vercel·환경변수·빌드·Redis·DB. |
+| [RELEASE_GATE](RELEASE_GATE.md) | 머지/배포 전 P0·P1 체크 및 Go/No-Go 판정. |
 | [decisions/](decisions/) | ADR (Architecture Decision Record). 예: [데이터베이스 명세서 v7.0](decisions/database-spec.md). |
 
 ---

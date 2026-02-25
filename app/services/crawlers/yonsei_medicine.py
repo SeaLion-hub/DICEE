@@ -5,14 +5,13 @@ from typing import Any
 from urllib.parse import parse_qs, urljoin, urlparse
 
 import httpx
-import requests
 from bs4 import BeautifulSoup, Comment, Tag
 from bs4.element import PageElement
 from requests.exceptions import RequestException
 
-from app.core.crawler_config import CRAWLER_HEADERS
 from app.core.crawl_http import HtmlTooLargeError, fetch_html, fetch_html_async
 from app.services.crawlers.base import ScrapeResult
+from app.services.crawlers.typing_helpers import ensure_str_attr
 
 logger = logging.getLogger(__name__)
 
@@ -94,8 +93,7 @@ def get_medicine_notice_links(list_url):
             if not a_tag or not isinstance(a_tag, Tag):
                 continue
 
-            raw_href = a_tag.get("href", "")
-            href = raw_href if isinstance(raw_href, str) else ""
+            href = ensure_str_attr(a_tag.get("href", ""))
 
             # 유효한 게시물 링크인지 검증 (articleNo 또는 mode=view 포함 여부)
             if "articleNo" in href or "mode=view" in href:
@@ -196,8 +194,7 @@ def scrape_medicine_detail(url):
                 for img in raw_view.find_all("img"):
                     if not isinstance(img, Tag):
                         continue
-                    raw_src = img.get("src", "")
-                    src = raw_src if isinstance(raw_src, str) else ""
+                    src = ensure_str_attr(img.get("src", ""))
                     if not src:
                         continue
 
@@ -234,8 +231,7 @@ def scrape_medicine_detail(url):
             for a in attach_div.find_all("a"):
                 if not isinstance(a, Tag):
                     continue
-                raw_href = a.get("href", "")
-                href = raw_href if isinstance(raw_href, str) else ""
+                href = ensure_str_attr(a.get("href", ""))
                 # 다운로드 링크 식별
                 if "download" in href or "mode=download" in href:
                     fname = a.get_text(strip=True)
@@ -268,7 +264,7 @@ async def get_medicine_notice_links_async(client: httpx.AsyncClient, list_url: s
             a_tag = item.find("a")
             if not a_tag or not isinstance(a_tag, Tag):
                 continue
-            href = a_tag.get("href", "") or ""
+            href = ensure_str_attr(a_tag.get("href", ""))
             if "articleNo" in href or "mode=view" in href:
                 full_url = urljoin(list_url, href)
                 no_text = None
@@ -315,7 +311,7 @@ async def scrape_medicine_detail_async(client: httpx.AsyncClient, url: str):
         if isinstance(fr_view, Tag):
             end_comment = fr_view.find(string=lambda t: isinstance(t, Comment) and "키워드/태그" in t)
             if end_comment:
-                curr = end_comment
+                curr: PageElement | None = end_comment
                 while curr:
                     nxt = curr.next_sibling
                     curr.extract()
@@ -330,7 +326,7 @@ async def scrape_medicine_detail_async(client: httpx.AsyncClient, url: str):
             for img in raw_view.find_all("img"):
                 if not isinstance(img, Tag):
                     continue
-                src = img.get("src", "") or ""
+                src = ensure_str_attr(img.get("src", ""))
                 if not src:
                     continue
                 if src.startswith("data:image"):
@@ -360,13 +356,13 @@ async def scrape_medicine_detail_async(client: httpx.AsyncClient, url: str):
             for a in attach_div.find_all("a"):
                 if not isinstance(a, Tag):
                     continue
-                href = a.get("href", "") or ""
+                href = ensure_str_attr(a.get("href", ""))
                 if "download" in href or "mode=download" in href:
                     fname = a.get_text(strip=True)
                     if fname and fname not in attachment_names_med_async:
                         attachment_names_med_async.add(fname)
                         attachments.append(fname)
         return ScrapeResult(title, date, content_html, images, attachments)
-    except Exception as e:
+    except Exception:
         logger.exception("scrape_medicine_detail_async error url=%s", url)
         raise

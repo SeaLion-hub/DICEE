@@ -48,7 +48,7 @@
 
 **운영 설정**  
 - 플랫폼 헬스체크/오토스케일 프로브는 **/health** 사용. Redis 장애 시에도 인스턴스가 비정상 판정되지 않는다.  
-- **/ready**는 내부 모니터링·경보 및 배포 롤링 시 "새 인스턴스가 트래픽 받을 준비가 되었는지" 판단용.  
+- **/ready**는 내부 모니터링·경보 및 배포 롤링 시 "새 인스턴스가 트래픽 받을 준비가 되었는지" 판단용. 의존성 상태를 그대로 노출하므로 blocklist Redis 장애 시에도 503을 반환한다. `redis_blocklist_fail_closed`는 인증 경로(JWT blocklist 체크)에서만 사용한다.
 - **롤링 배포**: 동시 교체 인스턴스 수 1개로 제한. 새 인스턴스가 /ready 200을 반환한 뒤에만 다음 인스턴스 교체.  
 - 모니터링에 `active_connections / App_budget` 비율 메트릭을 두고, 0.7·0.85 초과 시 경고를 권장한다.
 
@@ -173,6 +173,7 @@ Celery Sync 풀에는 **대기 시간 상한**(`pool_timeout`)과 **유휴 연�
 
 ## Go-Live 검증 (부하 테스트·장애 훈련)
 
+머지/배포 Go/No-Go 판정은 [RELEASE_GATE](RELEASE_GATE.md)(P0·P1 체크·필수 검증 커맨드) 기준으로 수행한다.  
 베타 → 프로덕션 전환 전 아래 검증을 수행한다.
 
 ### 통과 기준 (공통)
@@ -308,7 +309,8 @@ CORS: `ALLOWED_ORIGINS`에 프론트 도메인 등록. credentials: 프론트가
 | `JWT_PRIVATE_KEY_PEM` | JWT RS256 개인키 PEM(한 줄로 `\n` 포함 가능). RS256 사용 시 `JWT_PUBLIC_KEY_PEM`과 쌍으로 필수. | 2단계 Auth (RS256 선택 시) |
 | `JWT_PUBLIC_KEY_PEM` | JWT RS256 공개키 PEM. 검증 서비스는 공개키만 보유하면 됨. | 2단계 Auth (RS256 선택 시) |
 | `JWT_ACCESS_EXPIRE_SECONDS` | Access 토큰 만료(초). 기본 600(10분). 탈퇴/탈취 시 노출 시간 최소화. | 2단계 (선택) |
-| `REDIS_BLOCKLIST_FAIL_CLOSED` | Redis 장애 시 True=인증 거부(Fail-Closed), False=서명만 검증 후 통과(Fail-Open). 운영 권장 False(가용성 우선). 기본 False. | 2단계 Auth (Blocklist 사용 시) |
+| `REDIS_BLOCKLIST_FAIL_CLOSED` | Redis 장애 시 True=인증 거부(Fail-Closed), False=서명만 검증 후 통과(Fail-Open). 멀티 인스턴스·방어력 유지 시 true 권장. 기본 False. | 2단계 Auth (Blocklist 사용 시) |
+| `API_RATE_LIMIT_REQUIRE_REDIS` | True면 Redis 미설정/장애 시 레이트리밋 검사 대신 503. 멀티 인스턴스 운영 시 true 권장(Redis 없으면 인메모리 fallback만 되어 인스턴스별로만 적용됨). 기본 False. | 2단계 Auth·Internal API |
 | `REDIS_BLOCKLIST_CIRCUIT_FAILURE_THRESHOLD` | Blocklist Circuit Breaker: 연속 실패 N회 시 열림. 기본 3. | 2단계 (선택) |
 | `REDIS_BLOCKLIST_CIRCUIT_OPEN_SECONDS` | Circuit 열림 유지 시간(초). 기본 60. | 2단계 (선택) |
 | `REDIS_BLOCKLIST_CIRCUIT_HALF_OPEN_INTERVAL_SECONDS` | Half-open 시도 간격(초). 기본 15. | 2단계 (선택) |
@@ -317,12 +319,13 @@ CORS: `ALLOWED_ORIGINS`에 프론트 도메인 등록. credentials: 프론트가
 | `JWT_REFRESH_EXPIRE_DAYS` | Refresh 토큰 만료(일). 기본 7. | 2단계 (선택) |
 | `GOOGLE_CLIENT_ID` | 구글 OAuth 2.0 클라이언트 ID | 2단계 Auth (구글 먼저) |
 | `GOOGLE_CLIENT_SECRET` | 구글 OAuth 2.0 클라이언트 시크릿 | 2단계 Auth |
-| `ALLOWED_ORIGINS` | 프론트 도메인. **JSON 배열만** 지원(`["https://app.example.com"]`). `*`는 허용하지 않으며, allow_credentials=True + 명시 오리진만 허용. | 6단계 연동 시 |
+| `ALLOWED_ORIGINS` | 프론트 도메인. **JSON 배열**(`["https://app.example.com"]`) 또는 **쉼표 구분(CSV)** 지원. `*`는 허용하지 않으며, allow_credentials=True + 명시 오리진만 허용. | 6단계 연동 시 |
 | `STRICT_STARTUP_DB_CHECK` | `true`(기본): DB 연결 실패 시 부팅 중단. `false`: soft-start(기동은 하고 readiness에서 차단). | 선택 |
 | `ENVIRONMENT` | `production` \| `staging` \| `development`. production 시 스토리지 s3 강제. | 선택 |
 | `CONTENT_STORAGE_TYPE` | `s3` \| `local`. **production에서는 s3 필수.** | 본문 스토리지 사용 시 |
 | `S3_BUCKET` | S3 버킷 이름. production + s3 시 필수. | 본문 스토리지 S3 시 |
-| `CONTENT_UPLOAD_FAILURE_POLICY` | `allow_none`: 업로드 실패 시 None 반환(크롤 계속). `fail`: 예외 전파(데이터 유실 방지). | 선택 |
+| `S3_SSE_KMS_KEY_ID` | S3 SSE-KMS 키 ID. 설정 시 업로드 시 `ServerSideEncryption=aws:kms`, `SSEKMSKeyId` 적용. 미설정 시 기본 KMS 키 사용. | S3 암호화 시 |
+| `CONTENT_UPLOAD_FAILURE_POLICY` | `allow_none`: 업로드 실패 시 None 반환(크롤 계속). `fail`: 예외 전파(데이터 유실 방지). production에서는 `fail` 필수. | 선택 |
 | 기타 | Gemini API 키 등 | 해당 기능 단계 |
 
 (나중에 카카오 등 추가 시 `KAKAO_CLIENT_ID` 등 동일 방식으로 Variables + `.env.example`에 추가.)
@@ -381,7 +384,7 @@ Private Key 내용을 `JWT_PRIVATE_KEY_PEM`, Public Key 내용을 `JWT_PUBLIC_KE
 
 **첨부파일 저장 원칙:** 첨부파일은 **원격 URL(또는 파일명) 리스트만** DB(Notice.attachments JSONB)에 보관한다. **로컬 파일시스템에 다운로드·저장하지 않는다.** (Railway 등 컨테이너는 휘발성 파일시스템이므로 재시작 시 파일이 사라진다.) 클라이언트가 직접 원본 URL로 다운로드하거나, 백엔드를 거칠 경우 **S3 등 외부 오브젝트 스토리지**로 업로드하는 파이프라인만 사용한다.
 
-**본문 스토리지(production):** `ENVIRONMENT=production`이면 **CONTENT_STORAGE_TYPE=s3**, **S3_BUCKET** 설정 필수. `local`은 dev/test만 허용. **CONTENT_UPLOAD_FAILURE_POLICY**: 업로드 실패 시 `allow_none`이면 None 반환(본문 유실 가능, 크롤 계속), `fail`이면 예외 전파(데이터 유실 방지, 크롤/파이프라인 중단 가능).
+**본문 스토리지(production):** `ENVIRONMENT=production`이면 **CONTENT_STORAGE_TYPE=s3**, **S3_BUCKET** 설정 필수. `local`은 dev/test만 허용. **CONTENT_UPLOAD_FAILURE_POLICY**: production에서는 `fail` 필수(업로드 실패 시 예외 전파, 데이터 유실 방지). **S3 암호화:** 업로드 시 `ServerSideEncryption=aws:kms` 적용. `S3_SSE_KMS_KEY_ID` 설정 시 해당 KMS 키 사용. **버킷 보안:** S3 버킷은 **퍼블릭 액세스 차단(Block all public access)** 을 반드시 적용하고, 본문 URL 접근은 서명된 URL 또는 앱 경유로만 제공할 것(규제/보안 감사 대비).
 
 **DB 부팅·Liveness/Readiness:** `STRICT_STARTUP_DB_CHECK=true`(기본)면 DB 연결 실패 시 부팅 중단. `false`면 soft-start: 기동은 하고 **readiness**(`/ready`)가 실패해 DB 의존 API에 트래픽이 가지 않도록 인그레스/프로브에서 제어. 플랫폼 프로브는 **/health** 사용(DB/Redis 미체크로 장애 전파 완화). 상세는 [헬스체크·장애 전파 방지](#헬스체크장애-전파-방지) 참고.
 

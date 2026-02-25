@@ -7,6 +7,8 @@ import logging
 import ssl
 import time
 import uuid
+from collections.abc import Awaitable
+from typing import Any, cast
 
 from redis.asyncio import Redis as RedisAsyncio
 
@@ -49,6 +51,12 @@ end
 
 class RedisLockUnavailableError(Exception):
     """Redis 인프라 오류로 락 획득/해제 불가. Router에서 503 + code REDIS_LOCK_UNAVAILABLE으로 변환."""
+
+    pass
+
+
+class RedisIdempotencyUnavailableError(Exception):
+    """Redis 인프라 오류로 idempotency 클레임 불가. Router에서 503 + code REDIS_IDEMPOTENCY_UNAVAILABLE으로 변환."""
 
     pass
 
@@ -199,7 +207,7 @@ async def acquire_trigger_lock(
     college별 크롤 트리거 락 획득. SET key <uuid> NX EX.
     성공 시 (True, token), 이미 잠김 시 (False, None).
     Redis 인프라 오류 시 RedisLockUnavailableError 발생.
-    client는 redis.asyncio.Redis. None이면 redis_trigger_lock_required=True 시 RedisLockUnavailableError, 아니면 (True, None).
+    client는 redis.asyncio.Redis. None이면 redis_trigger_lock_required=True 시 에러, 아니면 (True, None).
     """
     if client is None:
         if getattr(settings, "redis_trigger_lock_required", False):
@@ -233,8 +241,8 @@ async def release_trigger_lock(
         return False
     key = f"{TRIGGER_LOCK_KEY_PREFIX}{college_code}"
     try:
-        n = await client.eval(LUA_RELEASE_IF_OWNER, 1, key, token)
-        return n == 1
+        raw = await cast(Awaitable[Any], client.eval(LUA_RELEASE_IF_OWNER, 1, key, token))
+        return bool(raw == 1)
     except Exception as e:
         logger.warning(
             "Trigger lock release failed (college=%s): %s", college_code, e, exc_info=True
@@ -256,12 +264,17 @@ def _idempotency_scope_hash(scope: str) -> str:
 
 
 async def try_claim_trigger_idempotency(
-    client: RedisAsyncio | None, idempotency_key: str, scope: str
+    client: RedisAsyncio | None,
+    idempotency_key: str,
+    scope: str,
+    *,
+    fail_closed: bool = False,
 ) -> bool:
     """
     Idempotency-Key 슬롯을 원자적으로 점유. SET key NX EX.
     scope(예: college_code 또는 "all")별로 별도 캐시. 동일 키라도 스코프가 다르면 다른 슬롯.
     성공 시 True(이번 요청이 처리 담당), 이미 존재 시 False(다른 요청이 점유 중 또는 완료).
+    fail_closed=True이면 Redis 예외 시 False 대신 RedisIdempotencyUnavailableError 발생(503 권장).
     """
     if client is None or not idempotency_key:
         return True  # Redis 없으면 클레임 검사 생략, 기존처럼 진행
@@ -276,7 +289,10 @@ async def try_claim_trigger_idempotency(
         )
         return bool(ok)
     except Exception as e:
-        # Redis 장애 시 idempotency는 비활성화하고, 실제 크롤 트리거는 진행되도록 허용한다.
+        if fail_closed:
+            raise RedisIdempotencyUnavailableError(
+                f"Trigger idempotency claim failed (key={idempotency_key[:32]}...): {e}"
+            ) from e
         logger.warning(
             "Trigger idempotency claim failed (key=%s); proceeding without idempotency: %s",
             idempotency_key[:32],
@@ -288,7 +304,8 @@ async def try_claim_trigger_idempotency(
 async def get_trigger_idempotency_result(
     client: RedisAsyncio | None, idempotency_key: str, scope: str
 ) -> dict | None:
-    """동일 Idempotency-Key+scope로 이미 처리된 결과가 있으면 반환. 없으면 None. in_progress 값은 완료가 아니므로 None으로 취급하지 않고 별도 처리."""
+    """동일 Idempotency-Key+scope로 이미 처리된 결과가 있으면 반환. 없으면 None.
+    in_progress 값은 완료가 아니므로 별도 처리."""
     if client is None or not idempotency_key:
         return None
     scope_hash = _idempotency_scope_hash(scope)
@@ -299,7 +316,7 @@ async def get_trigger_idempotency_result(
             return None
         if raw == IDEMPOTENCY_VALUE_IN_PROGRESS:
             return {"status": "in_progress", "detail": "in_progress", "code": "IDEMPOTENCY_IN_PROGRESS"}
-        return json.loads(raw)
+        return cast(dict[str, Any], json.loads(raw))
     except (json.JSONDecodeError, Exception) as e:
         logger.warning("Trigger idempotency get failed (key=%s): %s", idempotency_key[:32], e)
         return None
@@ -321,11 +338,12 @@ async def set_trigger_idempotency_result(
         logger.warning("Trigger idempotency set failed (key=%s): %s", idempotency_key[:32], e)
 
 
+# renew_trigger_lock_sync·release_trigger_lock_sync 모두 이 싱글톤 사용. 호출마다 from_url/close 금지.
 _sync_redis_client = None
 
 
 def _get_sync_redis_client():
-    """heartbeat용 동기 Redis 클라이언트 싱글톤. 연결 churn 방지."""
+    """heartbeat·락 해제용 동기 Redis 클라이언트 싱글톤. 연결 churn 방지."""
     global _sync_redis_client
     if _sync_redis_client is None:
         import redis
@@ -334,11 +352,12 @@ def _get_sync_redis_client():
         if not raw_url.strip():
             return None
         url_stripped = raw_url.strip()
-        ssl_kwargs = {}
+        ssl_kwargs: dict[str, Any] = {}
         if url_stripped.startswith("rediss://"):
-            ssl_kwargs = {"ssl_cert_reqs": ssl.CERT_REQUIRED}
-            if getattr(settings, "redis_ca_certs", None):
-                ssl_kwargs["ssl_ca_certs"] = settings.redis_ca_certs
+            ssl_kwargs["ssl_cert_reqs"] = ssl.CERT_REQUIRED
+            ca = getattr(settings, "redis_ca_certs", None)
+            if ca is not None:
+                ssl_kwargs["ssl_ca_certs"] = ca
         socket_timeout = getattr(settings, "redis_socket_timeout", 5.0)
         socket_connect_timeout = getattr(settings, "redis_socket_connect_timeout", 2.0)
         _sync_redis_client = redis.Redis.from_url(
@@ -370,7 +389,7 @@ def renew_trigger_lock_sync(college_code: str, lock_token: str | None) -> bool:
     try:
         key = f"{TRIGGER_LOCK_KEY_PREFIX}{college_code}"
         n = client.eval(LUA_RENEW_IF_OWNER, 1, key, lock_token, ttl)
-        return n == 1
+        return bool(n == 1)
     except Exception as e:
         logger.warning(
             "Trigger lock renew failed (college=%s): %s", college_code, e, exc_info=True

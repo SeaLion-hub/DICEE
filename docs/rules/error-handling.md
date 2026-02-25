@@ -43,8 +43,8 @@
 
 ---
 
-## 크롤 트랜잭션: college 단위 원자성
+## 크롤 트랜잭션: 청크 단위 commit·OOM 방지
 
-- **crawl_college_sync** 내부에서는 **college 단위 1 commit**만 수행. 청크별 `session.commit()`·`expunge_all()`은 사용하지 않음.
-- 한 college 크롤이 끝날 때 한 번만 `session.commit()`. 중간에 예외가 나면 **전체 롤백**되어 해당 college 공지 데이터가 부분만 저장되는 일이 없음.
-- `run_crawl_job_sync`의 crawl_run 생성/갱신용 commit은 유지(작업 상태 기록).
+- **crawl_college_sync**에서는 **청크 단위**(UPSERT_CHUNK_SIZE)로 `upsert_notices_bulk_sync` 후 `session.commit()`·`session.expunge_all()`을 수행해 Identity Map 비우기(OOM 방지). E1 대비.
+- College 단위로는 `run_crawl_job_sync`에서 crawl_run 생성/갱신용 commit·실패 시 FAILED 기록용 별도 세션 commit을 사용. 중간 예외 시 이미 커밋된 청크는 유지·해당 college만 FAILED로 기록(PendingRollbackError·상태 유실 방지).
+- 트랜잭션 경계는 오케스트레이터(`run_crawl_job_sync`·`crawl_college_sync`)만 통제. crawl_service docstring 참고.

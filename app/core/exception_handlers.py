@@ -2,28 +2,22 @@
 
 import asyncio
 import logging
+from typing import cast
 
-import httpx
 from fastapi import Request
-from fastapi.exceptions import HTTPException, RequestValidationError
 from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.exceptions import HTTPException, RequestValidationError
 from fastapi.responses import JSONResponse
-
-from app.core.network import InvalidForwardedHeaderError
 
 logger = logging.getLogger(__name__)
 
 
-async def validation_exception_handler(
-    request: Request, exc: RequestValidationError
-) -> JSONResponse:
-    """Pydantic 검증 오류. 공통 인터페이스: (request, exc) -> JSONResponse."""
-    return await request_validation_exception_handler(request, exc)
+async def validation_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Pydantic 검증 오류. Starlette 시그니처 (Request, Exception) 준수."""
+    return await request_validation_exception_handler(request, cast(RequestValidationError, exc))
 
 
-async def invalid_forwarded_header_handler(
-    request: Request, exc: InvalidForwardedHeaderError
-) -> JSONResponse:
+async def invalid_forwarded_header_handler(request: Request, exc: Exception) -> JSONResponse:
     """X-Forwarded-For 규격 이탈. 400 Bad Request, 요청 Drop (fallback 금지)."""
     logger.warning("Invalid X-Forwarded-For: %s (request_id=%s)", exc, getattr(request.state, "request_id", None))
     return JSONResponse(
@@ -32,7 +26,7 @@ async def invalid_forwarded_header_handler(
     )
 
 
-async def httpx_error_handler(request: Request, exc: httpx.HTTPError) -> JSONResponse:
+async def httpx_error_handler(request: Request, exc: Exception) -> JSONResponse:
     """외부 HTTP 오류(타임아웃 등). 503 + code UPSTREAM_UNAVAILABLE."""
     logger.warning("External HTTP error: %s", exc, exc_info=True)
     return JSONResponse(
@@ -52,7 +46,8 @@ async def global_exception_handler(request: Request, exc: Exception) -> JSONResp
         content: dict = {"detail": exc.detail}
         if hasattr(exc, "code") and exc.code:
             content["code"] = exc.code
-        return JSONResponse(status_code=exc.status_code, content=content)
+        headers = getattr(exc, "headers", None) or {}
+        return JSONResponse(status_code=exc.status_code, content=content, headers=dict(headers))
     request_id = getattr(request.state, "request_id", None)
     logger.exception(
         "Unhandled exception: %s (request_id=%s)",

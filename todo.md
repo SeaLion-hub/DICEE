@@ -10,9 +10,9 @@ Composer(Cmd+I) 사용 시 **@todo.md**를 반드시 포함해 세션 컨텍스�
 
 | 항목 | 내용 |
 |------|------|
-| **현재 수정 중** | 크롤 워커 안정성 개선 계획 구현 완료 |
+| **현재 수정 중** | 없음 (타입·Ruff·crawl_runs 계획 구현 완료) |
 | **발생 중인 이슈** | 없음 |
-| **주의 사항** | 이슈 2(seen.clear)는 현재 코드와 불일치하여 문서화만 수행 |
+| **주의 사항** | 규칙·매뉴얼은 .cursor/rules/·docs/rules/ 참조, WORK_LOG에 실제 수정만 기록 |
 
 - 위 세 칸을 비우지 말고, 작업이 바뀔 때마다 갱신하라. AI는 이 블록을 읽고 "지금 어떤 문제를 풀고 있었지?"를 복기한다.
 
@@ -25,7 +25,7 @@ Composer(Cmd+I) 사용 시 **@todo.md**를 반드시 포함해 세션 컨텍스�
 - **예시(새 대학 크롤러)**: @docs/decisions/database-spec.md를 참고해 Notice 스키마·필수 필드(published_at, external_id, title, url 등)를 확인한 뒤, 베이스/기존 크롤러 패턴을 따라 단계별 계획을 적는다.
 - 한 번에 "모든 크롤러 다 만들어줘"라고 하지 말고, **"베이스 클래스 상속 확인 → 로그인/세션 로직 → 파싱 로직"**처럼 끊어서 지시하고, 그때마다 이 [Plan]과 [Checklist]를 갱신하게 하라.
 
-크롤 워커 안정성 개선(검증 결과 반영): 이슈 1 단위 테스트 추가, 이슈 2 _BoundedSeenSet 문서화. 이슈 1·3·4는 코드에 이미 반영됨.
+(최신) md 문서 uptodate 확인·최신화: README(Celery 진입점·헬스 엔드포인트·현재 M2 문구), CAUTIONS(DATABASE_URL psycopg), error-handling(청크 commit·expunge_all), WORK_LOG·PLAN_REMEDIATION_68 반영.
 
 ---
 
@@ -36,7 +36,7 @@ Composer(Cmd+I) 사용 시 **@todo.md**를 반드시 포함해 세션 컨텍스�
 - **예시**: "진행 중: app/services/crawlers/yonsei_ai.py. Notice 모델의 published_at, external_id, title, url, raw_html 필수. content_hash는 제목+본문 텍스트만 사용."
 - 현재 수정 중인 파일(@yonsei_ai.py 등)의 **[Context]**를 요약해 이 섹션에 적고, 다음 턴에서도 @todo.md를 참조하면 맥락을 잃지 않는다.
 
-tests/test_crawl_service.py 추가(rollback→FAILED 경로 테스트). docs/decisions/crawl-bounded-seen-set.md 추가(_BoundedSeenSet max/evict 정책).
+문서: README·CAUTIONS·docs/rules/error-handling·WORK_LOG·PLAN_REMEDIATION_68 최신화 반영. (코드 기준: app.core.celery_app:app, postgresql+psycopg, 청크 commit·expunge_all, /health·/ready·/live)
 
 ---
 
@@ -47,6 +47,11 @@ tests/test_crawl_service.py 추가(rollback→FAILED 경로 테스트). docs/dec
 - [x] 이슈 1: run_crawl_job_sync rollback→FAILED 경로 단위 테스트 추가
 - [x] 이슈 2: _BoundedSeenSet max/evict 정책 docs/decisions 문서화
 - [x] pytest 실행 및 수정 반영 (36 passed)
+- [x] md 파일 uptodate 확인 및 최신화 (README·CAUTIONS·error-handling·WORK_LOG·PLAN_REMEDIATION_68)
+- [x] Phase 1: Ruff E501/I001 2건 수정
+- [x] Phase 2 전: mypy 모듈별 스냅샷 MYPY_BASELINE_BY_MODULE.md
+- [x] Phase 2: boto3(types-boto3)·core/main/services/crawlers 타입 수정·ensure_str_attr 헬퍼·mypy overrides 제거
+- [x] Phase 3: crawl_runs 감시·알림 문서·옵션 B 이슈 문서
 
 ---
 

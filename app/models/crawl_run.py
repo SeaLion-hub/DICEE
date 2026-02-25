@@ -13,7 +13,14 @@ from app.models.base import Base
 
 
 class CrawlRun(Base):
-    """단과대 크롤 1회 실행 이력. GET /internal/crawl-stats용."""
+    """
+    단과대 크롤 1회 실행 이력. GET /internal/crawl-stats용.
+
+    스키마: 복합 PK (id, started_at) — RANGE(started_at) 파티셔닝 호환으로 유지.
+    계약: 애플리케이션은 run_id(id)당 1행만 생성함. 리포지토리는 id로 조회 시
+    order_by(started_at.desc()).limit(1)로 결정적 1행을 가정함. 동일 id 복수 행은
+    생성하지 않으며, 있다면 버그 또는 수동 데이터. 장기적으로 id 단일 PK 마이그레이션 고려.
+    """
 
     __tablename__ = "crawl_runs"
 

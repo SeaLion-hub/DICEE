@@ -1,4 +1,10 @@
-"""CrawlRun Repository. crawl_run_tasks(idempotency) + crawl_runs(run data)."""
+"""
+CrawlRun Repository. crawl_run_tasks(idempotency) + crawl_runs(run data).
+
+crawl_runs 계약: 모델은 복합 PK (id, started_at). 애플리케이션은 id당 1행만 생성.
+조회/갱신 시 id 단독 + order_by(started_at.desc()).limit(1)로 결정적 1행 사용.
+동일 id 복수 행 생성 금지(create_or_update가 기존 행 갱신만 수행).
+"""
 
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -16,13 +22,15 @@ from app.models.crawl_run_task import CrawlRunTask
 
 
 def _task_id_to_uuid(task_id: str) -> uuid.UUID:
-    """Celery task_id string to UUID. Handles empty string."""
-    if not task_id:
-        return uuid.uuid4()
+    """Celery task_id string to UUID. 빈 문자열 또는 비정상 형식 시 ValueError 발생(idempotency/재시도 추적 유지)."""
+    if not task_id or not str(task_id).strip():
+        raise ValueError("task_id is required and must be a non-empty valid UUID string")
     try:
-        return uuid.UUID(task_id)
-    except (ValueError, TypeError):
-        return uuid.uuid4()
+        return uuid.UUID(str(task_id).strip())
+    except (ValueError, TypeError) as e:
+        raise ValueError(
+            f"task_id must be a valid UUID string (got {type(task_id).__name__!r}): {e}"
+        ) from e
 
 
 def ensure_crawl_run_task_sync(session: Session, task_id: str) -> uuid.UUID:
@@ -51,9 +59,17 @@ def create_or_update_crawl_run_sync(
     run_id: uuid.UUID,
     college_id: uuid.UUID,
 ) -> CrawlRun:
-    """run_id로 crawl_runs 1건 생성 또는 재시도 시 갱신(상태 초기화, started_at은 최초 값 유지)."""
+    """
+    run_id로 crawl_runs 1건 생성 또는 재시도 시 갱신(상태 초기화, started_at은 최초 값 유지).
+    계약: id당 최대 1행. 조회는 id 단독 사용(복합 PK이지만 현재 생성 전략상 1행만 존재).
+    """
     now = datetime.now(UTC)
-    existing = session.execute(select(CrawlRun).where(CrawlRun.id == run_id).limit(1)).scalar_one_or_none()
+    existing = session.execute(
+        select(CrawlRun)
+        .where(CrawlRun.id == run_id)
+        .order_by(CrawlRun.started_at.desc())
+        .limit(1)
+    ).scalar_one_or_none()
     if existing:
         existing.status = CrawlRunStatus.RUNNING.value
         existing.notices_upserted = 0
@@ -86,8 +102,16 @@ def update_crawl_run_sync(
     notices_upserted: int | None = None,
     error_message: str | None = None,
 ) -> CrawlRun | None:
-    """run_id로 crawl_runs 1건 갱신 (동기, 워커용)."""
-    row = session.execute(select(CrawlRun).where(CrawlRun.id == run_id).limit(1)).scalar_one_or_none()
+    """
+    run_id로 crawl_runs 1건 갱신 (동기, 워커용).
+    계약: id 단독 조회. run_id당 1행 전제.
+    """
+    row = session.execute(
+        select(CrawlRun)
+        .where(CrawlRun.id == run_id)
+        .order_by(CrawlRun.started_at.desc())
+        .limit(1)
+    ).scalar_one_or_none()
     if not row:
         return None
     if finished_at is not None:

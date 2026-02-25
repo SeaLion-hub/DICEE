@@ -5,13 +5,12 @@ import urllib.parse
 from urllib.parse import urljoin
 
 import httpx
-import requests
 from bs4 import BeautifulSoup, Comment, Tag
 from requests.exceptions import RequestException
 
-from app.core.crawler_config import CRAWLER_HEADERS
 from app.core.crawl_http import HtmlTooLargeError, fetch_html, fetch_html_async
 from app.services.crawlers.base import ScrapeResult
+from app.services.crawlers.typing_helpers import ensure_str_attr
 
 logger = logging.getLogger(__name__)
 
@@ -87,7 +86,7 @@ def scrape_science_detail(url):
         temp_soup = get_body_soup(soup)
         if temp_soup:
             for idx, img in enumerate(temp_soup.find_all("img")):
-                src = img.get("src", "")
+                src = ensure_str_attr(img.get("src", ""))
                 if src and not any(x in src for x in ["icon", "btn", "blank"]):
                     if src.startswith("data:image"):
                         try:
@@ -172,7 +171,7 @@ def get_science_links(url):
             if title_td and isinstance(title_td, Tag):
                 a_tag = title_td.find("a")
                 if a_tag and isinstance(a_tag, Tag):
-                    href = a_tag.get("href")
+                    href = ensure_str_attr(a_tag.get("href"))
                     if not href:
                         continue
                     full_url = urljoin(url, href)
@@ -206,7 +205,7 @@ async def get_science_links_async(client: httpx.AsyncClient, url: str):
             if title_td and isinstance(title_td, Tag):
                 a_tag = title_td.find("a")
                 if a_tag and isinstance(a_tag, Tag):
-                    href = a_tag.get("href")
+                    href = ensure_str_attr(a_tag.get("href"))
                     if href:
                         full_url = urljoin(url, href)
                         links.append({"no": num, "title": a_tag.get_text(strip=True), "url": full_url})
@@ -237,7 +236,7 @@ async def scrape_science_detail_async(client: httpx.AsyncClient, url: str):
         temp_soup = get_body_soup(soup)
         if temp_soup:
             for idx, img in enumerate(temp_soup.find_all("img")):
-                src = img.get("src", "")
+                src = ensure_str_attr(img.get("src", ""))
                 if src and not any(x in src for x in ["icon", "btn", "blank"]):
                     if src.startswith("data:image"):
                         try:
@@ -250,7 +249,9 @@ async def scrape_science_detail_async(client: httpx.AsyncClient, url: str):
                         full_url = urljoin(url, src)
                         parsed = urllib.parse.urlparse(full_url)
                         encoded_path = urllib.parse.quote(parsed.path)
-                        safe_url = urllib.parse.urlunparse((parsed.scheme, parsed.netloc, encoded_path, parsed.params, parsed.query, parsed.fragment))
+                        safe_url = urllib.parse.urlunparse(
+                            (parsed.scheme, parsed.netloc, encoded_path, parsed.params, parsed.query, parsed.fragment)
+                        )
                         if safe_url not in image_urls_async:
                             image_urls_async.add(safe_url)
                             fname = os.path.basename(parsed.path) or f"image_{idx+1}.jpg"
@@ -272,6 +273,6 @@ async def scrape_science_detail_async(client: httpx.AsyncClient, url: str):
                 attachment_names_async.add(fname)
                 attachments.append(fname)
         return ScrapeResult(title, date, content_html, images, attachments)
-    except Exception as e:
+    except Exception:
         logger.exception("scrape_science_detail_async error url=%s", url)
         raise

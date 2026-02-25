@@ -4,7 +4,6 @@ import asyncio
 from unittest.mock import AsyncMock, patch
 
 import pytest
-
 from app.core.redis import (
     RedisLockUnavailableError,
     acquire_trigger_lock,

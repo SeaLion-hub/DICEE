@@ -5,13 +5,12 @@ import urllib.parse
 from urllib.parse import urljoin
 
 import httpx
-import requests
 from bs4 import BeautifulSoup, Tag
 from requests.exceptions import RequestException
 
-from app.core.crawler_config import CRAWLER_HEADERS
 from app.core.crawl_http import HtmlTooLargeError, fetch_html, fetch_html_async
 from app.services.crawlers.base import ScrapeResult
+from app.services.crawlers.typing_helpers import ensure_str_attr
 
 logger = logging.getLogger(__name__)
 
@@ -94,7 +93,7 @@ def get_uic_links(url):
                     break
                 if not isinstance(a, Tag):
                     continue
-                href = a.get("href")
+                href = ensure_str_attr(a.get("href"))
                 if not href:
                     continue
 
@@ -177,8 +176,7 @@ def scrape_uic_detail(url):
             for idx, img in enumerate(content_div.find_all("img")):
                 if not isinstance(img, Tag):
                     continue
-                raw_src = img.get("src", "")
-                src = raw_src if isinstance(raw_src, str) else ""
+                src = ensure_str_attr(img.get("src", ""))
                 if src and not any(x in src for x in ["icon", "btn", "blank", "ext_"]):
                     if src.startswith("data:image"):
                         try:
@@ -245,7 +243,7 @@ async def get_uic_links_async(client: httpx.AsyncClient, url: str):
                     break
                 if not isinstance(a, Tag) or not a.get("href"):
                     continue
-                full_url = urljoin(url, a.get("href"))
+                full_url = urljoin(url, ensure_str_attr(a.get("href")))
                 title = a.get_text(strip=True)
                 if not title or title.lower() == "more":
                     continue
@@ -279,7 +277,12 @@ async def scrape_uic_detail_async(client: httpx.AsyncClient, url: str):
                 if not isinstance(a, Tag):
                     continue
                 if a.find("img"):
-                    fname = re.sub(r"\([\d.,]+\s*(KB|MB|GB|Bytes?)\)", "", a.get_text(separator=" ", strip=True).strip('"'), flags=re.IGNORECASE).strip()
+                    fname = re.sub(
+                        r"\([\d.,]+\s*(KB|MB|GB|Bytes?)\)",
+                        "",
+                        a.get_text(separator=" ", strip=True).strip('"'),
+                        flags=re.IGNORECASE,
+                    ).strip()
                     if fname and fname not in attachment_names_uic_async:
                         attachment_names_uic_async.add(fname)
                         attachments.append(fname)
@@ -291,7 +294,7 @@ async def scrape_uic_detail_async(client: httpx.AsyncClient, url: str):
             for idx, img in enumerate(content_div.find_all("img")):
                 if not isinstance(img, Tag):
                     continue
-                src = img.get("src", "") or ""
+                src = ensure_str_attr(img.get("src", ""))
                 if not src or any(x in src for x in ["icon", "btn", "blank", "ext_"]):
                     continue
                 if src.startswith("data:image"):
@@ -310,7 +313,9 @@ async def scrape_uic_detail_async(client: httpx.AsyncClient, url: str):
                     full_url = urljoin(url, src)
                     parsed = urllib.parse.urlparse(full_url)
                     enc_path = urllib.parse.quote(parsed.path)
-                    safe_url = urllib.parse.urlunparse((parsed.scheme, parsed.netloc, enc_path, parsed.params, parsed.query, parsed.fragment))
+                    safe_url = urllib.parse.urlunparse(
+                        (parsed.scheme, parsed.netloc, enc_path, parsed.params, parsed.query, parsed.fragment)
+                    )
                     if safe_url not in image_urls_uic_async:
                         image_urls_uic_async.add(safe_url)
                         fname = os.path.basename(parsed.path) or f"image_{idx+1}.jpg"
@@ -323,6 +328,6 @@ async def scrape_uic_detail_async(client: httpx.AsyncClient, url: str):
         else:
             content_html = "(본문 영역을 찾을 수 없습니다)"
         return ScrapeResult(title, date, content_html, images, attachments)
-    except Exception as e:
+    except Exception:
         logger.exception("scrape_uic_detail_async error url=%s", url)
         raise

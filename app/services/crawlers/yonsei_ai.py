@@ -5,13 +5,12 @@ from typing import Any
 from urllib.parse import urljoin
 
 import httpx
-import requests
 from bs4 import BeautifulSoup, Comment, NavigableString, Tag
 from requests.exceptions import RequestException
 
-from app.core.crawler_config import CRAWLER_HEADERS
 from app.core.crawl_http import HtmlTooLargeError, fetch_html, fetch_html_async
 from app.services.crawlers.base import ScrapeResult
+from app.services.crawlers.typing_helpers import ensure_str_attr
 
 logger = logging.getLogger(__name__)
 
@@ -248,7 +247,7 @@ def get_computing_notice_links(list_url):
 
     except RequestException:
         raise
-    except Exception as e:
+    except Exception:
         logger.exception("get_computing_notice_links parsing error list_url=%s", list_url)
         raise
 
@@ -273,7 +272,11 @@ async def get_computing_notice_links_async(client: httpx.AsyncClient, list_url: 
                 link_tag = subject_td.find("a")
                 if isinstance(link_tag, Tag):
                     href_val = link_tag.get("href")
-                    href_str = href_val if isinstance(href_val, str) else (href_val[0] if isinstance(href_val, list) and href_val else "")
+                    href_str = (
+                        href_val
+                        if isinstance(href_val, str)
+                        else (href_val[0] if isinstance(href_val, list) and href_val else "")
+                    )
                     if href_str:
                         full_url = urljoin(list_url, href_str) if not href_str.startswith("http") else href_str
                         links.append({"no": num_text, "url": full_url})
@@ -308,7 +311,7 @@ async def scrape_computing_detail_async(client: httpx.AsyncClient, url: str):
             for img in temp_soup.find_all("img"):
                 if not isinstance(img, Tag):
                     continue
-                src = img.get("src", "") or ""
+                src = ensure_str_attr(img.get("src", ""))
                 if not src or src.startswith("data:image"):
                     continue
                 if any(x in src for x in ["icon", "btn", "blank"]):
@@ -328,13 +331,13 @@ async def scrape_computing_detail_async(client: httpx.AsyncClient, url: str):
                 if isinstance(t, Tag):
                     for a in t.find_all("a"):
                         if isinstance(a, Tag):
-                            href_str = a.get("href") or ""
+                            href_str = ensure_str_attr(a.get("href"))
                             if "download.php" in href_str:
                                 fname = a.get_text(strip=True)
                                 if fname and fname not in attachment_names_ai_async:
                                     attachment_names_ai_async.add(fname)
                                     attachments.append(fname)
         return ScrapeResult(title, date, content_text, images, attachments)
-    except Exception as e:
+    except Exception:
         logger.exception("scrape_computing_detail_async error url=%s", url)
         raise

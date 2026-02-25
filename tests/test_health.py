@@ -1,5 +1,7 @@
 """Health 엔드포인트 테스트. Liveness(/live) vs Readiness(/ready) 분리."""
 
+import pytest
+
 
 def test_live_returns_200_always(client):
     """GET /live → 200. DB/Redis 미체크."""
@@ -21,6 +23,34 @@ def test_ready_returns_200_or_503(client):
     else:
         assert response.status_code == 503
         assert data["status"] == "not_ready"
+
+
+@pytest.mark.parametrize("redis_blocklist_fail_closed", [False, True])
+def test_ready_blocklist_error_returns_503(client, monkeypatch, redis_blocklist_fail_closed):
+    """Readiness는 의존성 상태 그대로 노출. blocklist Redis 장애 시 fail_closed와 무관하게 항상 503."""
+    from app.api import health as health_module
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "redis_blocklist_fail_closed", redis_blocklist_fail_closed)
+
+    async def _mock_db_ok(_request):
+        return "ok"
+
+    async def _mock_blocklist_error(_request):
+        return "error"
+
+    async def _mock_trigger_lock_ok(_request):
+        return "ok"
+
+    monkeypatch.setattr(health_module, "_check_db", _mock_db_ok)
+    monkeypatch.setattr(health_module, "_check_redis_blocklist", _mock_blocklist_error)
+    monkeypatch.setattr(health_module, "_check_redis_trigger_lock", _mock_trigger_lock_ok)
+
+    response = client.get("/ready")
+    data = response.json()
+    assert data["redis_blocklist"] == "error"
+    assert response.status_code == 503
+    assert data["status"] == "not_ready"
 
 
 def test_health_returns_200(client):

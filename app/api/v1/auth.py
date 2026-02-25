@@ -7,12 +7,15 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.api_rate_limit import check_rate_limit
+from app.core.api_rate_limit import (
+    RateLimitUnavailableError,
+    check_rate_limit,
+)
 from app.core.config import settings
 from app.core.database import get_db
 from app.core.deps import get_google_key_fetcher, get_httpx_client, get_redis_blocklist
 from app.core.network import get_client_ip
-from app.core.redis import BlocklistUnavailableError
+from app.core.redis import BlocklistUnavailableError, add_access_to_blocklist
 from app.schemas.auth import RefreshTokenPayload, TokenPayload, TokenResponse
 from app.services.auth_service import (
     AuthError,
@@ -70,6 +73,7 @@ async def get_current_user_id_and_jti(
 async def post_google_auth(
     request: Request,
     payload: TokenPayload,
+    session: AsyncSession = Depends(get_db),
     http_client: httpx.AsyncClient = Depends(get_httpx_client),
     key_fetcher=Depends(get_google_key_fetcher),
     redis_rate=Depends(get_redis_blocklist),
@@ -86,12 +90,19 @@ async def post_google_auth(
             detail="Client IP could not be determined; rate limiting requires a valid client identity.",
         )
     identifier = f"auth_google:{client_ip}"
-    allowed = await check_rate_limit(
-        redis_rate,
-        identifier=identifier,
-        max_requests=getattr(settings, "auth_google_rate_limit_per_minute", 10),
-        window_seconds=60,
-    )
+    try:
+        allowed = await check_rate_limit(
+            redis_rate,
+            identifier=identifier,
+            max_requests=getattr(settings, "auth_google_rate_limit_per_minute", 10),
+            window_seconds=60,
+            require_redis=getattr(settings, "api_rate_limit_require_redis", False),
+        )
+    except RateLimitUnavailableError:
+        raise HTTPException(
+            status_code=503,
+            detail="Rate limiting is temporarily unavailable. Try again later.",
+        ) from None
     if not allowed:
         logger.warning(
             "auth google rate limit exceeded",
@@ -102,13 +113,16 @@ async def post_google_auth(
             detail="Too many authentication attempts, please try again later.",
         )
     try:
-        return await google_login(
-            code=payload.code,
+        result = await google_login(
+            session,
+            payload.code,
             redirect_uri=payload.redirect_uri,
             http_client=http_client,
             key_fetcher=key_fetcher,
             client_ip=client_ip,
         )
+        await session.commit()
+        return result
     except AuthServiceUnavailableError as e:
         logger.warning("Google auth unavailable: %s", e)
         raise HTTPException(
@@ -141,12 +155,19 @@ async def post_refresh(
             detail="Client IP could not be determined; rate limiting requires a valid client identity.",
         )
     identifier = f"auth_refresh:{client_ip}"
-    allowed = await check_rate_limit(
-        redis_rate,
-        identifier=identifier,
-        max_requests=getattr(settings, "auth_refresh_rate_limit_per_minute", 60),
-        window_seconds=60,
-    )
+    try:
+        allowed = await check_rate_limit(
+            redis_rate,
+            identifier=identifier,
+            max_requests=getattr(settings, "auth_refresh_rate_limit_per_minute", 60),
+            window_seconds=60,
+            require_redis=getattr(settings, "api_rate_limit_require_redis", False),
+        )
+    except RateLimitUnavailableError:
+        raise HTTPException(
+            status_code=503,
+            detail="Rate limiting is temporarily unavailable. Try again later.",
+        ) from None
     if not allowed:
         logger.warning(
             "auth refresh rate limit exceeded",
@@ -172,6 +193,7 @@ async def post_refresh(
 @router.post("/logout", status_code=204)
 async def post_logout(
     user_id_and_jti=Depends(get_current_user_id_and_jti),
+    session: AsyncSession = Depends(get_db),
     redis_blocklist=Depends(get_redis_blocklist),
 ) -> None:
     """
@@ -179,15 +201,15 @@ async def post_logout(
     Authorization: Bearer <access_token> 필요. 204 No Content.
     """
     user_id, jti = user_id_and_jti
-    try:
-        await logout_user(
-            user_id,
-            access_jti=jti,
-            ttl_seconds=settings.jwt_access_expire_seconds,
-            redis_blocklist_client=redis_blocklist,
-        )
-    except BlocklistUnavailableError:
-        raise HTTPException(
-            status_code=503,
-            detail="Logout could not revoke token on server; please retry later.",
-        ) from None
+    await logout_user(session, user_id)
+    await session.commit()
+    if redis_blocklist and jti and settings.jwt_access_expire_seconds > 0:
+        try:
+            await add_access_to_blocklist(
+                redis_blocklist, jti, settings.jwt_access_expire_seconds
+            )
+        except BlocklistUnavailableError:
+            raise HTTPException(
+                status_code=503,
+                detail="Logout could not revoke token on server; please retry later.",
+            ) from None

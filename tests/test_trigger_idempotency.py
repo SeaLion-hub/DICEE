@@ -3,8 +3,6 @@
 import asyncio
 from unittest.mock import MagicMock
 
-import pytest
-
 from app.core.redis import (
     IDEMPOTENCY_VALUE_IN_PROGRESS,
     get_trigger_idempotency_result,
@@ -64,8 +62,6 @@ def test_trigger_crawl_unknown_college_then_same_idempotency_key_succeeds(client
     """unknown college_code로 400 받은 뒤, 같은 Idempotency-Key로 유효한 college로 재요청 시 200(고착 없음)."""
     from app.core.config import settings
     from app.core.lifespan import create_app_state
-    from app.main import app
-
     from pydantic import SecretStr
 
     class AsyncMockRedis:

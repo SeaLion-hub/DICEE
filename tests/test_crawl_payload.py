@@ -3,8 +3,6 @@
 import uuid
 from unittest.mock import patch
 
-import pytest
-
 from app.services.crawl_payload import (
     _attachments_to_dicts,
     _content_hash_from_title_and_html,

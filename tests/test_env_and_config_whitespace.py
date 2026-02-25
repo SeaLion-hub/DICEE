@@ -5,8 +5,7 @@ import importlib
 
 def test_sync_database_url_treats_whitespace_as_unset(monkeypatch):
     """DATABASE_URL가 공백 문자열만 있을 때 _sync_database_url이 None을 반환한다."""
-    from app.core import config
-    from app.core import database_sync
+    from app.core import config, database_sync
 
     monkeypatch.setattr(config.settings, "database_url", "   ")
     # reload로 settings.database_url 변경 사항을 database_sync에 반영

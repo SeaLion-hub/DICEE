@@ -5,6 +5,7 @@ import logging
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
+from redis.asyncio import Redis as RedisAsyncio
 from sqlalchemy import text
 
 from app.core.config import settings
@@ -30,14 +31,14 @@ async def _check_db(request: Request) -> str:
         return "error"
 
 
-async def _ping_redis(client: object | None) -> str:
+async def _ping_redis(client: RedisAsyncio | None) -> str:
     """단일 Redis 클라이언트 PING. None이면 ok(미설정)."""
     if client is None:
         return "ok"
     try:
         await asyncio.wait_for(client.ping(), timeout=HEALTH_REDIS_PING_TIMEOUT)
         return "ok"
-    except asyncio.TimeoutError as e:
+    except TimeoutError as e:
         logger.warning("Health Redis ping timeout: %s", e, exc_info=True)
         return "error"
     except Exception as e:
@@ -67,13 +68,20 @@ async def get_live() -> dict[str, str]:
 
 @router.get("/ready")
 async def get_ready(request: Request) -> JSONResponse:
-    """Readiness: DB 및 Redis(blocklist·trigger_lock) 준비 시 200. 실패 시 503."""
+    """Readiness: DB 및 Redis(blocklist·trigger_lock) 준비 시 200. 실패 시 503.
+    의존성 상태를 그대로 노출하며, blocklist Redis 장애 시에도 503으로 반환(오토스케일러/모니터 정확한 판단).
+    redis_blocklist_fail_closed는 인증 경로(JWT blocklist 체크)에서만 사용."""
     db_status = await _check_db(request)
-    redis_blocklist = await _check_redis_blocklist(request)
+    try:
+        redis_blocklist = await _check_redis_blocklist(request)
+    except Exception as e:
+        logger.warning("Readiness blocklist check exception: %s", e, exc_info=True)
+        redis_blocklist = "error"
+    blocklist_ok = redis_blocklist == "ok"
     redis_trigger_lock = await _check_redis_trigger_lock(request)
     ok = (
         db_status == "ok"
-        and redis_blocklist == "ok"
+        and blocklist_ok
         and redis_trigger_lock == "ok"
     )
     content = {
