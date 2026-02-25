@@ -7,9 +7,9 @@ import logging
 import threading
 import time
 
-from celery import shared_task
 from requests.exceptions import RequestException
 
+from app.core.celery_app import app
 from app.core.config import settings
 from app.core.database_sync import get_sync_session
 from app.core.metrics import CRAWL_DURATION_SECONDS, set_gauge
@@ -47,7 +47,7 @@ def _heartbeat_loop(
             logger.debug("Trigger lock heartbeat renewed: college=%s", college_code)
 
 
-@shared_task(
+@app.task(
     bind=True,
     name="app.services.tasks.crawl_college_task",
     autoretry_for=(RequestException, ConnectionError, TimeoutError, OSError),
@@ -117,7 +117,7 @@ def crawl_college_task(self, college_code: str, lock_token: str | None = None):
             heartbeat_thread.join(timeout=2.0)
 
 
-@shared_task(name="app.services.tasks.close_stale_crawl_runs_task")
+@app.task(name="app.services.tasks.close_stale_crawl_runs_task")
 def close_stale_crawl_runs_task():
     """
     Stale RUNNING 정리: started_at이 crawl_run_stale_seconds보다 오래된 crawl_runs를 FAILED로 닫음.
@@ -131,7 +131,7 @@ def close_stale_crawl_runs_task():
     return {"closed": count}
 
 
-@shared_task(
+@app.task(
     name="app.services.tasks.process_notice_ai_task",
     bind=True,
     autoretry_for=(RequestException, ConnectionError, TimeoutError, OSError),

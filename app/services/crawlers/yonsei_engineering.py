@@ -10,6 +10,7 @@ from requests.exceptions import RequestException
 
 from app.core.crawler_config import CRAWLER_HEADERS
 from app.core.crawl_http import HtmlTooLargeError, fetch_html, fetch_html_async
+from app.services.crawlers.base import ScrapeResult
 
 logger = logging.getLogger(__name__)
 
@@ -70,9 +71,9 @@ def scrape_yonsei_engineering_precise(url):
             text = fetch_html(url, timeout=10)
         except HtmlTooLargeError as e:
             logger.warning("scrape_yonsei_engineering_precise body too large url=%s: %s", url, e)
-            return None, "접속 실패", None, [], []
+            return ScrapeResult(None, "접속 실패", None, [], [])
         except RequestException:
-            return None, "접속 실패", None, [], []
+            return ScrapeResult(None, "접속 실패", None, [], [])
         soup = BeautifulSoup(text, "html.parser")
 
         # 제목
@@ -192,7 +193,7 @@ def scrape_yonsei_engineering_precise(url):
                         if file_name and file_name not in attachment_names_set:
                             attachment_names_set.add(file_name)
 
-        return title, date, content_text, images_data, list(attachment_names_set)
+        return ScrapeResult(title, date, content_text, images_data, list(attachment_names_set))
 
     except RequestException:
         raise
@@ -367,10 +368,10 @@ async def scrape_yonsei_engineering_precise_async(client: httpx.AsyncClient, url
                     if href and not href.startswith("#") and "javascript" not in href and file_name and file_name not in attachment_names_set:
                         attachment_names_set.add(file_name)
                         attachment_names.append(file_name)
-        return title, date, content_text, images_data, attachment_names
+        return ScrapeResult(title, date, content_text, images_data, attachment_names)
     except HtmlTooLargeError as e:
         logger.warning("scrape_yonsei_engineering_precise_async body too large url=%s: %s", url, e)
-        return None, "본문 초과", None, [], []
+        return ScrapeResult(None, "본문 초과", None, [], [])
     except Exception as e:
         logger.exception("scrape_yonsei_engineering_precise_async error url=%s", url)
         raise

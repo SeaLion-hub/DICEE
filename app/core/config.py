@@ -144,6 +144,8 @@ class Settings(BaseSettings):
     )
     # True일 때만 AI 파이프라인(Gemini 등) 실행 및 done 저장. False면 process_notice_ai_task는 스킵(pending 유지).
     ai_pipeline_enabled: bool = False
+    # Celery 워커 prefetch. 1=한 번에 하나만. 짧은 태스크 많으면 2~4로 올려 I/O 효율 개선. -O fair와 함께 사용.
+    celery_worker_prefetch_multiplier: int = Field(1, ge=1, le=16, description="Worker prefetch multiplier. Use with -O fair.")
     # 요청/페이지 간 최소 딜레이(초). 대상 서버 부하·IP 차단 완화용.
     polite_delay_seconds: float = Field(1.0, ge=0.1, le=60.0)
     # Stale RUNNING 정리: started_at이 이 값(초)보다 오래된 RUNNING을 FAILED로 닫음. 크롤 최대 소요의 2~3배 권장.

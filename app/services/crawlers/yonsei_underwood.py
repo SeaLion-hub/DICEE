@@ -11,6 +11,7 @@ from requests.exceptions import RequestException
 
 from app.core.crawler_config import CRAWLER_HEADERS
 from app.core.crawl_http import HtmlTooLargeError, fetch_html, fetch_html_async
+from app.services.crawlers.base import ScrapeResult
 
 logger = logging.getLogger(__name__)
 
@@ -215,7 +216,7 @@ def scrape_uic_detail(url):
         else:
             content_html = "(본문 영역을 찾을 수 없습니다)"
 
-        return title, date, content_html, images, attachments
+        return ScrapeResult(title, date, content_html, images, attachments)
 
     except RequestException:
         raise
@@ -321,7 +322,7 @@ async def scrape_uic_detail_async(client: httpx.AsyncClient, url: str):
             content_html = content_div.decode_contents().strip()
         else:
             content_html = "(본문 영역을 찾을 수 없습니다)"
-        return title, date, content_html, images, attachments
+        return ScrapeResult(title, date, content_html, images, attachments)
     except Exception as e:
         logger.exception("scrape_uic_detail_async error url=%s", url)
         raise

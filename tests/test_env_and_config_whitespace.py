@@ -17,15 +17,15 @@ def test_sync_database_url_treats_whitespace_as_unset(monkeypatch):
 
 
 def test_worker_redis_url_whitespace_falls_back_to_default(monkeypatch):
-    """REDIS_URL이 공백 문자열일 때 worker가 로컬 기본값으로 fallback한다."""
+    """REDIS_URL이 공백 문자열일 때 celery_app이 로컬 기본값으로 fallback한다."""
     from app.core import config
 
     monkeypatch.setattr(config.settings, "redis_url", "   ")
 
-    # settings.redis_url 패치 후 worker를 import/reload하여 broker_url을 확인
-    from app import worker as worker_module
+    # settings.redis_url 패치 후 celery_app을 reload하여 broker_url 확인
+    from app.core import celery_app as celery_app_module
 
-    importlib.reload(worker_module)
-    assert worker_module.broker_url == "redis://localhost:6379/0"
-    assert worker_module.result_backend == "redis://localhost:6379/0"
+    importlib.reload(celery_app_module)
+    assert celery_app_module.broker_url == "redis://localhost:6379/0"
+    assert celery_app_module.result_backend == "redis://localhost:6379/0"
 

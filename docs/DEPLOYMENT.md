@@ -112,6 +112,7 @@
 - **기본**: 초과 시 **critical 로그** 및 Sentry(`context=db_capacity`) 후 부팅 계속.
 - **`DB_POOL_STRICT_BUDGET=true`**: 초과 시 **부팅 실패**(RuntimeError).  
 예산/인스턴스 수는 `DB_API_INSTANCES`, `DB_UVICORN_WORKERS`, `DB_WORKER_INSTANCES`, `DB_CELERY_CONCURRENCY`, `DB_RESERVED`, `DEPLOY_SURGE_FACTOR` 등으로 반영(기본값 1, 1, 1, 1, 3, 2.0).
+- **Kubernetes/HPA 사용 시**: `DB_POOL_STRICT_BUDGET=true`는 **권장하지 않음**. 스케일 업 시 신규 파드가 동시에 부팅 검사에 걸려 전부 실패할 수 있음. 용량 계획을 맞춘 뒤 사용하거나, 배포 전 수동 검사·단일 인스턴스용으로만 사용할 것.
 
 ### 오토스케일·Replica 정책 (DB 용량별)
 
@@ -210,7 +211,7 @@ Celery Sync 풀에는 **대기 시간 상한**(`pool_timeout`)과 **유휴 연�
 
 ## 로컬 개발 참고
 
-- **Windows + Celery**: 기본 prefork 풀은 Windows에서 동작하지 않음. 워커 실행 시 **`--pool=solo`** 필수. 예: `celery -A app.worker worker -l info --pool=solo`. (README 로컬 실행 참고.)
+- **Windows + Celery**: 기본 prefork 풀은 Windows에서 동작하지 않음. 워커 실행 시 **`--pool=solo`** 필수. 예: `celery -A app.core.celery_app:app worker -l info -O fair --pool=solo`. (README 로컬 실행 참고.)
 - PostgreSQL 포트가 5432가 아니면 URL에 `:5433` 등 명시.
 - **데이터베이스 생성** 후 마이그레이션:
   - `createdb -U postgres -p 5433 dicee`
@@ -218,7 +219,7 @@ Celery Sync 풀에는 **대기 시간 상한**(`pool_timeout`)과 **유휴 연�
 - `alembic upgrade head` 실행 전에 `dicee` DB가 존재해야 함.
 - **Celery 워커를 로컬(PC)에서 돌릴 때**:
   - `REDIS_URL`에 **Railway 내부 URL**(`redis.railway.internal`)을 넣으면 로컬에서는 DNS 조회 실패(`getaddrinfo failed`). 로컬 Redis를 띄우고 `REDIS_URL=redis://localhost:6379/0` 사용하거나, `.env`에서 `REDIS_URL`을 비우면 기본값 `redis://localhost:6379/0` 사용.
-  - **Windows**에서는 기본 prefork 풀에서 billiard 세마포어 오류가 날 수 있음. `celery -A app.worker worker -l info --pool=solo` 로 실행.
+  - **Windows**에서는 기본 prefork 풀에서 billiard 세마포어 오류가 날 수 있음. `celery -A app.core.celery_app:app worker -l info -O fair --pool=solo` 로 실행.
 
 ---
 
@@ -268,7 +269,8 @@ CORS: `ALLOWED_ORIGINS`에 프론트 도메인 등록. credentials: 프론트가
 - Redis의 `REDIS_URL` 등을 **웹 서비스·Celery 워커 서비스** Variables에 각각 추가.
 - **Railway Redis는 TLS 사용 시 `rediss://`** URL을 제공할 수 있음. Celery broker_url 설정 시 **redis://·rediss://** 모두 대응하고, TLS(`rediss://`)일 때는 **ssl_cert_reqs=None** 등 옵션 적용해 연결 실패 방지. (로컬은 보통 `redis://`.)
 - **영속성(AOF/RDB)·Railway Redis 플랜 확인**: Redis는 Celery **broker·알림 큐**로 사용되므로 재시작/장애 시 큐 유실을 막기 위해 **AOF(Append Only File)** 또는 **RDB** 백업이 켜져 있는지 확인. **Railway 무료/저가형 플랜**은 재시작 시 데이터가 날아가는 경우가 있으므로, 배포 전 **AOF 설정이 가능한 플랜인지** 반드시 확인. (ROADMAP "진행 시 예상 문제·대비" Redis 영속성 참고.)
-- **visibility_timeout**: 크롤 태스크는 수 분~수십 분 걸릴 수 있음. `app/worker.py`에서 **broker_transport_options = {"visibility_timeout": 3600}**(1시간) 설정. 다중 워커 시 타임아웃보다 오래 걸리면 같은 메시지가 재전달될 수 있으므로 확인.
+- **visibility_timeout**: 크롤 태스크는 수 분~수십 분 걸릴 수 있음. `app/core/celery_app.py`에서 **broker_transport_options = {"visibility_timeout": 3600}**(1시간) 설정. 다중 워커 시 타임아웃보다 오래 걸리면 같은 메시지가 재전달될 수 있으므로 확인.
+- **워커는 항상 `-O fair`로 기동**: Fair Scheduling으로 I/O Bound 크롤 태스크가 한 워커에 몰리지 않도록 함. prefetch는 `CELERY_WORKER_PREFETCH_MULTIPLIER`(기본 1)로 조정 가능.
 
 ### 3. 환경 변수 (Variables)
 
@@ -299,7 +301,8 @@ CORS: `ALLOWED_ORIGINS`에 프론트 도메인 등록. credentials: 프론트가
 | `AUTH_REFRESH_RATE_LIMIT_PER_MINUTE` | 동일 IP 기준 `/v1/auth/refresh` 분당 최대 호출 수. 기본 60. | 2단계 Auth (선택) |
 | `INTERNAL_TRIGGER_CRAWL_RATE_LIMIT_PER_MINUTE` | 동일 IP 기준 `/internal/trigger-crawl` 분당 최대 호출 수. 기본 10. | 3단계 Cron 연동 시 (선택) |
 | `INTERNAL_CRAWL_STATS_RATE_LIMIT_PER_MINUTE` | 동일 IP 기준 `/internal/crawl-stats` 분당 최대 호출 수. 기본 30. | 3단계 운영 모니터링 (선택) |
-| `POLITE_DELAY_SECONDS` | 요청/페이지 간 최소 딜레이(초). 대상 서버 부하·IP 차단 완화. 기본 1. | 3단계 (선택) |
+| `POLITE_DELAY_SECONDS` | 요청/페이지 간 최소 딜레이(초). 대상 서버 부하·IP 차단 완화. 기본 1. 단과대별 오버라이드는 DB 메타데이터 테이블 또는 ConfigMap/리로드 가능 소스로 설계(재시작 없이 변경 가능). | 3단계 (선택) |
+| `CELERY_WORKER_PREFETCH_MULTIPLIER` | 워커 prefetch 배수. 기본 1. 짧은 태스크 많으면 2~4로 조정. **-O fair**와 함께 사용. | 3단계 (선택) |
 | `JWT_SECRET` | JWT 서명용 비밀키 (강한 랜덤 문자열). RS256 사용 시 불필요. | 2단계 Auth 후 (HS256 시) |
 | `JWT_PRIVATE_KEY_PEM` | JWT RS256 개인키 PEM(한 줄로 `\n` 포함 가능). RS256 사용 시 `JWT_PUBLIC_KEY_PEM`과 쌍으로 필수. | 2단계 Auth (RS256 선택 시) |
 | `JWT_PUBLIC_KEY_PEM` | JWT RS256 공개키 PEM. 검증 서비스는 공개키만 보유하면 됨. | 2단계 Auth (RS256 선택 시) |
@@ -391,7 +394,7 @@ Private Key 내용을 `JWT_PRIVATE_KEY_PEM`, Public Key 내용을 `JWT_PUBLIC_KE
 
 - **새 서비스** 추가. 같은 repo 사용, **Dockerfile**로 빌드.
 - **Settings → Build**: Builder **Dockerfile** 선택. 경로 예: `./Dockerfile.worker` 또는 `./Dockerfile`.
-- **Settings → Deploy** → **Start Command**: `celery -A app.worker worker -l info --concurrency=1` (OOM 방지: 동시 브라우저 개수 제한.)  
+- **Settings → Deploy** → **Start Command**: `celery -A app.core.celery_app:app worker -l info -O fair --concurrency=1` (OOM 방지: 동시 브라우저 개수 제한. **-O fair** 필수: Fair Scheduling으로 I/O Bound 크롤 태스크 분배.)  
   Linux에서는 기본 `--pool=prefork`(자식 프로세스마다 DB 풀 1개). Windows는 `--pool=solo` 필수. 연결 수는 [DB 연결 수 및 용량 계획](#db-연결-수-및-용량-계획) 참고.
 - Dockerfile에 **반드시** 포함: `RUN playwright install --with-deps chromium`. Playwright 실행 시 `--no-sandbox`, `--disable-dev-shm-usage` 옵션 사용(ROADMAP 3단계 참고).
 

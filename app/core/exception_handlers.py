@@ -9,6 +9,8 @@ from fastapi.exceptions import HTTPException, RequestValidationError
 from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.responses import JSONResponse
 
+from app.core.network import InvalidForwardedHeaderError
+
 logger = logging.getLogger(__name__)
 
 
@@ -17,6 +19,17 @@ async def validation_exception_handler(
 ) -> JSONResponse:
     """Pydantic 검증 오류. 공통 인터페이스: (request, exc) -> JSONResponse."""
     return await request_validation_exception_handler(request, exc)
+
+
+async def invalid_forwarded_header_handler(
+    request: Request, exc: InvalidForwardedHeaderError
+) -> JSONResponse:
+    """X-Forwarded-For 규격 이탈. 400 Bad Request, 요청 Drop (fallback 금지)."""
+    logger.warning("Invalid X-Forwarded-For: %s (request_id=%s)", exc, getattr(request.state, "request_id", None))
+    return JSONResponse(
+        status_code=400,
+        content={"detail": "Invalid X-Forwarded-For header", "code": "INVALID_FORWARDED_HEADER"},
+    )
 
 
 async def httpx_error_handler(request: Request, exc: httpx.HTTPError) -> JSONResponse:

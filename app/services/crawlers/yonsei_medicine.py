@@ -12,6 +12,7 @@ from requests.exceptions import RequestException
 
 from app.core.crawler_config import CRAWLER_HEADERS
 from app.core.crawl_http import HtmlTooLargeError, fetch_html, fetch_html_async
+from app.services.crawlers.base import ScrapeResult
 
 logger = logging.getLogger(__name__)
 
@@ -242,7 +243,7 @@ def scrape_medicine_detail(url):
                         attachment_names_med.add(fname)
                         attachments.append(fname)
 
-        return title, date, content_html, images, attachments
+        return ScrapeResult(title, date, content_html, images, attachments)
 
     except RequestException:
         raise
@@ -365,7 +366,7 @@ async def scrape_medicine_detail_async(client: httpx.AsyncClient, url: str):
                     if fname and fname not in attachment_names_med_async:
                         attachment_names_med_async.add(fname)
                         attachments.append(fname)
-        return title, date, content_html, images, attachments
+        return ScrapeResult(title, date, content_html, images, attachments)
     except Exception as e:
         logger.exception("scrape_medicine_detail_async error url=%s", url)
         raise

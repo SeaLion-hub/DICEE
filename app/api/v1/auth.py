@@ -1,6 +1,5 @@
 """Auth API. 구글 OAuth + JWT."""
 
-import ipaddress
 import logging
 
 import httpx
@@ -11,6 +10,7 @@ from app.core.api_rate_limit import check_rate_limit
 from app.core.config import settings
 from app.core.database import get_db
 from app.core.deps import get_google_key_fetcher, get_httpx_client, get_redis_blocklist
+from app.core.network import get_client_ip
 from app.core.redis import BlocklistUnavailableError
 from app.schemas.auth import RefreshTokenPayload, TokenPayload, TokenResponse
 from app.services.auth_service import (
@@ -65,48 +65,6 @@ async def get_current_user_id_and_jti(
         raise HTTPException(status_code=401, detail="Invalid or expired token") from None
 
 
-# X-Forwarded-For 역순 훑기: 최대 IP 개수. 초과 시 request.client.host 사용.
-_XFF_MAX_IPS = 32
-
-# RFC 1918 사설 대역 + IPv6 private/loopback. 후보 IP가 여기 있으면 클라이언트 IP로 사용하지 않고 fallback.
-def _is_private_ip(ip: str) -> bool:
-    if not ip or not ip.strip():
-        return True
-    try:
-        addr = ipaddress.ip_address(ip.strip())
-    except ValueError:
-        # 파싱 실패 시 보수적으로 private 처리하여 fallback을 사용.
-        return True
-    if addr.is_private or addr.is_loopback:
-        return True
-    return False
-
-
-def _client_ip_from_request(request: Request) -> str | None:
-    """
-    클라이언트 IP. 역순 훑기: X-Forwarded-For를 오른쪽→왼쪽으로 훑어 신뢰 목록에 없는 첫 IP 채택.
-    직전 피어가 trusted가 아니면 request.client.host만 사용. RFC 1918 후보는 fallback.
-    """
-    if not request.client:
-        return None
-    fallback = request.client.host
-    trusted = settings.trusted_proxy_ips_set
-    if request.client.host not in trusted:
-        return fallback
-    forwarded = request.headers.get("x-forwarded-for")
-    if not forwarded or not forwarded.strip():
-        return fallback
-    parts = [p.strip() for p in forwarded.split(",") if p.strip()]
-    if len(parts) > _XFF_MAX_IPS:
-        return fallback
-    for ip in reversed(parts):
-        if ip not in trusted:
-            if _is_private_ip(ip):
-                return fallback
-            return ip
-    return parts[0] if parts else fallback
-
-
 @router.post("/google", response_model=TokenResponse)
 async def post_google_auth(
     request: Request,
@@ -120,7 +78,7 @@ async def post_google_auth(
     code를 받아 검증 후 Access/Refresh JWT 반환.
     외부 API 장애(타임아웃 등) → 503, 클라이언트 인증 오류 → 400.
     """
-    client_ip = _client_ip_from_request(request) or "unknown"
+    client_ip = get_client_ip(request) or "unknown"
     identifier = f"auth_google:{client_ip}"
     allowed = await check_rate_limit(
         redis_rate,
@@ -170,7 +128,7 @@ async def post_refresh(
     Refresh 토큰으로 새 Access/Refresh JWT 발급.
     type=refresh, token_version 검증 후 새 쌍 반환. 무효화된 토큰 시 401.
     """
-    client_ip = _client_ip_from_request(request) or "unknown"
+    client_ip = get_client_ip(request) or "unknown"
     identifier = f"auth_refresh:{client_ip}"
     allowed = await check_rate_limit(
         redis_rate,

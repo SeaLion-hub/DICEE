@@ -100,6 +100,52 @@ def test_check_rate_limit_inmemory_window(monkeypatch):
     assert results == [True, True, True, False]
 
 
+def test_get_client_ip_no_trusted_proxy_uses_client_host(monkeypatch):
+    """직전 피어가 trusted가 아니면 X-Forwarded-For 무시하고 request.client.host 반환."""
+    from app.core.config import settings
+    from app.core.network import get_client_ip
+
+    monkeypatch.setattr(settings, "trusted_proxy_ips", "")
+    # client.host가 trusted에 없으면 항상 fallback
+    class _Req:
+        client = type("_C", (), {"host": "1.2.3.4"})()
+        headers = {"x-forwarded-for": "10.0.0.1, 5.6.7.8"}
+
+    assert get_client_ip(_Req()) == "1.2.3.4"
+
+
+def test_get_client_ip_trusted_proxy_invalid_header_raises(monkeypatch):
+    """신뢰 프록시 경유 시 X-Forwarded-For에 비IP 문자열이 있으면 InvalidForwardedHeaderError → 400."""
+    from app.core.config import settings
+    from app.core.network import InvalidForwardedHeaderError, get_client_ip
+
+    monkeypatch.setattr(settings, "trusted_proxy_ips", "10.0.0.1")
+
+    class _Req:
+        client = type("_C", (), {"host": "10.0.0.1"})()
+        headers = {"x-forwarded-for": "10.0.0.1, not-an-ip"}
+
+    with pytest.raises(InvalidForwardedHeaderError):
+        get_client_ip(_Req())
+
+
+def test_invalid_forwarded_header_returns_400(client, monkeypatch):
+    """InvalidForwardedHeaderError 발생 시 앱이 400 Bad Request를 반환한다."""
+    from app.core.config import settings
+
+    # Starlette TestClient 기본 client.host는 "testclient". trusted로 두고 잘못된 X-Forwarded-For 주입
+    monkeypatch.setattr(settings, "trusted_proxy_ips", "testclient")
+
+    response = client.post(
+        "/v1/auth/google",
+        json={"code": "x", "redirect_uri": "https://example.com/cb"},
+        headers={"x-forwarded-for": "testclient, invalid-ip-here"},
+    )
+    assert response.status_code == 400
+    data = response.json()
+    assert data.get("code") == "INVALID_FORWARDED_HEADER"
+
+
 def test_check_crawl_trigger_secret_valid_and_invalid(monkeypatch):
     """check_crawl_trigger_secret가 올바른/잘못된 시크릿에 대해 예외를 올바르게 처리한다."""
     from app.core.config import settings

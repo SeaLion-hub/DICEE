@@ -38,6 +38,7 @@ from app.services.crawl_policy import (
     PARSER_FAILURE_RATIO_THRESHOLD,
 )
 from app.core.crawler_config import COLLEGE_CODE_TO_MODULE, CRAWLER_CONFIG, get_crawler, get_crawler_async
+from app.services.crawlers.base import ScrapeResult
 from app.core.storage import upload_notice_html
 from app.repositories.college_repository import (
     get_by_external_id as get_college_by_external_id,
@@ -303,8 +304,8 @@ async def crawl_college(session: AsyncSession, college_code: str) -> int:
 
 def _scrape_one_sync(
     post: dict, scrape_fn: Callable
-) -> tuple[dict, str, tuple | None, BaseException | None]:
-    """워커용: scrape_fn(detail_url) 호출. (post, detail_url, data, exc) 반환. data는 (title, date_str, html_content, images, attachments) 또는 None."""
+) -> tuple[dict, str, ScrapeResult | None, BaseException | None]:
+    """워커용: scrape_fn(detail_url) 호출. (post, detail_url, data, exc) 반환. data는 ScrapeResult 또는 None."""
     detail_url = post.get("url") or ""
     try:
         data = scrape_fn(detail_url)
@@ -332,7 +333,7 @@ def _collect_payloads_sync(
     consecutive_parser_failures = 0
     remaining = deque(links)
 
-    def process_result(post: dict, detail_url: str, data: tuple | None, exc: BaseException | None) -> dict | None:
+    def process_result(post: dict, detail_url: str, data: ScrapeResult | None, exc: BaseException | None) -> dict | None:
         nonlocal attempted, parser_failures, consecutive_parser_failures
         attempted += 1
         if exc is not None:
@@ -376,7 +377,8 @@ def _collect_payloads_sync(
                 return None
             raise exc
         consecutive_parser_failures = 0
-        title, date_str, html_content, images, attachments = data
+        title, date_str, html_content = data.title, data.date_str, data.html_content
+        images, attachments = data.images, data.attachments
         # dedupe를 위해 external_id를 먼저 계산해 중복이면 HTML 업로드 자체를 건너뛴다.
         external_id = post.get("no") or _external_id_from_url(detail_url)
         if external_id in seen:
@@ -471,7 +473,7 @@ async def _collect_payloads_async(
     consecutive_parser_failures = 0
     remaining = deque(links)
 
-    async def fetch_one(post: dict) -> tuple[dict, str, tuple | None, BaseException | None]:
+    async def fetch_one(post: dict) -> tuple[dict, str, ScrapeResult | None, BaseException | None]:
         async with sem:
             detail_url = post.get("url") or ""
             await rate_limiter.wait_async(host_from_url(detail_url) or "_")
@@ -567,7 +569,8 @@ async def _collect_payloads_async(
                         )
                     continue
                 consecutive_parser_failures = 0
-                title, date_str, html_content, images, attachments = data
+                title, date_str, html_content = data.title, data.date_str, data.html_content
+                images, attachments = data.images, data.attachments
                 # dedupe를 위해 external_id를 먼저 계산해 중복이면 HTML 업로드 자체를 건너뛴다.
                 external_id = post.get("no") or _external_id_from_url(detail_url)
                 if external_id in seen:
