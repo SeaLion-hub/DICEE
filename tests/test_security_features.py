@@ -55,6 +55,44 @@ def test_crawl_stats_masks_error_message(client, monkeypatch):
     assert run["has_error"] is True
 
 
+def test_crawl_stats_invalid_secret_logs_auth_failure(client, monkeypatch):
+    """GET /internal/crawl-stats에 잘못된 시크릿으로 요청 시 _log_internal_auth_failure가 호출된다."""
+    from app.api import internal as internal_module
+    from app.core.config import settings
+    from app.core.database import get_db
+    from app.main import app
+
+    monkeypatch.setattr(settings, "crawl_trigger_secret", SecretStr("correct-secret"))
+    log_calls = []
+
+    def _spy_log_internal_auth_failure(request, reason: str, error=None):
+        log_calls.append({"reason": reason, "error": error})
+
+    monkeypatch.setattr(
+        internal_module,
+        "_log_internal_auth_failure",
+        _spy_log_internal_auth_failure,
+    )
+
+    async def _fake_get_db():
+        class _DummySession:
+            ...
+
+        yield _DummySession()
+
+    app.dependency_overrides[get_db] = _fake_get_db
+    try:
+        response = client.get(
+            "/internal/crawl-stats",
+            headers={"X-Crawl-Trigger-Secret": "wrong-secret"},
+        )
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+    assert response.status_code == 401
+    assert len(log_calls) == 1
+    assert log_calls[0]["reason"] == "invalid_or_missing_secret"
+
+
 def test_auth_google_rate_limit_returns_429(client, monkeypatch):
     """Rate limiter가 차단(True→False)일 때 /v1/auth/google이 429를 반환한다."""
     from app.api.v1 import auth as auth_module

@@ -243,7 +243,7 @@ async def post_trigger_crawl(
             claimed
             and redis_client is not None
             and key_stripped
-            and 200 <= status_code < 500
+            and status_code == 200
             and bool(out)
         )
         if should_cache:
@@ -284,19 +284,7 @@ async def get_crawl_stats(
             status_code=429,
             detail="Too many internal stats requests, please try again later.",
         )
-    try:
-        check_crawl_trigger_secret(x_crawl_trigger_secret, authorization)
-    except CrawlTriggerNotConfiguredError as e:
-        # Request 객체는 Depends로 주입되지 않으므로 로깅 없이 HTTP 오류만 변환
-        raise HTTPException(
-            status_code=503,
-            detail="Crawl trigger not configured (CRAWL_TRIGGER_SECRET missing)",
-        ) from None
-    except InvalidCrawlTriggerSecretError:
-        raise HTTPException(
-            status_code=401,
-            detail="Invalid or missing crawl trigger secret",
-        ) from None
+    _authorize_internal_trigger(request, x_crawl_trigger_secret, authorization)
     runs = await get_recent_crawl_runs(session, limit=limit)
     sanitized: list[dict] = []
     for run in runs:
