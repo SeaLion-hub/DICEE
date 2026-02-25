@@ -98,7 +98,13 @@ def test_auth_google_rate_limit_returns_429(client, monkeypatch):
     from app.api.v1 import auth as auth_module
 
     async def _deny_rate_limit(
-        _client, *, identifier: str, max_requests: int, window_seconds: int, require_redis: bool = False, **kwargs: object
+        _client,
+        *,
+        identifier: str,
+        max_requests: int,
+        window_seconds: int,
+        require_redis: bool = False,
+        **kwargs: object,
     ) -> bool:
         return False
 

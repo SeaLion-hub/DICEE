@@ -173,6 +173,7 @@ Celery Sync 풀에는 **대기 시간 상한**(`pool_timeout`)과 **유휴 연�
 
 ## Go-Live 검증 (부하 테스트·장애 훈련)
 
+머지/배포 Go/No-Go 판정은 [RELEASE_GATE](RELEASE_GATE.md)(P0·P1 체크·필수 검증 커맨드) 기준으로 수행한다.  
 베타 → 프로덕션 전환 전 아래 검증을 수행한다.
 
 ### 통과 기준 (공통)

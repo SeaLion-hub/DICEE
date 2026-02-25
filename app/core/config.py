@@ -185,7 +185,7 @@ class Settings(BaseSettings):
     # Redis 소켓/연결 타임아웃(초). 풀 포화·장애 시 무한 대기 방지.
     redis_socket_timeout: float = Field(5.0, ge=1.0, le=60.0)
     redis_socket_connect_timeout: float = Field(2.0, ge=0.5, le=30.0)
-    # API 레이트리밋: Redis 미설정/장애 시 True면 503(fail-closed), False면 인메모리 fallback(멀티 인스턴스 시 방어력 감소).
+    # API 레이트리밋: Redis 미설정/장애 시 True면 503(fail-closed), False면 인메모리 fallback.
     api_rate_limit_require_redis: bool = Field(
         False,
         description="True면 Redis 없거나 장애 시 레이트리밋 검사 대신 503 반환. 멀티 인스턴스 운영 시 True 권장.",

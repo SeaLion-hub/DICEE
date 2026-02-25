@@ -65,7 +65,7 @@ def get_client_ip(request: Request) -> str | None:
         if ip not in trusted:
             if _is_private_ip(ip):
                 raise InvalidForwardedHeaderError(
-                    "X-Forwarded-For contains private IP from untrusted position; rejecting to prevent rate-limit abuse."
+                    "X-Forwarded-For private IP from untrusted position; reject to prevent rate-limit abuse."
                 )
             return ip
     return parts[0] if parts else fallback

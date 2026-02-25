@@ -43,7 +43,7 @@ _db_holder = _DbHolder()
 # verify_db_connection()에서 조회한 DB max_connections. check_pool_budget 오버라이드용.
 _resolved_max_connections: int | None = None
 
-# 프로파일 R (권장 풀 크기 참고용). 예산 검사는 실제 설정값(settings) 사용. DEPLOYMENT.md / docs/decisions/database-pool-capacity.md.
+# 프로파일 R (권장 풀 크기 참고용). 예산 검사는 settings 사용. DEPLOYMENT.md, docs/decisions/database-pool-capacity.md.
 POOL_PROFILE_R = (4, 6, 2, 0)  # (P_async, O_async, P_sync, O_sync)
 
 

@@ -1,4 +1,4 @@
-﻿# RELEASE GATE (P0/P1) - DICEE-1
+# RELEASE GATE (P0/P1) - DICEE-1
 
 목적: "문제가 0개"가 아니라, 운영 리스크 허용선 이하인지로 머지/배포를 결정한다.
 
@@ -39,8 +39,8 @@
 - `pytest -q`
 - `ruff check app tests`
 - `mypy app`
-- `alembic upgrade head` (staging DB)
-- 스모크 테스트
+- `alembic upgrade head` (staging DB. staging DB 설정·연결은 [DEPLOYMENT](DEPLOYMENT.md) "로컬 개발 참고"·Railway Variables 참고.)
+- **스모크 테스트**: 아래 엔드포인트 케이스로 핵심 경로가 기동 후 정상/장애 시 의도대로 동작하는지 최소 검증.
 - `POST /internal/trigger-crawl` 성공/부분실패/전체실패 케이스
 - `POST /v1/auth/google`, `/v1/auth/refresh`, `/v1/auth/logout` 정상/장애 케이스
 - `/ready`, `/health`, `/internal/metrics` 접근 제어 케이스
@@ -60,3 +60,12 @@
 - "이슈가 더 나오지 않을 때까지" 반복하지 않는다.
 - 컷라인 재협상은 배포 전 1회만 허용한다.
 - 미완료 P1은 반드시 이슈 트래커 티켓 번호로 연결한다.
+
+---
+
+## 참고
+
+| 문서 | 용도 |
+|------|------|
+| [ROADMAP](ROADMAP.md) | 현재 마일스톤·전략. 배포 전 단계 정합성 확인. |
+| [DEPLOYMENT](DEPLOYMENT.md) | Railway·환경변수·staging DB·Go-Live 검증. |
