@@ -70,13 +70,16 @@ async def _check_rate_limit_inmemory(
                 if id_ in counts and counts[id_][0] == ws:
                     del counts[id_]
 
+        was_new = identifier not in counts
         window_start, count = counts.get(identifier, (now, 0))
-        if now - window_start >= window_seconds:
+        window_reset = now - window_start >= window_seconds
+        if window_reset:
             window_start = now
             count = 0
         count += 1
         counts[identifier] = (window_start, count)
-        heapq.heappush(heap, (window_start, identifier))
+        if was_new or window_reset:
+            heapq.heappush(heap, (window_start, identifier))
         return count <= max_requests
 
 

@@ -15,7 +15,6 @@ from redis.asyncio import Redis as RedisAsyncio
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.core.database import transaction
 from app.core.ip_hmac import compute_ip_hmac
 from app.core.redis import add_access_to_blocklist, is_access_blocked
 from app.repositories.login_audit_repository import create_login_audit
@@ -307,6 +306,7 @@ def _allowed_redirect_uris() -> set[str]:
 
 
 async def google_login(
+    session: AsyncSession,
     code: str,
     redirect_uri: str | None = None,
     *,
@@ -320,6 +320,7 @@ async def google_login(
     2. code → 구글 토큰 교환
     3. id_token JWKS 검증 후 프로필 추출, sub 필수(누락 시 AuthError)
     4. User upsert, JWT 발급
+    트랜잭션 경계는 호출자(라우터)가 소유. session은 Depends(get_db)로 주입받아 사용.
     """
     allowed = _allowed_redirect_uris()
     if allowed:
@@ -345,55 +346,34 @@ async def google_login(
 
     user_base = UserBase(email=email, name=name, profile_json=None)
 
-    async with transaction() as session:
-        user = await upsert_by_provider_uid(
-            session, "google", provider_user_id, user_base
+    user = await upsert_by_provider_uid(
+        session, "google", provider_user_id, user_base
+    )
+
+    if client_ip:
+        ip_hmac_val, ip_hmac_key_version = compute_ip_hmac(client_ip)
+        await create_login_audit(
+            session,
+            ip_hmac=ip_hmac_val,
+            ip_hmac_key_version=ip_hmac_key_version,
+            user_id=user.id,
+            provider="google",
         )
 
-        if client_ip:
-            ip_hmac_val, ip_hmac_key_version = compute_ip_hmac(client_ip)
-            await create_login_audit(
-                session,
-                ip_hmac=ip_hmac_val,
-                ip_hmac_key_version=ip_hmac_key_version,
-                user_id=user.id,
-                provider="google",
-            )
-
-        version = getattr(user, "refresh_token_version", 0)
-        access_token, refresh_token = create_jwt_pair(user.id, token_version=version)
-        return TokenResponse(
-            access_token=access_token,
-            refresh_token=refresh_token,
-            token_type="bearer",
-            expires_in=settings.jwt_access_expire_seconds,
-        )
+    version = getattr(user, "refresh_token_version", 0)
+    access_token, refresh_token = create_jwt_pair(user.id, token_version=version)
+    return TokenResponse(
+        access_token=access_token,
+        refresh_token=refresh_token,
+        token_type="bearer",
+        expires_in=settings.jwt_access_expire_seconds,
+    )
 
 
-async def logout_user(
-    user_id: uuid.UUID,
-    *,
-    access_jti: str | None = None,
-    ttl_seconds: int | None = None,
-    redis_blocklist_client: RedisAsyncio | None = None,
-) -> None:
+async def logout_user(session: AsyncSession, user_id: uuid.UUID) -> None:
     """
-    로그아웃: DB 선행(Refresh 무효화) 후 Redis Blocklist 등록.
-    순서 보장: DB commit 후 Redis. Redis 실패 시 예외를 발생시켜 클라이언트 재시도 가능하게 함.
-    DB는 이미 반영되므로 재시도 시 Refresh는 이미 무효; Blocklist만 재등록 시도.
+    로그아웃 DB 단계만 수행: Refresh 무효화(refresh_token_version 증가).
+    호출자가 반드시 session.commit() 후 Redis Blocklist를 시도해야 함.
+    순서: logout_user → commit → blocklist. 그래야 Redis 실패 시에도 DB는 이미 확정되어 재시도 시 Blocklist만 재등록.
     """
-    async with transaction() as session:
-        await revoke_refresh_tokens_for_user(session, user_id)
-    if redis_blocklist_client and access_jti and ttl_seconds and ttl_seconds > 0:
-        try:
-            await add_access_to_blocklist(
-                redis_blocklist_client, access_jti, ttl_seconds
-            )
-        except Exception as e:
-            logger.warning(
-                "logout_user: blocklist add failed (jti=%s); refresh already invalidated. Re-raise for client retry: %s",
-                access_jti,
-                e,
-                exc_info=True,
-            )
-            raise
+    await revoke_refresh_tokens_for_user(session, user_id)

@@ -213,29 +213,58 @@ def test_check_crawl_trigger_secret_valid_and_invalid(monkeypatch):
 
 
 def test_logout_blocklist_unavailable_returns_503(client, monkeypatch):
-    """로그아웃 시 Blocklist(Redis) 불가 시 503을 반환한다."""
+    """로그아웃 시 DB commit 후 Blocklist(Redis) 실패하면 503. DB는 이미 확정되어 재시도 시 Blocklist만 재등록."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from fastapi import Request
+
     from app.api.v1.auth import get_current_user_id_and_jti
+    from app.core.database import get_db
+    from app.core.deps import get_redis_blocklist
     from app.core.redis import BlocklistUnavailableError
     from app.main import app
 
     user_id = uuid.uuid4()
     jti = "test-jti"
+    # 이 테스트 전용 호출 로그 — 동일 요청 경로에서 commit 선행 검증용.
+    session_call_log: list[str] = []
 
     async def _fake_get_current_user_id_and_jti():
         return (user_id, jti)
 
-    async def _logout_raise_blocklist_unavailable(*args, **kwargs):
+    def _fake_get_redis_blocklist():
+        return MagicMock()
+
+    async def _get_db_tracking(request: Request):
+        session_call_log.clear()
+        session = MagicMock()
+        session.commit = AsyncMock(side_effect=lambda: session_call_log.append("commit"))
+        session.rollback = AsyncMock(side_effect=lambda: session_call_log.append("rollback"))
+        session.execute = AsyncMock(return_value=None)
+        yield session
+
+    async def _noop_logout(session, user_id):
+        return
+
+    async def _add_access_raise_blocklist_unavailable(*args, **kwargs):
         raise BlocklistUnavailableError("Blocklist temporarily unavailable")
 
     from app.api.v1 import auth as auth_module
 
     app.dependency_overrides[get_current_user_id_and_jti] = _fake_get_current_user_id_and_jti
-    monkeypatch.setattr(auth_module, "logout_user", _logout_raise_blocklist_unavailable)
+    app.dependency_overrides[get_redis_blocklist] = _fake_get_redis_blocklist
+    app.dependency_overrides[get_db] = _get_db_tracking
+    monkeypatch.setattr(auth_module, "logout_user", _noop_logout)
+    monkeypatch.setattr(auth_module, "add_access_to_blocklist", _add_access_raise_blocklist_unavailable)
     try:
         response = client.post("/v1/auth/logout")
         assert response.status_code == 503
         data = response.json()
         assert "retry" in data.get("detail", "").lower()
+        # 트랜잭션 순서: commit이 선행된 뒤 blocklist 실패로 503. 회귀 시 commit 미호출로 로그 비어 있음.
+        assert "commit" in session_call_log, "logout must commit DB before attempting blocklist"
     finally:
         app.dependency_overrides.pop(get_current_user_id_and_jti, None)
+        app.dependency_overrides.pop(get_redis_blocklist, None)
+        app.dependency_overrides.pop(get_db, None)
 

@@ -61,7 +61,12 @@ def create_or_update_crawl_run_sync(
     계약: id당 최대 1행. 조회는 id 단독 사용(복합 PK이지만 현재 생성 전략상 1행만 존재).
     """
     now = datetime.now(UTC)
-    existing = session.execute(select(CrawlRun).where(CrawlRun.id == run_id).limit(1)).scalar_one_or_none()
+    existing = session.execute(
+        select(CrawlRun)
+        .where(CrawlRun.id == run_id)
+        .order_by(CrawlRun.started_at.desc())
+        .limit(1)
+    ).scalar_one_or_none()
     if existing:
         existing.status = CrawlRunStatus.RUNNING.value
         existing.notices_upserted = 0
@@ -98,7 +103,12 @@ def update_crawl_run_sync(
     run_id로 crawl_runs 1건 갱신 (동기, 워커용).
     계약: id 단독 조회. run_id당 1행 전제.
     """
-    row = session.execute(select(CrawlRun).where(CrawlRun.id == run_id).limit(1)).scalar_one_or_none()
+    row = session.execute(
+        select(CrawlRun)
+        .where(CrawlRun.id == run_id)
+        .order_by(CrawlRun.started_at.desc())
+        .limit(1)
+    ).scalar_one_or_none()
     if not row:
         return None
     if finished_at is not None:

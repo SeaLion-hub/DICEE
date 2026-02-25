@@ -117,6 +117,7 @@ def get_resolved_max_connections() -> int | None:
 
 
 # SessionScope를 통해서만 set/reset. 직접 _session_context.set/reset 호출 금지.
+# 요청 경로: Depends(get_db)로 세션 주입 후 서비스에 인자로 전달(권장). 비요청 경로(Celery 등): run_in_session만 사용.
 _session_context: ContextVar[AsyncSession | None] = ContextVar(
     "session_context", default=None
 )

@@ -32,6 +32,7 @@ from app.core.redis import (
     try_claim_trigger_idempotency,
 )
 from app.core import metrics
+from app.core.network import get_client_ip
 from app.repositories.crawl_run_repository import get_recent_crawl_runs
 
 router = APIRouter(prefix="/internal", tags=["internal"])
@@ -297,12 +298,18 @@ async def get_crawl_stats(
 
 
 def _metrics_allowed_client_ip(request: Request) -> bool:
-    """METRICS_ALLOWED_IPS가 설정된 경우 해당 IP만 허용. 미설정(빈 값) 시 모든 IP 차단(fail-closed)."""
+    """
+    METRICS_ALLOWED_IPS가 설정된 경우 해당 IP만 허용. 미설정(빈 값) 시 모든 IP 차단(fail-closed).
+    프록시 환경: get_client_ip 사용으로 X-Forwarded-For + trusted_proxy 검사 후 실제 클라이언트 IP로
+    allowlist 검사. request.client.host만 쓰면 프록시 IP 하나로 통과되어 외부 트래픽이 우회할 수 있음.
+    """
     allowed_ips_str = getattr(settings, "metrics_allowed_ips", "") or ""
     if not allowed_ips_str.strip():
         return False
     allowed = {ip.strip() for ip in allowed_ips_str.split(",") if ip.strip()}
-    client_ip = request.client.host if request and request.client else ""
+    client_ip = get_client_ip(request)
+    if client_ip is None:
+        return False
     return client_ip in allowed
 
 
