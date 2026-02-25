@@ -35,6 +35,12 @@ app.conf.update(
     task_acks_late=True,  # 완료 후 ack. 크래시 시 재전달 가능.
     task_reject_on_worker_lost=True,  # 워커 강제 종료 시 메시지 반환해 재큐.
     worker_prefetch_multiplier=1,  # 한 워커가 한 번에 하나의 태스크만 prefetch.
+    beat_schedule={
+        "close-stale-crawl-runs": {
+            "task": "app.services.tasks.close_stale_crawl_runs_task",
+            "schedule": 900.0,  # 15분마다. CRAWL_RUN_STALE_SECONDS보다 짧게 권장.
+        },
+    },
 )
 
 # rediss://(TLS)일 때 SSL 옵션 적용. 인증서 검증 필수(MITM 방지).

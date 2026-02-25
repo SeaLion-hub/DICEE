@@ -11,6 +11,7 @@ from app.core.api_rate_limit import check_rate_limit
 from app.core.config import settings
 from app.core.database import get_db
 from app.core.deps import get_google_key_fetcher, get_httpx_client, get_redis_blocklist
+from app.core.redis import BlocklistUnavailableError
 from app.schemas.auth import RefreshTokenPayload, TokenPayload, TokenResponse
 from app.services.auth_service import (
     AuthError,
@@ -145,9 +146,17 @@ async def post_google_auth(
             client_ip=client_ip,
         )
     except AuthServiceUnavailableError as e:
-        raise HTTPException(status_code=503, detail=str(e)) from e
+        logger.warning("Google auth unavailable: %s", e)
+        raise HTTPException(
+            status_code=503,
+            detail="Authentication service temporarily unavailable",
+        ) from e
     except AuthError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
+        logger.warning("Google login auth error: %s", e)
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid request",
+        ) from e
 
 
 @router.post("/refresh", response_model=TokenResponse)
@@ -181,7 +190,11 @@ async def post_refresh(
     try:
         return await refresh_tokens(payload.refresh_token, session)
     except AuthError as e:
-        raise HTTPException(status_code=401, detail=str(e)) from e
+        logger.warning("Refresh token error: %s", e)
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid or expired token",
+        ) from e
 
 
 @router.post("/logout", status_code=204)
@@ -194,9 +207,15 @@ async def post_logout(
     Authorization: Bearer <access_token> 필요. 204 No Content.
     """
     user_id, jti = user_id_and_jti
-    await logout_user(
-        user_id,
-        access_jti=jti,
-        ttl_seconds=settings.jwt_access_expire_seconds,
-        redis_blocklist_client=redis_blocklist,
-    )
+    try:
+        await logout_user(
+            user_id,
+            access_jti=jti,
+            ttl_seconds=settings.jwt_access_expire_seconds,
+            redis_blocklist_client=redis_blocklist,
+        )
+    except BlocklistUnavailableError:
+        raise HTTPException(
+            status_code=503,
+            detail="Logout could not revoke token on server; please retry later.",
+        ) from None

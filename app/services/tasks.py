@@ -10,9 +10,11 @@ import time
 from celery import shared_task
 from requests.exceptions import RequestException
 
+from app.core.config import settings
 from app.core.database_sync import get_sync_session
 from app.core.metrics import CRAWL_DURATION_SECONDS, set_gauge
 from app.core.redis import release_trigger_lock_sync, renew_trigger_lock_sync
+from app.repositories.crawl_run_repository import close_stale_running_runs_sync
 from app.repositories.notice_repository import get_notice_for_ai_sync, update_ai_result_sync
 from app.services.crawl_service import run_crawl_job_sync
 
@@ -113,6 +115,20 @@ def crawl_college_task(self, college_code: str, lock_token: str | None = None):
         stop_heartbeat.set()
         if heartbeat_thread is not None:
             heartbeat_thread.join(timeout=2.0)
+
+
+@shared_task(name="app.services.tasks.close_stale_crawl_runs_task")
+def close_stale_crawl_runs_task():
+    """
+    Stale RUNNING 정리: started_at이 crawl_run_stale_seconds보다 오래된 crawl_runs를 FAILED로 닫음.
+    Celery Beat에서 주기 호출 권장(예: 15분마다). CRAWL_RUN_STALE_SECONDS로 임계값 설정.
+    """
+    older_than = getattr(settings, "crawl_run_stale_seconds", 3600.0)
+    with get_sync_session() as session:
+        count = close_stale_running_runs_sync(session, older_than)
+    if count:
+        logger.info("close_stale_crawl_runs_task: closed %d stale RUNNING run(s)", count)
+    return {"closed": count}
 
 
 @shared_task(

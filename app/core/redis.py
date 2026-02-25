@@ -53,6 +53,12 @@ class RedisLockUnavailableError(Exception):
     pass
 
 
+class BlocklistUnavailableError(Exception):
+    """Blocklist(Redis) 회로 open 또는 일시 불가. 로그아웃 등에서 호출자가 재시도/503 응답 가능."""
+
+    pass
+
+
 def _redis_pool_kwargs() -> dict:
     """Redis ConnectionPool 공통 옵션. 타임아웃·디코드."""
     return {
@@ -172,11 +178,11 @@ _blocklist_circuit = BlocklistCircuitBreaker()
 async def add_access_to_blocklist(
     client: RedisAsyncio | None, jti: str, ttl_seconds: int
 ) -> None:
-    """Access Token jti를 Blocklist에 추가. Circuit Breaker 적용. 열림 시 no-op(Fail-open)."""
+    """Access Token jti를 Blocklist에 추가. Circuit Breaker 적용. 열림 시 BlocklistUnavailableError."""
     if client is None or ttl_seconds <= 0:
         return
     if not await _blocklist_circuit._maybe_try_half_open():
-        return
+        raise BlocklistUnavailableError("Blocklist unavailable (circuit open)")
     try:
         await _add_access_to_blocklist_raw(client, jti, ttl_seconds)
         await _blocklist_circuit._record_success()
@@ -423,13 +429,13 @@ async def is_access_blocked(
 ) -> bool:
     """
     jti가 Blocklist에 있으면 True(무효). Circuit Breaker 적용.
-    열림(open) 시 Fail-open: False 반환(서명만 검증 통과).
-    Redis 장애 시: fail_closed=True면 True(인증 거부), False면 False.
+    열림(open) 시 fail_closed=True면 True(인증 거부), False면 False.
+    Redis 장애(예외) 시에도 fail_closed로 동일 결정.
     """
     if client is None:
         return False
     if not await _blocklist_circuit._maybe_try_half_open():
-        return False
+        return fail_closed
     try:
         result = await _is_access_blocked_raw(client, jti)
         await _blocklist_circuit._record_success()

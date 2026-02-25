@@ -146,6 +146,8 @@ class Settings(BaseSettings):
     ai_pipeline_enabled: bool = False
     # 요청/페이지 간 최소 딜레이(초). 대상 서버 부하·IP 차단 완화용.
     polite_delay_seconds: float = Field(1.0, ge=0.1, le=60.0)
+    # Stale RUNNING 정리: started_at이 이 값(초)보다 오래된 RUNNING을 FAILED로 닫음. 크롤 최대 소요의 2~3배 권장.
+    crawl_run_stale_seconds: float = Field(3600.0, ge=300.0, le=86400.0)
 
     # 본문 스토리지 (S3 또는 로컬). 명세: 본문은 DB가 아닌 오브젝트 스토리지, DB에는 content_url만.
     content_storage_type: str = "local"  # "s3" | "local"

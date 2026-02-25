@@ -16,6 +16,7 @@ from app.core.config import settings
 from app.core.crawler_config import COLLEGE_CODE_TO_MODULE
 from app.core.database import get_db
 from app.core.deps import get_redis_trigger_lock
+from app.core.ip_hmac import compute_ip_hmac
 from app.core.internal_auth import (
     CrawlTriggerNotConfiguredError,
     InvalidCrawlTriggerSecretError,
@@ -43,12 +44,14 @@ def _log_internal_auth_failure(
     reason: str,
     error: Exception | None = None,
 ) -> None:
-    """구조화 로그로 내부 인증 실패 기록. 시크릿 값은 절대 로깅하지 않는다."""
+    """구조화 로그로 내부 인증 실패 기록. 시크릿 값·평문 IP는 로깅하지 않으며, IP는 HMAC만 기록."""
     client_ip = request.client.host if request and request.client else None
+    ip_hmac_val, ip_hmac_key_version = compute_ip_hmac(client_ip or "")
     request_id = getattr(request.state, "request_id", None) if request else None
     extra = {
         "path": getattr(request.url, "path", None) if request else None,
-        "client_ip": client_ip,
+        "ip_hmac": ip_hmac_val or "(no key)",
+        "ip_hmac_key_version": ip_hmac_key_version,
         "request_id": request_id,
         "reason": reason,
     }

@@ -19,7 +19,11 @@ from app.core.database import transaction
 from app.core.ip_hmac import compute_ip_hmac
 from app.core.redis import add_access_to_blocklist, is_access_blocked
 from app.repositories.login_audit_repository import create_login_audit
-from app.repositories.user_repository import increment_refresh_token_version, upsert_by_provider_uid
+from app.repositories.user_repository import (
+    increment_refresh_token_version,
+    rotate_refresh_token_version,
+    upsert_by_provider_uid,
+)
 from app.schemas.auth import GoogleTokenResponse, TokenResponse
 from app.schemas.user import UserBase
 
@@ -68,12 +72,10 @@ async def exchange_google_code(
         logger.warning("Google token exchange network error: %s", e, exc_info=True)
         raise AuthServiceUnavailableError("Google auth temporarily unavailable") from e
     if resp.status_code != 200:
-        body_preview = (resp.text[:100] + "…") if len(resp.text) > 100 else resp.text
         logger.warning(
-            "Google token exchange failed: status=%s body_len=%d body_preview=%s",
+            "Google token exchange failed: status=%s body_len=%d",
             resp.status_code,
             len(resp.text),
-            body_preview,
         )
         raise AuthError("Invalid or expired authorization code")
 
@@ -238,21 +240,16 @@ async def refresh_tokens(
     session: AsyncSession,
 ) -> TokenResponse:
     """
-    Refresh 토큰으로 새 Access/Refresh 쌍 발급.
-    token_version이 DB의 User.refresh_token_version과 일치할 때만 발급. 불일치 시 AuthError(무효화된 토큰).
+    Refresh 토큰으로 새 Access/Refresh 쌍 발급. 1회성: 원자적 CAS 회전 후 새 version으로 발급.
+    이미 사용된 토큰 또는 버전 불일치 시 AuthError(무효화된 토큰).
     """
-    from app.repositories.user_repository import get_by_id
-
     payload = verify_refresh_token(refresh_token)
     user_id = uuid.UUID(payload["sub"])
     token_version = int(payload["token_version"])
-    user = await get_by_id(session, user_id)
-    if not user:
-        raise AuthError("User not found")
-    current_version = getattr(user, "refresh_token_version", 0)
-    if current_version != token_version:
+    new_version = await rotate_refresh_token_version(session, user_id, token_version)
+    if new_version is None:
         raise AuthError("Refresh token revoked or invalid")
-    access_token, new_refresh_token = create_jwt_pair(user.id, token_version=current_version)
+    access_token, new_refresh_token = create_jwt_pair(user_id, token_version=new_version)
     return TokenResponse(
         access_token=access_token,
         refresh_token=new_refresh_token,
