@@ -44,6 +44,7 @@ from app.services.crawl_payload import build_notice_payload, _external_id_from_u
 from app.repositories.college_repository import (
     get_by_external_id as get_college_by_external_id,
 )
+from app.core.database_sync import get_sync_session
 from app.repositories.college_repository import (
     get_by_external_id_sync as get_college_by_external_id_sync,
 )
@@ -320,6 +321,7 @@ def _collect_payloads_sync(
                     )
                     futures[executor.submit(_scrape_one_sync, next_post, scrape_fn)] = next_post
     finally:
+        # 소비자 중단 시에도 shutdown(wait=False, cancel_futures=True)로 대기 최소화. with 미사용으로 블로킹 방지.
         executor.shutdown(wait=False, cancel_futures=True)
         close_fn = getattr(rate_limiter, "close", None)
         if callable(close_fn):
@@ -512,14 +514,24 @@ def run_crawl_job_sync(
         session.commit()
         return (count, count)
     except Exception as e:
-        # 실패한 트랜잭션 초기화 → 이후 FAILED 업데이트/커밋 가능 (PendingRollbackError 방지)
+        # 실패한 트랜잭션 초기화 (PendingRollbackError 방지)
         session.rollback()
-        update_crawl_run_sync(
-            session,
-            run_id,
-            finished_at=datetime.now(UTC),
-            status=CrawlRunStatus.FAILED.value,
-            error_message=(str(e))[:2000],
-        )
-        session.commit()
+        # FAILED 기록은 새 세션/새 트랜잭션으로 분리해 원래 트랜잭션이 깨져도 실패 상태가 남도록 함
+        try:
+            with get_sync_session() as fail_session:
+                update_crawl_run_sync(
+                    fail_session,
+                    run_id,
+                    finished_at=datetime.now(UTC),
+                    status=CrawlRunStatus.FAILED.value,
+                    error_message=(str(e))[:2000],
+                )
+                fail_session.commit()
+        except Exception as record_err:
+            logger.warning(
+                "Failed to record crawl run FAILED state (run_id=%s): %s",
+                run_id,
+                record_err,
+                exc_info=True,
+            )
         raise

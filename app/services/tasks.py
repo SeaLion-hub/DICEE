@@ -131,6 +131,7 @@ def crawl_college_task(
         raise
     finally:
         set_gauge(CRAWL_DURATION_SECONDS, time.monotonic() - started_at, labels=labels)
+        # heartbeat 중지 → join → 락 해제 순서 유지(경합 창 최소화). Lua 소유권 검사로 치명적 오작동 없음.
         stop_heartbeat.set()
         if heartbeat_thread is not None:
             heartbeat_thread.join(timeout=2.0)

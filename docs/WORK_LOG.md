@@ -29,6 +29,7 @@
 
 ## 2026-02-25
 
+- [주요 결함 해결 설계 구현] **(1)** crawl_service.py: FAILED 기록을 별도 세션/트랜잭션으로 분리(PendingRollbackError·실패 상태 유실 방지). **(2)** health.py: readiness blocklist 체크 try/except, 예외 시 fail_closed 설정에 따라 판정·docstring 보강. **(3)** internal.py: get_crawl_stats에서 _authorize_internal_trigger 우선 호출(감사 추적 일원화). **(4)** api_rate_limit.py: 인메모리 fallback을 샤드 락(32) + 샤드당 만료 min-heap으로 전역 락/전체 순회 제거. **(5)** redis.py·tasks.py·crawl_service.py: 동기 Redis 싱글톤·heartbeat→락 해제 순서·ThreadPoolExecutor finally 주석·검증 반영. pytest 54 passed, 2 skipped.
 - [아키텍처·보안·확장성·가독성 개선 계획 구현] **(보안)** auth.py: IP 없을 때 레이트 리밋 키로 "unknown" 사용 금지 — get_client_ip()가 None이면 503 반환(Fail-closed). config.py: JWT 시크릿 부팅 시 Fail-Fast — fail_fast_jwt_secret_at_boot validator 추가, 모든 환경에서 jwt_secret 또는 RS256 미설정 시 부팅 실패. **(확장성)** crawl_service: seen.clear() 제거 + _BoundedSeenSet(최대 10,000개, deque 기반 evict) 도입으로 OOM 방지. 비동기 재시도 Exponential Backoff + Jitter(CRAWL_RETRY_* 상수, post_retries, asyncio.sleep) 적용. **(가독성)** crawl_policy: CrawlErrorTracker 클래스 추가(attempted/parser_failures/consecutive 캡슐화). crawl_service: _process_scrape_result 공통 함수 + _fetch_one_async 모듈 레벨 승격, sync/async 모두 CrawlErrorTracker·_process_scrape_result 사용. crawl_payload.py 신규 — build_notice_payload·_external_id_from_url 등 파싱/페이로드 빌드 분리. **(아키텍처)** config: _DatabaseConfig·_RedisConfig NamedTuple 뷰, settings.db·settings.redis property 추가. docs/decisions/config-domain-split.md ADR(마이그레이션 기한·구형 접근 하드 리밋). crawl_service: 트랜잭션 경계는 오케스트레이터만 통제 명시(run_crawl_job_sync·crawl_college_sync docstring). pytest 35 passed, 2 skipped.
 
 ---

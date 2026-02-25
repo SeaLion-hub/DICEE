@@ -321,11 +321,12 @@ async def set_trigger_idempotency_result(
         logger.warning("Trigger idempotency set failed (key=%s): %s", idempotency_key[:32], e)
 
 
+# renew_trigger_lock_sync·release_trigger_lock_sync 모두 이 싱글톤 사용. 호출마다 from_url/close 금지.
 _sync_redis_client = None
 
 
 def _get_sync_redis_client():
-    """heartbeat용 동기 Redis 클라이언트 싱글톤. 연결 churn 방지."""
+    """heartbeat·락 해제용 동기 Redis 클라이언트 싱글톤. 연결 churn 방지."""
     global _sync_redis_client
     if _sync_redis_client is None:
         import redis

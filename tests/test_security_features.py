@@ -120,8 +120,10 @@ def test_check_rate_limit_inmemory_window(monkeypatch):
     """Redis 없는 환경에서 in-memory rate limit가 윈도우 내 횟수를 제한한다."""
     from app.core import api_rate_limit
 
-    # 식별자별 상태를 깨끗하게 초기화
-    monkeypatch.setattr(api_rate_limit, "_inmemory_counts", {})
+    # 샤드별 상태 초기화 (샤드 락 + dict/heap 구조)
+    n = api_rate_limit._NUM_SHARDS
+    monkeypatch.setattr(api_rate_limit, "_shard_counts", [dict() for _ in range(n)])
+    monkeypatch.setattr(api_rate_limit, "_shard_heaps", [list() for _ in range(n)])
 
     async def _run():
         results = []

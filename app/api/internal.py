@@ -264,7 +264,9 @@ async def get_crawl_stats(
     """
     최근 크롤 실행 이력. 단과대별 last_run_at, status, notices_upserted, has_error.
     보안 키 필수. Header만 사용 (X-Crawl-Trigger-Secret 또는 Authorization: Bearer).
+    인증 실패 시 공통 _authorize_internal_trigger 로깅/응답으로 감사 추적 일관성 유지.
     """
+    _authorize_internal_trigger(request, x_crawl_trigger_secret, authorization)
     client_ip = request.client.host if request and request.client else "unknown"
     rate_identifier = f"internal_crawl_stats:{client_ip}"
     # crawl-stats는 운영자용이라 조금 더 완화된 제한을 둔다.
@@ -284,7 +286,6 @@ async def get_crawl_stats(
             status_code=429,
             detail="Too many internal stats requests, please try again later.",
         )
-    _authorize_internal_trigger(request, x_crawl_trigger_secret, authorization)
     runs = await get_recent_crawl_runs(session, limit=limit)
     sanitized: list[dict] = []
     for run in runs:
