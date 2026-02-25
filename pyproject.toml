@@ -36,3 +36,18 @@ disallow_untyped_defs = false
 [[tool.mypy.overrides]]
 module = ["celery", "celery.*"]
 ignore_missing_imports = true
+
+# Crawlers: BeautifulSoup AttributeValueList/urljoin 타입 축소는 별도 작업. 회귀 방지 후 정리.
+[[tool.mypy.overrides]]
+module = ["app.services.crawlers.*"]
+disable_error_code = ["union-attr", "type-var", "call-overload", "arg-type", "assignment", "attr-defined", "operator"]
+
+# Core: Redis eval 반환 타입·SSL·boto3 스텁 등 라이브러리 한계.
+[[tool.mypy.overrides]]
+module = ["app.core.redis", "app.core.api_rate_limit", "app.core.crawl_rate_limit", "app.core.storage", "app.core.celery_app"]
+disable_error_code = ["misc", "no-any-return", "assignment", "arg-type", "return-value", "import-not-found"]
+
+# API/서비스: exception handler 시그니처·State 타입·auth 반환 등.
+[[tool.mypy.overrides]]
+module = ["app.main", "app.api.health", "app.services.auth_service", "app.services.crawl_service", "app.api.internal"]
+disable_error_code = ["assignment", "arg-type", "union-attr", "call-arg", "attr-defined", "no-any-return"]

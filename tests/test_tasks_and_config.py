@@ -54,7 +54,6 @@ def test_production_fail_fast_requires_ip_hmac_key():
         },
         clear=False,
     ):
-        from pydantic_settings import BaseSettings, SettingsConfigDict
 
         from app.core.config import Settings
 

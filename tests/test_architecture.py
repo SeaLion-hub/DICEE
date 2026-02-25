@@ -1,14 +1,12 @@
 """아키텍처 규칙 검사. 명세: 메인 엔티티 PK는 UUID v7. CI에서 빌드 실패 강제."""
 
-import uuid
 
 import pytest
-from sqlalchemy import inspect
-from sqlalchemy.dialects.postgresql import UUID
-
 from app.models.college import College
 from app.models.notice import Notice
 from app.models.user import User
+from sqlalchemy import inspect
+from sqlalchemy.dialects.postgresql import UUID
 
 
 def _pk_type_is_uuid(model: type) -> bool:

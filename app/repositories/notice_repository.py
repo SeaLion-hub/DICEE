@@ -8,7 +8,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import select, update
+from sqlalchemy import select, tuple_, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session, defer
@@ -135,7 +135,7 @@ async def _fill_key_to_id_from_notices(
         )
     else:
         stmt = select(Notice.id, Notice.college_id, Notice.external_id).where(
-            (Notice.college_id, Notice.external_id).in_(missing)
+            tuple_(Notice.college_id, Notice.external_id).in_(missing)
         )
     result = await session.execute(stmt)
     for row in result.all():
@@ -159,7 +159,7 @@ def _fill_key_to_id_from_notices_sync(
         )
     else:
         stmt = select(Notice.id, Notice.college_id, Notice.external_id).where(
-            (Notice.college_id, Notice.external_id).in_(missing)
+            tuple_(Notice.college_id, Notice.external_id).in_(missing)
         )
     result = session.execute(stmt)
     for row in result.all():

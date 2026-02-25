@@ -199,7 +199,7 @@ async def acquire_trigger_lock(
     college별 크롤 트리거 락 획득. SET key <uuid> NX EX.
     성공 시 (True, token), 이미 잠김 시 (False, None).
     Redis 인프라 오류 시 RedisLockUnavailableError 발생.
-    client는 redis.asyncio.Redis. None이면 redis_trigger_lock_required=True 시 RedisLockUnavailableError, 아니면 (True, None).
+    client는 redis.asyncio.Redis. None이면 redis_trigger_lock_required=True 시 에러, 아니면 (True, None).
     """
     if client is None:
         if getattr(settings, "redis_trigger_lock_required", False):
@@ -288,7 +288,8 @@ async def try_claim_trigger_idempotency(
 async def get_trigger_idempotency_result(
     client: RedisAsyncio | None, idempotency_key: str, scope: str
 ) -> dict | None:
-    """동일 Idempotency-Key+scope로 이미 처리된 결과가 있으면 반환. 없으면 None. in_progress 값은 완료가 아니므로 None으로 취급하지 않고 별도 처리."""
+    """동일 Idempotency-Key+scope로 이미 처리된 결과가 있으면 반환. 없으면 None.
+    in_progress 값은 완료가 아니므로 별도 처리."""
     if client is None or not idempotency_key:
         return None
     scope_hash = _idempotency_scope_hash(scope)

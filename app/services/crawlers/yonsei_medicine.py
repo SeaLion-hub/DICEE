@@ -5,12 +5,10 @@ from typing import Any
 from urllib.parse import parse_qs, urljoin, urlparse
 
 import httpx
-import requests
 from bs4 import BeautifulSoup, Comment, Tag
 from bs4.element import PageElement
 from requests.exceptions import RequestException
 
-from app.core.crawler_config import CRAWLER_HEADERS
 from app.core.crawl_http import HtmlTooLargeError, fetch_html, fetch_html_async
 from app.services.crawlers.base import ScrapeResult
 
@@ -367,6 +365,6 @@ async def scrape_medicine_detail_async(client: httpx.AsyncClient, url: str):
                         attachment_names_med_async.add(fname)
                         attachments.append(fname)
         return ScrapeResult(title, date, content_html, images, attachments)
-    except Exception as e:
+    except Exception:
         logger.exception("scrape_medicine_detail_async error url=%s", url)
         raise

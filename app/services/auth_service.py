@@ -5,7 +5,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from functools import lru_cache
 from typing import Any
-from urllib.parse import urlparse, unquote
+from urllib.parse import unquote, urlparse
 
 import httpx
 import jwt
@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.ip_hmac import compute_ip_hmac
-from app.core.redis import add_access_to_blocklist, is_access_blocked
+from app.core.redis import is_access_blocked
 from app.repositories.login_audit_repository import create_login_audit
 from app.repositories.user_repository import (
     increment_refresh_token_version,
@@ -289,7 +289,10 @@ def _normalize_redirect_uri(uri: str) -> str:
 
 @lru_cache(maxsize=1)
 def _allowed_redirect_uris() -> set[str]:
-    """설정된 허용 redirect_uri 목록(쉼표 구분). 정규화 후 set 반환. 비어 있으면 빈 set."""
+    """
+    설정된 허용 redirect_uri 목록(쉼표 구분). 정규화 후 set 반환. 비어 있으면 빈 set.
+    P0 fail-closed: 설정값이 있는데 유효한 URI가 하나도 없으면 AuthError. 허용 목록이 비면 검증 생략하지 않음.
+    """
     raw = (settings.google_redirect_uris or "").strip()
     if not raw:
         return set()
@@ -302,6 +305,10 @@ def _allowed_redirect_uris() -> set[str]:
             result.add(_normalize_redirect_uri(u))
         except AuthError:
             continue
+    if not result:
+        raise AuthError(
+            "google_redirect_uris: no valid redirect URIs (all entries invalid or malformed). Fix configuration."
+        )
     return result
 
 
@@ -331,7 +338,7 @@ async def google_login(
         if normalized not in allowed:
             raise AuthError("redirect_uri not allowed")
     else:
-        # 허용 목록이 비어 있으면 검사 생략 (문서·주석과 동일). 프로덕션에서는 google_redirect_uris 설정 권장.
+        # 설정 미사용 시에만 검사 생략. (google_redirect_uris 비어 있음. 프로덕션에서는 설정 권장.)
         normalized = redirect_uri or "http://localhost"
     token_data = await exchange_google_code(code, normalized, http_client)
     id_token = token_data.id_token

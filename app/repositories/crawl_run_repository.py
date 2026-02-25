@@ -1,8 +1,9 @@
 """
 CrawlRun Repository. crawl_run_tasks(idempotency) + crawl_runs(run data).
 
-crawl_runs 계약: 모델은 복합 PK (id, started_at). 본 Repository는 "run_id(id)당 최대 1행"을
-전제로 조회/갱신 시 id 단독 조건을 사용함. create_or_update는 동일 id 재호출 시 기존 행 갱신만 수행.
+crawl_runs 계약: 모델은 복합 PK (id, started_at). 애플리케이션은 id당 1행만 생성.
+조회/갱신 시 id 단독 + order_by(started_at.desc()).limit(1)로 결정적 1행 사용.
+동일 id 복수 행 생성 금지(create_or_update가 기존 행 갱신만 수행).
 """
 
 import uuid

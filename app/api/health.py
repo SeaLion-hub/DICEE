@@ -37,7 +37,7 @@ async def _ping_redis(client: object | None) -> str:
     try:
         await asyncio.wait_for(client.ping(), timeout=HEALTH_REDIS_PING_TIMEOUT)
         return "ok"
-    except asyncio.TimeoutError as e:
+    except TimeoutError as e:
         logger.warning("Health Redis ping timeout: %s", e, exc_info=True)
         return "error"
     except Exception as e:
@@ -69,7 +69,7 @@ async def get_live() -> dict[str, str]:
 async def get_ready(request: Request) -> JSONResponse:
     """Readiness: DB 및 Redis(blocklist·trigger_lock) 준비 시 200. 실패 시 503.
     Fail-Open(redis_blocklist_fail_closed=False)인 경우 blocklist Redis 장애·예외만으로는 503이 아님.
-    blocklist 체크에서 예외가 나도 fail_closed 설정에 따라 readiness 판정(예외 시 fail_closed=False면 blocklist_ok=True)."""
+    blocklist 체크 예외 시 fail_closed=False면 blocklist_ok=True로 판정."""
     db_status = await _check_db(request)
     try:
         redis_blocklist = await _check_redis_blocklist(request)

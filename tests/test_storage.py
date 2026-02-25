@@ -1,4 +1,3 @@
-import hashlib
 from pathlib import Path
 
 from app.core import storage

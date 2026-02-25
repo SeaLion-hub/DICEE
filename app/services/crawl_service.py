@@ -9,42 +9,31 @@ Repository·파서는 이미 열린 세션으로 쿼리만 수행하며, 세션 
 import asyncio
 import logging
 import random
-import time
 import uuid
 from collections import deque
-from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
 from collections.abc import Callable, Iterator
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from datetime import UTC, datetime
 
+import httpx
 from bs4 import BeautifulSoup
 from requests.exceptions import RequestException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
-import httpx
-
 from app.core.config import settings
 from app.core.constants import CrawlRunStatus
 from app.core.crawl_http import HtmlTooLargeError
 from app.core.crawl_rate_limit import (
-    HostRateLimiter,
     get_host_rate_limiter_async,
     get_host_rate_limiter_sync,
     host_from_url,
 )
-from app.services.crawl_policy import (
-    CrawlErrorTracker,
-    CrawlThresholdExceeded,
-    PARSER_CONSECUTIVE_FAILURES_THRESHOLD,
-    PARSER_FAILURE_RATIO_THRESHOLD,
-)
 from app.core.crawler_config import COLLEGE_CODE_TO_MODULE, CRAWLER_CONFIG, get_crawler, get_crawler_async
-from app.services.crawlers.base import ScrapeResult
-from app.services.crawl_payload import build_notice_payload, _external_id_from_url
+from app.core.database_sync import get_sync_session
 from app.repositories.college_repository import (
     get_by_external_id as get_college_by_external_id,
 )
-from app.core.database_sync import get_sync_session
 from app.repositories.college_repository import (
     get_by_external_id_sync as get_college_by_external_id_sync,
 )
@@ -57,6 +46,12 @@ from app.repositories.notice_repository import (
     upsert_notices_bulk,
     upsert_notices_bulk_sync,
 )
+from app.services.crawl_payload import _external_id_from_url, build_notice_payload
+from app.services.crawl_policy import (
+    CrawlErrorTracker,
+    CrawlThresholdExceeded,
+)
+from app.services.crawlers.base import ScrapeResult
 
 logger = logging.getLogger(__name__)
 
@@ -128,7 +123,7 @@ async def crawl_college(session: AsyncSession, college_code: str) -> int:
 
     list_url = config["url"]
     get_links_async_fn, scrape_async_fn = get_crawler_async(module_name)
-    seen: set[str] = set()
+    seen = _BoundedSeenSet(CRAWL_SEEN_MAX_SIZE)
 
     async with httpx.AsyncClient(timeout=CRAWL_PAGE_TIMEOUT_SECONDS) as client:
         links = await get_links_async_fn(client, list_url)
@@ -225,7 +220,7 @@ def _process_scrape_result(
             )
             tracker.record_network_or_skip()
             return (None, None)
-        if isinstance(exc, (ValueError, KeyError, AttributeError, TypeError)):
+        if isinstance(exc, ValueError | KeyError | AttributeError | TypeError):
             logger.warning(
                 "scrape failed (parser): url=%s error=%s",
                 detail_url[:200] if detail_url else "",
@@ -492,7 +487,6 @@ def run_crawl_job_sync(
     반환: (upserted 개수, enqueued_ai 개수).
     트랜잭션 경계: 세션·커밋/롤백은 이 오케스트레이터에서만 통제. Repository는 전달받은 세션으로 쿼리만 수행.
     """
-    from datetime import UTC, datetime
 
     college = get_college_by_external_id_sync(session, college_code)
     if not college:

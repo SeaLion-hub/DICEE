@@ -29,7 +29,8 @@ class CrawlErrorTracker:
         self.consecutive_parser_failures += 1
         if self.consecutive_parser_failures >= PARSER_CONSECUTIVE_FAILURES_THRESHOLD:
             return CrawlThresholdExceeded(
-                f"consecutive parser failures {self.consecutive_parser_failures} >= {PARSER_CONSECUTIVE_FAILURES_THRESHOLD}",
+                f"consecutive parser failures {self.consecutive_parser_failures} "
+                f">= {PARSER_CONSECUTIVE_FAILURES_THRESHOLD}",
                 attempted=self.attempted,
                 parser_failures=self.parser_failures,
                 consecutive=self.consecutive_parser_failures,
@@ -47,7 +48,7 @@ class CrawlErrorTracker:
         self.consecutive_parser_failures = 0
 
 
-class CrawlThresholdExceeded(Exception):
+class CrawlThresholdExceeded(Exception):  # noqa: N818
     """파서 실패 비율 또는 연속 실패 횟수가 임계치를 초과함. 태스크 실패 처리."""
 
     def __init__(

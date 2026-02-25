@@ -17,7 +17,7 @@ os.environ.setdefault("GOOGLE_CLIENT_SECRET", "test-google-client-secret")
 
 # 더미 세션 호출 순서 기록 — commit/rollback/execute 순서로 트랜잭션 회귀 검증용.
 # 요청마다 _dummy_session_cm 진입 시 초기화. get_db를 override하지 않는 테스트에서 사용.
-# commit/rollback 순서를 assert하려면 테스트에서 get_db를 override하고, 세션에 붙인 로그 리스트를 검사하는 방식을 권장(예: test_logout_blocklist_unavailable_returns_503).
+# commit/rollback 순서 assert 시 get_db override 후 세션 로그 검사 권장(예: test_logout_blocklist_*).
 dummy_session_call_log: list[str] = []
 
 

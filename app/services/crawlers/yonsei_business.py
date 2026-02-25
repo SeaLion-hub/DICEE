@@ -5,11 +5,9 @@ from typing import Any
 from urllib.parse import urljoin
 
 import httpx
-import requests
 from bs4 import BeautifulSoup, Tag
 from requests.exceptions import RequestException
 
-from app.core.crawler_config import CRAWLER_HEADERS
 from app.core.crawl_http import HtmlTooLargeError, fetch_html, fetch_html_async
 from app.services.crawlers.base import ScrapeResult
 
@@ -336,6 +334,6 @@ async def scrape_business_detail_async(client: httpx.AsyncClient, url: str):
     except HtmlTooLargeError as e:
         logger.warning("scrape_business_detail_async body too large url=%s: %s", url, e)
         return ScrapeResult(None, "본문 초과", None, [], [])
-    except Exception as e:
+    except Exception:
         logger.exception("scrape_business_detail_async error url=%s", url, exc_info=True)
         raise

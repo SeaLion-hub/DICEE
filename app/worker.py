@@ -5,7 +5,6 @@ Celery 워커 진입점. app은 app.core.celery_app에서 로드. 태스크 발�
 
 import logging
 
-from app.core.celery_app import app
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)

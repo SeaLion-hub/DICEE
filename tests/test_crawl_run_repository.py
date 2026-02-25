@@ -4,13 +4,12 @@ import os
 import uuid
 
 import pytest
-from sqlalchemy import select
-
 from app.models.crawl_run import CrawlRun
 from app.repositories.crawl_run_repository import (
     create_or_update_crawl_run_sync,
     update_crawl_run_sync,
 )
+from sqlalchemy import select
 
 
 @pytest.fixture(scope="module")

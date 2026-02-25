@@ -8,6 +8,7 @@ from typing import Any, Protocol, TypedDict
 
 import httpx
 
+
 # 링크 항목: url 필수, no·title_hint 선택. 크롤러별로 추가 키 가능.
 class _LinkItemOptional(TypedDict, total=False):
     no: str

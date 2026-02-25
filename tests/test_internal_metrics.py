@@ -1,6 +1,5 @@
 """GET /internal/metrics Prometheus 노출 및 METRICS_ALLOWED_IPS 검증 (fail-closed: 미설정 시 전체 차단)."""
 
-import pytest
 
 
 def test_get_metrics_returns_403_when_empty_fail_closed(client, monkeypatch):
@@ -20,7 +19,7 @@ def test_get_metrics_returns_prometheus_text_when_allowed(client, monkeypatch):
     assert "text/plain" in response.headers.get("content-type", "")
     body = response.text
     assert body.endswith("\n")
-    lines = [l for l in body.strip().split("\n") if l.strip()]
+    lines = [line for line in body.strip().split("\n") if line.strip()]
     assert isinstance(lines, list)
 
 

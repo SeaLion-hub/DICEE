@@ -2,9 +2,8 @@
 
 from typing import cast
 
-from fastapi import Request
-
 import httpx
+from fastapi import Request
 from pyjwt_key_fetcher import AsyncKeyFetcher
 from redis.asyncio import Redis as RedisAsyncio
 

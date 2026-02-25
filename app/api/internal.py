@@ -12,17 +12,19 @@ from fastapi.responses import JSONResponse, Response
 from redis.asyncio import Redis as RedisAsyncio
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core import metrics
 from app.core.api_rate_limit import check_rate_limit
 from app.core.config import settings
 from app.core.crawler_config import COLLEGE_CODE_TO_MODULE
 from app.core.database import get_db
 from app.core.deps import get_redis_trigger_lock
-from app.core.ip_hmac import compute_ip_hmac
 from app.core.internal_auth import (
     CrawlTriggerNotConfiguredError,
     InvalidCrawlTriggerSecretError,
     check_crawl_trigger_secret,
 )
+from app.core.ip_hmac import compute_ip_hmac
+from app.core.network import get_client_ip
 from app.core.redis import (
     RedisLockUnavailableError,
     acquire_trigger_lock,
@@ -31,8 +33,6 @@ from app.core.redis import (
     set_trigger_idempotency_result,
     try_claim_trigger_idempotency,
 )
-from app.core import metrics
-from app.core.network import get_client_ip
 from app.repositories.crawl_run_repository import get_recent_crawl_runs
 
 router = APIRouter(prefix="/internal", tags=["internal"])
@@ -173,6 +173,11 @@ async def _enqueue_crawls(
             out["skipped"] = skipped
         if failed:
             out["failed"] = failed
+        # P0: enqueue가 전부 실패하면 200이 아닌 503으로 응답해 스케줄러가 장애로 인지하도록 함.
+        if codes and len(task_ids) == 0 and len(failed) > 0:
+            status_code = 503
+            out["code"] = "ALL_ENQUEUES_FAILED"
+            out["detail"] = "All crawl enqueues failed; check broker and worker logs."
     return (out, status_code)
 
 
@@ -197,8 +202,12 @@ async def post_trigger_crawl(
     """
     크롤 태스크 enqueue. 보안 키는 Header만 필수. college별 Redis 분산락(SET NX EX)으로 중복 enqueue 방지.
     Idempotency-Key 있으면 동일 키 재요청 시 202 + 캐시된 결과. 부분 실패 시에도 200으로 enqueued/skipped/failed 반환.
+    P1: 인증 후 rate-limit 적용. 식별자는 get_client_ip(프록시 대응) 사용.
     """
-    client_ip = request.client.host if request and request.client else "unknown"
+    _authorize_internal_trigger(request, x_crawl_trigger_secret, authorization)
+    client_ip = get_client_ip(request) or (
+        request.client.host if request and request.client else "unknown"
+    )
     rate_identifier = f"internal_trigger_crawl:{client_ip}"
     allowed = await check_rate_limit(
         redis_client,
@@ -216,7 +225,6 @@ async def post_trigger_crawl(
             status_code=429,
             detail="Too many internal trigger requests, please try again later.",
         )
-    _authorize_internal_trigger(request, x_crawl_trigger_secret, authorization)
 
     codes = _resolve_college_codes(college_code)
     idempotency_scope = codes[0] if len(codes) == 1 else "all"
@@ -267,9 +275,12 @@ async def get_crawl_stats(
     최근 크롤 실행 이력. 단과대별 last_run_at, status, notices_upserted, has_error.
     보안 키 필수. Header만 사용 (X-Crawl-Trigger-Secret 또는 Authorization: Bearer).
     인증 실패 시 공통 _authorize_internal_trigger 로깅/응답으로 감사 추적 일관성 유지.
+    P1: 인증 후 rate-limit. 식별자는 get_client_ip(프록시 대응) 사용.
     """
     _authorize_internal_trigger(request, x_crawl_trigger_secret, authorization)
-    client_ip = request.client.host if request and request.client else "unknown"
+    client_ip = get_client_ip(request) or (
+        request.client.host if request and request.client else "unknown"
+    )
     rate_identifier = f"internal_crawl_stats:{client_ip}"
     allowed = await check_rate_limit(
         redis_client,

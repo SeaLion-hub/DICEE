@@ -241,7 +241,9 @@ async def scrape_glc_detail_async(client: httpx.AsyncClient, url: str):
                         full_url = urljoin(url, src)
                         parsed = urllib.parse.urlparse(full_url)
                         enc_path = urllib.parse.quote(parsed.path)
-                        safe_url = urllib.parse.urlunparse((parsed.scheme, parsed.netloc, enc_path, parsed.params, parsed.query, parsed.fragment))
+                        safe_url = urllib.parse.urlunparse(
+                            (parsed.scheme, parsed.netloc, enc_path, parsed.params, parsed.query, parsed.fragment)
+                        )
                         if safe_url not in image_urls_glc_async:
                             image_urls_glc_async.add(safe_url)
                             fname = os.path.basename(parsed.path) or f"image_{idx+1}.jpg"
@@ -262,6 +264,6 @@ async def scrape_glc_detail_async(client: httpx.AsyncClient, url: str):
                     attachment_names_glc_async.add(fname)
                     attachments.append(fname)
         return ScrapeResult(title, date, content_html, images, attachments)
-    except Exception as e:
+    except Exception:
         logger.exception("scrape_glc_detail_async error url=%s", url)
         raise

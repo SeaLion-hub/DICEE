@@ -68,7 +68,7 @@ def crawl_college_task(
     lock_token: str | None = None,
     enqueued_at: float | None = None,
 ):
-    """Celery 크롤 태스크. 동기 세션·crawl_college_sync. finally에서 락 해제 보장; 장시간 실행 중 heartbeat로 TTL 갱신."""
+    """Celery 크롤 태스크. 동기 세션·crawl_college_sync. finally 락 해제; heartbeat로 TTL 갱신."""
     task_id = getattr(self.request, "id", None) or ""
     _set_task_context(str(task_id) if task_id else None, college_code)
     lock_hint = (lock_token[:8] + "…") if lock_token else "none"
@@ -163,7 +163,7 @@ def close_stale_crawl_runs_task():
 def process_notice_ai_task(self, notice_id: str):
     """
     AI 처리 태스크. FOR UPDATE SKIP LOCKED + ai_status 선점으로 동시 워커 중복 처리 방지.
-    AI_PIPELINE_ENABLED가 False면 선점·done 저장 없이 스킵(pending 유지). True일 때만 Gemini 호출 후 update_ai_result_sync.
+    AI_PIPELINE_ENABLED=False면 스킵(pending 유지). True일 때만 Gemini 호출 후 update_ai_result_sync.
     notice_id: UUID 문자열 (Celery 직렬화용).
     """
     from app.core.config import settings

@@ -1,6 +1,5 @@
 """crawl_policy: CrawlErrorTracker 임계치·CrawlThresholdExceeded 검증."""
 
-import pytest
 
 from app.services.crawl_policy import (
     PARSER_CONSECUTIVE_FAILURES_THRESHOLD,

@@ -170,6 +170,19 @@ def test_get_client_ip_trusted_proxy_invalid_header_raises(monkeypatch):
         get_client_ip(_Req())
 
 
+def test_request_id_sanitize_rejects_long_or_invalid_charset():
+    """X-Request-ID: 길이 초과·비허용 문자면 새 UUID 사용 (P2 회귀 방지)."""
+    from app.middleware.request_id import _sanitize_request_id
+
+    bad = _sanitize_request_id("../../etc/passwd")
+    assert bad != "../../etc/passwd"
+    assert len(bad) == 36 and bad.count("-") == 4
+    long_id = _sanitize_request_id("A" * 200)
+    assert len(long_id) == 36
+    valid = _sanitize_request_id("MyReq-123.ab:cd")
+    assert valid == "MyReq-123.ab:cd"
+
+
 def test_invalid_forwarded_header_returns_400(client, monkeypatch):
     """InvalidForwardedHeaderError 발생 시 앱이 400 Bad Request를 반환한다."""
     from app.core.config import settings
@@ -185,6 +198,80 @@ def test_invalid_forwarded_header_returns_400(client, monkeypatch):
     assert response.status_code == 400
     data = response.json()
     assert data.get("code") == "INVALID_FORWARDED_HEADER"
+
+
+def test_trigger_crawl_all_enqueues_fail_returns_503(client, monkeypatch):
+    """POST /internal/trigger-crawl에서 enqueue가 전부 실패하면 503 + ALL_ENQUEUES_FAILED (P0 회귀 방지)."""
+    from app.core.config import settings
+    from app.core.database import get_db
+    from app.core.deps import get_redis_trigger_lock
+    from app.main import app
+    from pydantic import SecretStr
+
+    monkeypatch.setattr(settings, "crawl_trigger_secret", SecretStr("test-secret"))
+    monkeypatch.setattr(settings, "redis_trigger_lock_required", False)
+
+    async def _fake_get_db():
+        class _DummySession:
+            pass
+        yield _DummySession()
+
+    async def _fake_redis():
+        yield None
+
+    app.dependency_overrides[get_db] = _fake_get_db
+    app.dependency_overrides[get_redis_trigger_lock] = _fake_redis
+
+    def _apply_async_raise(*args, **kwargs):
+        raise RuntimeError("simulated broker failure")
+
+    monkeypatch.setattr("app.services.tasks.crawl_college_task.apply_async", _apply_async_raise)
+
+    try:
+        response = client.post(
+            "/internal/trigger-crawl",
+            params={"college_code": "engineering"},
+            headers={"X-Crawl-Trigger-Secret": "test-secret"},
+        )
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+        app.dependency_overrides.pop(get_redis_trigger_lock, None)
+    assert response.status_code == 503
+    data = response.json()
+    assert data.get("code") == "ALL_ENQUEUES_FAILED" or "All crawl enqueues failed" in (data.get("detail") or "")
+
+
+def test_trigger_crawl_invalid_secret_returns_401_before_rate_limit(client, monkeypatch):
+    """POST /internal/trigger-crawl에 잘못된 시크릿이면 401 (rate-limit 소비 전 인증 실패, P1 회귀 방지)."""
+    from app.core.config import settings
+    from app.core.database import get_db
+    from app.core.deps import get_redis_trigger_lock
+    from app.main import app
+    from pydantic import SecretStr
+
+    monkeypatch.setattr(settings, "crawl_trigger_secret", SecretStr("correct-secret"))
+    monkeypatch.setattr(settings, "redis_trigger_lock_required", False)
+
+    async def _fake_get_db():
+        class _DummySession:
+            pass
+        yield _DummySession()
+
+    async def _fake_redis():
+        yield None
+
+    app.dependency_overrides[get_db] = _fake_get_db
+    app.dependency_overrides[get_redis_trigger_lock] = _fake_redis
+    try:
+        response = client.post(
+            "/internal/trigger-crawl",
+            params={"college_code": "engineering"},
+            headers={"X-Crawl-Trigger-Secret": "wrong-secret"},
+        )
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+        app.dependency_overrides.pop(get_redis_trigger_lock, None)
+    assert response.status_code == 401
 
 
 def test_check_crawl_trigger_secret_valid_and_invalid(monkeypatch):
@@ -216,13 +303,12 @@ def test_logout_blocklist_unavailable_returns_503(client, monkeypatch):
     """로그아웃 시 DB commit 후 Blocklist(Redis) 실패하면 503. DB는 이미 확정되어 재시도 시 Blocklist만 재등록."""
     from unittest.mock import AsyncMock, MagicMock
 
-    from fastapi import Request
-
     from app.api.v1.auth import get_current_user_id_and_jti
     from app.core.database import get_db
     from app.core.deps import get_redis_blocklist
     from app.core.redis import BlocklistUnavailableError
     from app.main import app
+    from fastapi import Request
 
     user_id = uuid.uuid4()
     jti = "test-jti"

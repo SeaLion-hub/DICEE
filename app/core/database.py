@@ -2,12 +2,11 @@
 
 import asyncio
 import logging
-import sys
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
-from enum import Enum
 from dataclasses import dataclass
+from enum import Enum
 from typing import Any
 
 from fastapi import Request
@@ -126,17 +125,17 @@ _session_context: ContextVar[AsyncSession | None] = ContextVar(
 def _async_database_url(url: str) -> str:
     """FastAPI용: 스킴을 비동기 드라이버로 안전하게 변환하고 비밀번호 마스킹을 방지합니다."""
     raw_url = url.strip()
-    
+
     # 1. 다이얼렉트 스킴 동적 정규화 (postgres:// -> postgresql://)
     if raw_url.startswith("postgres://"):
         raw_url = raw_url.replace("postgres://", "postgresql://", 1)
-        
+
     parsed = make_url(raw_url)
-    
+
     # 2. 비동기 드라이버 자동 적용 (drivername 미지정 시 여기서 설정. 배포 시 postgresql+psycopg 권장 — DEPLOYMENT.md)
     if "asyncpg" not in parsed.drivername and "psycopg" not in parsed.drivername:
         parsed = parsed.set(drivername="postgresql+psycopg")
-        
+
     # 3. 핵심 픽스: str() 사용 시 비밀번호가 '***'로 마스킹되는 것을 방지
     # 반드시 hide_password=False 옵션으로 진짜 비밀번호를 반환해야 합니다.
     return parsed.render_as_string(hide_password=False)
@@ -273,7 +272,7 @@ async def verify_db_connection() -> None:
     )
     if settings.strict_startup_db_check:
         raise RuntimeError(
-            "Database connection failed after %d attempts: %s" % (retries, last_exc)
+            f"Database connection failed after {retries} attempts: {last_exc}"
         ) from last_exc
 
 

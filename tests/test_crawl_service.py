@@ -4,7 +4,6 @@ import uuid
 from unittest.mock import MagicMock, patch
 
 import pytest
-
 from app.core.constants import CrawlRunStatus
 
 
@@ -81,3 +80,40 @@ def test_run_crawl_job_sync_rollback_then_failed_on_commit_failure():
         )
         assert failed_calls[0].args[0] is fail_session
         fail_session.commit.assert_called_once()
+
+
+def test_crawl_college_uses_bounded_seen_set():
+    """crawl_college(비동기)는 seen으로 _BoundedSeenSet 사용 (P1 OOM 회귀 방지)."""
+    import asyncio
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from app.services.crawl_service import _BoundedSeenSet, crawl_college
+
+    seen_captured = []
+
+    async def _capture_seen(client, links, college_id, scrape_fn, delay, seen):
+        seen_captured.append(seen)
+        if False:
+            yield  # async generator (0 yields)
+
+    college_mock = MagicMock(id=uuid.UUID("00000000-0000-0000-0000-000000000001"))
+    with patch(
+        "app.services.crawl_service.get_college_by_external_id",
+        new=AsyncMock(return_value=college_mock),
+    ), patch(
+        "app.services.crawl_service.get_crawler_async",
+        return_value=(
+            AsyncMock(return_value=[{"url": "https://example.com/1"}]),
+            AsyncMock(return_value=None),
+        ),
+    ), patch(
+        "app.services.crawl_service._collect_payloads_async",
+        side_effect=_capture_seen,
+    ):
+        session = MagicMock(spec=AsyncSession)
+        asyncio.run(crawl_college(session, "engineering"))
+
+    assert len(seen_captured) == 1
+    assert isinstance(seen_captured[0], _BoundedSeenSet)
