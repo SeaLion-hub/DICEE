@@ -25,6 +25,7 @@ class Notice(Base):
         UniqueConstraint("college_id", "external_id", name="uq_notices_college_external"),
         Index("ix_notices_hashtags_gin", "hashtags", postgresql_using="gin"),
         Index("ix_notices_eligibility_gin", "eligibility", postgresql_using="gin"),
+        Index("ix_notices_college_published", "college_id", "published_at"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(

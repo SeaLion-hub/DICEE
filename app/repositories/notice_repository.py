@@ -178,7 +178,16 @@ async def upsert_notices_bulk(
     """
     if not notices:
         return []
-    notice_rows = [_notice_values_no_content(p) for p in notices]
+    
+    # [핵심 리팩토링: 데드락 방지]
+    # 병렬 Celery 워커들이 무작위 순서로 행(Row) 잠금을 획득하여 데드락이 발생하는 것을 막기 위해,
+    # 복합 유니크 키(college_id, external_id)를 기준으로 항상 오름차순 정렬합니다.
+    sorted_notices = sorted(
+        notices,
+        key=lambda x: (str(x.get("college_id", "")), str(x.get("external_id", "")))
+    )
+
+    notice_rows = [_notice_values_no_content(p) for p in sorted_notices]
     base = insert(Notice).values(notice_rows)
     stmt = base.on_conflict_do_update(
         index_elements=["college_id", "external_id"],
@@ -196,8 +205,8 @@ async def upsert_notices_bulk(
         key_to_id[(cid, eid)] = nid
         ids.append(nid)
     # RETURNING에 없는(동일 content_hash) 행도 notice_id 조회해 본문 백필 가능하도록 보완.
-    await _fill_key_to_id_from_notices(session, notices, key_to_id)
-    await _upsert_notice_contents_bulk_from_payloads(session, notices, key_to_id)
+    await _fill_key_to_id_from_notices(session, sorted_notices, key_to_id)
+    await _upsert_notice_contents_bulk_from_payloads(session, sorted_notices, key_to_id)
     return ids
 
 
@@ -212,7 +221,15 @@ def upsert_notices_bulk_sync(
     """
     if not notices:
         return []
-    notice_rows = [_notice_values_no_content(p) for p in notices]
+
+    # [핵심 리팩토링: 데드락 방지]
+    # 동기 워커에서도 동일하게 유니크 키 기준으로 정렬을 수행하여 락 순서를 강제합니다.
+    sorted_notices = sorted(
+        notices,
+        key=lambda x: (str(x.get("college_id", "")), str(x.get("external_id", "")))
+    )
+
+    notice_rows = [_notice_values_no_content(p) for p in sorted_notices]
     base = insert(Notice).values(notice_rows)
     stmt = base.on_conflict_do_update(
         index_elements=["college_id", "external_id"],
@@ -229,8 +246,8 @@ def upsert_notices_bulk_sync(
         nid, cid, eid = row[0], row[1], row[2]
         key_to_id[(cid, eid)] = nid
         ids.append(nid)
-    _fill_key_to_id_from_notices_sync(session, notices, key_to_id)
-    _upsert_notice_contents_bulk_from_payloads_sync(session, notices, key_to_id)
+    _fill_key_to_id_from_notices_sync(session, sorted_notices, key_to_id)
+    _upsert_notice_contents_bulk_from_payloads_sync(session, sorted_notices, key_to_id)
     return ids
 
 
