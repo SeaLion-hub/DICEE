@@ -208,6 +208,8 @@ class Settings(BaseSettings):
 
     # 3단계 Crawler & Worker (변수 추가)
     redis_url: str | None = None
+    # Celery broker/result_backend 전용. 비어 있으면 redis_url 사용(기존 동작). 별도 인스턴스 또는 DB 번호 분리 시 설정.
+    redis_celery_url: str | None = None
     # rediss:// 사용 시 CA 번들 경로(선택). 미설정 시 시스템 기본 CA 사용.
     redis_ca_certs: str | None = None
     # Redis 소켓/연결 타임아웃(초). 풀 포화·장애 시 무한 대기 방지.
@@ -280,6 +282,34 @@ class Settings(BaseSettings):
     content_storage_base_url: str = ""  # 예: https://api.example.com/content
     # 업로드 실패 시: allow_none=None 반환(크롤 계속), fail=예외 전파(데이터 유실 방지).
     content_upload_failure_policy: str = "allow_none"  # "allow_none" | "fail"
+    # 스풀: 실패 시 저장 디렉터리. 프로덕션에서는 영속 볼륨 또는 CONTENT_SPOOL_BACKEND=s3 등 외부 저장소 권장.
+    content_spool_dir: str = Field(
+        "storage/content_spool",
+        description="Directory for failed upload spool. Use persistent volume or external backend in production.",
+    )
+    content_spool_backend: str = Field(
+        "local",
+        description="Spool backend. Only 'local' is implemented; 's3' is not yet supported (drain will skip if set). Use persistent volume for production.",
+    )
+    content_spool_max_retries: int = Field(5, ge=1, le=20, description="Max retries per spool entry before moving to DLQ.")
+
+    # 읽기 캐시 (Phase 3). Redis key prefix 및 TTL.
+    read_cache_ttl_seconds: int = Field(60, ge=10, le=3600, description="Read-through cache TTL for crawl-stats etc.")
+    read_cache_key_prefix: str = Field("read_cache:", description="Redis key prefix for read cache.")
+
+    # 자율 모드 전환 (Phase 4). 연속 실패 N회 → DEGRADED, 연속 성공 M회 → NORMAL.
+    degraded_failure_threshold: int = Field(
+        3,
+        ge=1,
+        le=20,
+        description="Consecutive readiness failures before switching to DEGRADED.",
+    )
+    degraded_recovery_success_count: int = Field(
+        5,
+        ge=1,
+        le=50,
+        description="Consecutive readiness successes before switching back to NORMAL.",
+    )
 
     # IP HMAC (명세 3.2): 평문 IP 저장 금지. DB에는 ip_hmac, ip_hmac_key_version만 저장.
     ip_hmac_key: SecretStr = SecretStr("")

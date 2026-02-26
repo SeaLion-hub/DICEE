@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+from typing import TYPE_CHECKING
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
@@ -9,6 +10,9 @@ from redis.asyncio import Redis as RedisAsyncio
 from sqlalchemy import text
 
 from app.core.config import settings
+
+if TYPE_CHECKING:
+    from app.core.state import AppState
 
 router = APIRouter(tags=["health"])
 
@@ -60,6 +64,26 @@ async def _check_redis_trigger_lock(request: Request) -> str:
     return await _ping_redis(client)
 
 
+def _update_operational_mode(request: Request, ready_ok: bool) -> None:
+    """
+    Ready 결과로 연속 성공/실패 카운터 갱신 후 N/M 임계치로 operational_mode 전환.
+    1회 실패 즉시 DEGRADED가 아니라 연속 실패 N회, 복귀는 연속 성공 M회.
+    """
+    state: AppState = request.app.state
+    n = getattr(settings, "degraded_failure_threshold", 3)
+    m = getattr(settings, "degraded_recovery_success_count", 5)
+    if ready_ok:
+        state.consecutive_failure_count = 0
+        state.consecutive_success_count = getattr(state, "consecutive_success_count", 0) + 1
+        if state.consecutive_success_count >= m:
+            state.operational_mode = "NORMAL"
+    else:
+        state.consecutive_success_count = 0
+        state.consecutive_failure_count = getattr(state, "consecutive_failure_count", 0) + 1
+        if state.consecutive_failure_count >= n:
+            state.operational_mode = "DEGRADED"
+
+
 @router.get("/live")
 async def get_live() -> dict[str, str]:
     """Liveness: 프로세스 생존만. DB/Redis 미체크. Kubernetes 등 재시작 유도용."""
@@ -84,6 +108,7 @@ async def get_ready(request: Request) -> JSONResponse:
         and blocklist_ok
         and redis_trigger_lock == "ok"
     )
+    _update_operational_mode(request, ok)
     content = {
         "status": "ok" if ok else "not_ready",
         "db": db_status,

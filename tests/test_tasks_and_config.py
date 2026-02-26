@@ -115,17 +115,20 @@ def test_api_entry_fail_fast_when_app_entry_celery():
 
 
 def test_celery_entry_fail_fast_when_app_entry_api():
-    """APP_ENTRY=api일 때 celery_app import 시점에 RuntimeError (Celery는 celery 전용)."""
+    """APP_ENTRY=api일 때 celery_app import는 성공(API에서 tasks import 가능). worker_init 시에만 RuntimeError."""
     import sys
     import app.core.config as config_module
 
-    # 이미 로드된 celery_app 제거 후 api로 설정하고 재import 시 실패해야 함
     celery_app_module = sys.modules.pop("app.core.celery_app", None)
     try:
         with patch.dict("os.environ", {"APP_ENTRY": "api", "ROLE": "api"}, clear=False):
             importlib.reload(config_module)
+            import app.core.celery_app as celery_app_mod
+            # Import 시점에는 검사하지 않음 (API 프로세스에서 trigger-crawl enqueue 가능)
+            assert celery_app_mod.app is not None
+            # worker_init에서 호출되는 _ensure_celery_entry는 APP_ENTRY=api면 RuntimeError
             with pytest.raises(RuntimeError) as exc_info:
-                import app.core.celery_app
+                celery_app_mod._ensure_celery_entry()
             assert "APP_ENTRY=celery" in str(exc_info.value)
             assert "api" in str(exc_info.value).lower()
     finally:

@@ -342,6 +342,19 @@ async def get_crawl_stats(
             status_code=429,
             detail="Too many internal stats requests, please try again later.",
         )
+    from app.core.read_cache import get_cached, set_cached
+
+    state = getattr(request.app.state, "operational_mode", "NORMAL")
+    ttl = getattr(settings, "read_cache_ttl_seconds", 60)
+    cached = await get_cached(redis_client, "crawl_stats", str(limit))
+    if cached is not None:
+        return cached
+    if state == "DEGRADED":
+        raise HTTPException(
+            status_code=503,
+            detail="Service degraded; cached data unavailable. Try again later.",
+            headers={"Retry-After": "60"},
+        )
     runs = await get_recent_crawl_runs(session, limit=limit)
     sanitized: list[dict] = []
     for run in runs:
@@ -349,7 +362,9 @@ async def get_crawl_stats(
         item = {k: v for k, v in run.items() if k != "error_message"}
         item["has_error"] = bool(run.get("error_message"))
         sanitized.append(item)
-    return {"runs": sanitized, "limit": limit}
+    out = {"runs": sanitized, "limit": limit}
+    await set_cached(redis_client, ttl, "crawl_stats", str(limit), value=out)
+    return out
 
 
 def _metrics_allowed_client_ip(request: Request) -> bool:

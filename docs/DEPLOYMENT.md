@@ -221,7 +221,7 @@ Celery Sync 풀에는 **대기 시간 상한**(`pool_timeout`)과 **유휴 연�
 - `alembic upgrade head` 실행 전에 `dicee` DB가 존재해야 함.
 - **Celery 워커를 로컬(PC)에서 돌릴 때**:
   - `REDIS_URL`에 **Railway 내부 URL**(`redis.railway.internal`)을 넣으면 로컬에서는 DNS 조회 실패(`getaddrinfo failed`). 로컬 Redis를 띄우고 `REDIS_URL=redis://localhost:6379/0` 사용하거나, `.env`에서 `REDIS_URL`을 비우면 기본값 `redis://localhost:6379/0` 사용.
-  - **Windows**에서는 기본 prefork 풀에서 billiard 세마포어 오류가 날 수 있음. `celery -A app.core.celery_app:app worker -l info -O fair --pool=solo` 로 실행.
+  - **라우팅 도입 후** 워커는 `-Q critical,crawl,ai` 필수. **Windows**에서는 `celery -A app.core.celery_app:app worker -l info -O fair -Q critical,crawl,ai --pool=solo` 로 실행.
 
 ---
 
@@ -299,6 +299,7 @@ CORS: `ALLOWED_ORIGINS`에 프론트 도메인 등록. credentials: 프론트가
 | `DEPLOY_SURGE_FACTOR` | 롤링/스케일 시 피크 배수. 기본 2. | 2단계 (선택) |
 | `DB_API_INSTANCES`, `DB_UVICORN_WORKERS`, `DB_WORKER_INSTANCES`, `DB_CELERY_CONCURRENCY` | 예산 검사용 인스턴스/워커 수. 기본 1. | 2단계 (선택) |
 | `REDIS_URL` | Redis 연결 URL. Railway는 **rediss://**(TLS) 제공 가능. Celery broker가 rediss 시 SSL 옵션 적용. | 3단계~ |
+| `REDIS_CELERY_URL` | Celery broker/result_backend 전용. 비어 있으면 REDIS_URL 사용. Celery만 별도 인스턴스 또는 DB 번호 분리 시 설정. | 3단계 (선택) |
 | `CRAWL_TRIGGER_SECRET` | Cron이 POST /internal/trigger-crawl 호출 시 검증용 시크릿 (헤더 또는 쿼리로 전달) | 3단계 Cron 연동 시 |
 | `AUTH_GOOGLE_RATE_LIMIT_PER_MINUTE` | 동일 IP 기준 `/v1/auth/google` 분당 최대 호출 수. 기본 10. | 2단계 Auth (선택) |
 | `AUTH_REFRESH_RATE_LIMIT_PER_MINUTE` | 동일 IP 기준 `/v1/auth/refresh` 분당 최대 호출 수. 기본 60. | 2단계 Auth (선택) |
@@ -405,8 +406,9 @@ Private Key 내용을 `JWT_PRIVATE_KEY_PEM`, Public Key 내용을 `JWT_PUBLIC_KE
 
 - **새 서비스** 추가. 같은 repo 사용, **Dockerfile**로 빌드.
 - **Settings → Build**: Builder **Dockerfile** 선택. 경로 예: `./Dockerfile.worker` 또는 `./Dockerfile`.
-- **Settings → Deploy** → **Start Command**: `celery -A app.core.celery_app:app worker -l info -O fair --concurrency=1` (OOM 방지: 동시 브라우저 개수 제한. **-O fair** 필수: Fair Scheduling으로 I/O Bound 크롤 태스크 분배.)  
-  Linux에서는 기본 `--pool=prefork`(자식 프로세스마다 DB 풀 1개). Windows는 `--pool=solo` 필수. 연결 수는 [DB 연결 수 및 용량 계획](#db-연결-수-및-용량-계획) 참고.
+- **Settings → Deploy** → **Start Command**: `celery -A app.core.celery_app:app worker -l info -O fair -Q critical,crawl,ai --concurrency=1`  
+  **라우팅 도입 후 워커는 소비할 큐를 반드시 명시해야 함.** 단일 워커는 `-Q critical,crawl,ai`로 3개 큐 모두 소비. 큐별 분리 시 예: `-Q crawl -c 2`, `-Q ai -c 1`. (OOM 방지: 동시 브라우저 개수 제한. **-O fair** 필수.)  
+  Linux에서는 기본 `--pool=prefork`. Windows는 `--pool=solo` 필수. 연결 수는 [DB 연결 수 및 용량 계획](#db-연결-수-및-용량-계획) 참고.
 - **Variables**: 워커 서비스에 **APP_ENTRY=celery**(또는 ROLE=celery) 반드시 설정.
 - Dockerfile에 **반드시** 포함: `RUN playwright install --with-deps chromium`. Playwright 실행 시 `--no-sandbox`, `--disable-dev-shm-usage` 옵션 사용(ROADMAP 3단계 참고).
 

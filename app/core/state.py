@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 import httpx
 from pyjwt_key_fetcher import AsyncKeyFetcher
 from redis.asyncio import Redis as RedisAsyncio
@@ -10,6 +12,8 @@ from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
 )
+
+OperationalMode = Literal["NORMAL", "DEGRADED"]
 
 
 class AppState:
@@ -25,6 +29,9 @@ class AppState:
     redis_trigger_lock_client: RedisAsyncio | None
     engine: AsyncEngine | None
     async_session_maker: async_sessionmaker[AsyncSession] | None
+    operational_mode: OperationalMode
+    consecutive_failure_count: int
+    consecutive_success_count: int
 
     def __init__(
         self,
@@ -42,3 +49,6 @@ class AppState:
         self.redis_trigger_lock_client = redis_trigger_lock_client
         self.engine = engine
         self.async_session_maker = async_session_maker
+        self.operational_mode = "NORMAL"
+        self.consecutive_failure_count = 0
+        self.consecutive_success_count = 0

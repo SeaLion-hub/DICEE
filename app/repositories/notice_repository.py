@@ -81,6 +81,32 @@ def get_by_college_external_sync(
     return result.scalar_one_or_none()
 
 
+def update_notice_content_url_sync(
+    session: Session,
+    college_id: uuid.UUID,
+    external_id: str,
+    content_url: str,
+) -> bool:
+    """
+    (college_id, external_id)에 해당하는 Notice의 notice_contents에 content_url을 upsert.
+    스풀 드레인에서 재업로드 성공 후 DB 반영용. Notice가 없으면 False.
+    """
+    notice = get_by_college_external_sync(session, college_id, external_id)
+    if notice is None:
+        return False
+    ins = insert(NoticeContent).values(
+        notice_id=notice.id,
+        content_url=content_url,
+    )
+    stmt = ins.on_conflict_do_update(
+        index_elements=["notice_id"],
+        set_={"content_url": ins.excluded.content_url, "updated_at": datetime.now(UTC)},
+    )
+    session.execute(stmt)
+    session.flush()
+    return True
+
+
 def _notice_values_no_content(payload: dict[str, Any]) -> dict[str, Any]:
     """Notice 테이블용 dict (raw_html·content_url 제외)."""
     out = {k: v for k, v in payload.items() if k not in ("raw_html", "content_url")}
