@@ -33,6 +33,7 @@
 ## 진입점(고정)
 
 - **백엔드 앱 진입점**: `app.main:app`
+- **진입점 환경 변수**: **APP_ENTRY**(또는 **ROLE**) **필수(Fail-fast)**. 웹 서비스는 `APP_ENTRY=api`, Celery 워커는 `APP_ENTRY=celery`. 미설정 시 부팅 실패.
 - **Start Command(웹 서비스)**: `uvicorn app.main:app --host 0.0.0.0 --port $PORT` (workers 미지정 시 **기본 1 프로세스**.)
 - **원칙**: 루트에 `app/` 패키지(폴더) 유지. `Start Command`/진입점은 문서와 코드가 항상 일치해야 함.
 
@@ -279,6 +280,7 @@ CORS: `ALLOWED_ORIGINS`에 프론트 도메인 등록. credentials: 프론트가
 
 | 변수 | 설명 | 적용 시점 |
 |------|------|-----------|
+| `APP_ENTRY` 또는 `ROLE` | 진입점. **필수(Fail-fast)**. `api`=웹 서비스(FastAPI), `celery`=워커/beat. 웹 서비스 Variables에 `api`, 워커 서비스 Variables에 `celery` 설정. | 모든 환경 |
 | `SENTRY_DSN` | Sentry 에러 모니터링 DSN | 1단계~ |
 | `DATABASE_URL` | **`postgresql+psycopg://...`** 권장. `postgres://`만 넣어도 앱이 `postgresql+psycopg://`로 자동 변환함. (구형 asyncpg 대신 psycopg 사용 — Railway 프록시 환경에서 안정적.) 2단계~. **비밀번호는 영문·숫자만** 사용. **시스템 환경변수가 .env보다 우선** → Windows에서 `echo $env:DATABASE_URL`로 확인 후, 프로젝트용이 아니면 제거. |
 | `DB_CONNECT_RETRIES` | 연결 실패 시 재시도 횟수. 기본 5. | 2단계 (선택, Railway 권장) |
@@ -302,7 +304,8 @@ CORS: `ALLOWED_ORIGINS`에 프론트 도메인 등록. credentials: 프론트가
 | `AUTH_REFRESH_RATE_LIMIT_PER_MINUTE` | 동일 IP 기준 `/v1/auth/refresh` 분당 최대 호출 수. 기본 60. | 2단계 Auth (선택) |
 | `INTERNAL_TRIGGER_CRAWL_RATE_LIMIT_PER_MINUTE` | 동일 IP 기준 `/internal/trigger-crawl` 분당 최대 호출 수. 기본 10. | 3단계 Cron 연동 시 (선택) |
 | `INTERNAL_CRAWL_STATS_RATE_LIMIT_PER_MINUTE` | 동일 IP 기준 `/internal/crawl-stats` 분당 최대 호출 수. 기본 30. | 3단계 운영 모니터링 (선택) |
-| `TRUSTED_PROXY_IPS` | 역방향 프록시(예: Railway) 직전 피어 IP를 쉼표 구분으로 설정. 비어 있으면 `X-Forwarded-For`를 신뢰하지 않고 `request.client.host`만 사용. **프로덕션에서 프록시 뒤에 두고 비워 두면 모든 클라이언트가 프록시 IP 하나로 인식되어 Rate Limit 시 전체 사용자 차단 가능** → Railway 등 배포 시 반드시 설정 권장. | 2단계~ (리버스 프록시 사용 시) |
+| `TRUSTED_PROXY_IPS` | 역방향 프록시(예: Railway) 직전 피어 IP를 쉼표 구분으로 설정. 비어 있으면 `X-Forwarded-For`를 신뢰하지 않고 `request.client.host`만 사용. **프로덕션에서는 비어 있으면 부팅 실패(Fail-fast)**. Railway 등 배포 시 반드시 설정. | 2단계~ (리버스 프록시 사용 시) |
+| `TRUSTED_PROXY_SKIP_FAST` | `1`이면 프로덕션에서 TRUSTED_PROXY_IPS 비어 있어도 부팅 허용. **프록시 뒤에 두지 않는 프로덕션만** 사용. 기본 0. | 선택 (프록시 미사용 프로덕션만) |
 | `POLITE_DELAY_SECONDS` | 요청/페이지 간 최소 딜레이(초). 대상 서버 부하·IP 차단 완화. 기본 1. 단과대별 오버라이드는 DB 메타데이터 테이블 또는 ConfigMap/리로드 가능 소스로 설계(재시작 없이 변경 가능). | 3단계 (선택) |
 | `CELERY_WORKER_PREFETCH_MULTIPLIER` | 워커 prefetch 배수. 기본 1. 짧은 태스크 많으면 2~4로 조정. **-O fair**와 함께 사용. | 3단계 (선택) |
 | `JWT_SECRET` | JWT 서명용 비밀키 (강한 랜덤 문자열). RS256 사용 시 불필요. | 2단계 Auth 후 (HS256 시) |
@@ -396,6 +399,7 @@ Private Key 내용을 `JWT_PRIVATE_KEY_PEM`, Public Key 내용을 `JWT_PUBLIC_KE
 - **Settings → Deploy** → **Start Command**:
   - `nixpacks.toml`에 마이그레이션 자동 실행 + 앱 시작 포함. Start Command를 **비워 두면** 이 설정 사용.
   - 커스텀 Start Command 사용 시: `alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT`
+- **Variables**: 웹 서비스에 **APP_ENTRY=api**(또는 ROLE=api) 반드시 설정.
 
 **Playwright Celery 워커 (3단계~, Dockerfile 필수)**
 
@@ -403,6 +407,7 @@ Private Key 내용을 `JWT_PRIVATE_KEY_PEM`, Public Key 내용을 `JWT_PUBLIC_KE
 - **Settings → Build**: Builder **Dockerfile** 선택. 경로 예: `./Dockerfile.worker` 또는 `./Dockerfile`.
 - **Settings → Deploy** → **Start Command**: `celery -A app.core.celery_app:app worker -l info -O fair --concurrency=1` (OOM 방지: 동시 브라우저 개수 제한. **-O fair** 필수: Fair Scheduling으로 I/O Bound 크롤 태스크 분배.)  
   Linux에서는 기본 `--pool=prefork`(자식 프로세스마다 DB 풀 1개). Windows는 `--pool=solo` 필수. 연결 수는 [DB 연결 수 및 용량 계획](#db-연결-수-및-용량-계획) 참고.
+- **Variables**: 워커 서비스에 **APP_ENTRY=celery**(또는 ROLE=celery) 반드시 설정.
 - Dockerfile에 **반드시** 포함: `RUN playwright install --with-deps chromium`. Playwright 실행 시 `--no-sandbox`, `--disable-dev-shm-usage` 옵션 사용(ROADMAP 3단계 참고).
 
 ### 5. 도메인

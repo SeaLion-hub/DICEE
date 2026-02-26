@@ -12,7 +12,19 @@ from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
-_raw_redis_url = (settings.redis_url or "").strip()
+
+def _ensure_celery_entry() -> None:
+    """워커/beat 기동 시 APP_ENTRY=celery 여부 검사. api일 때는 RuntimeError."""
+    if settings.app_entry != "celery":
+        raise RuntimeError(
+            "Celery process must run with APP_ENTRY=celery. "
+            f"Current APP_ENTRY={settings.app_entry!r}. Set APP_ENTRY=celery for worker/beat."
+        )
+
+
+_ensure_celery_entry()
+
+_raw_redis_url = (settings.redis.redis_url or "").strip()
 broker_url = _raw_redis_url or "redis://localhost:6379/0"
 result_backend = _raw_redis_url or "redis://localhost:6379/0"
 
@@ -44,8 +56,18 @@ app.conf.update(
 
 if broker_url.startswith("rediss://"):
     ssl_options: dict[str, str | ssl.VerifyMode] = {"ssl_cert_reqs": ssl.CERT_REQUIRED}
-    ca = getattr(settings, "redis_ca_certs", None)
+    ca = settings.redis.redis_ca_certs
     if ca is not None:
         ssl_options["ssl_ca_certs"] = ca
     app.conf.broker_use_ssl = ssl_options
     app.conf.redis_backend_use_ssl = ssl_options
+
+
+@app.on_after_configure.connect
+def _on_after_configure(**kwargs):
+    """프로덕션 워커: API와 동일한 예외/로그 마스킹 필터 등록(스택·예외 메시지 원천 차단)."""
+    if (settings.environment or "").strip().lower() == "production":
+        from app.core.logging_safety import ProductionExceptionFilter
+        root = logging.getLogger()
+        if not any(isinstance(f, ProductionExceptionFilter) for f in root.filters):
+            root.addFilter(ProductionExceptionFilter())

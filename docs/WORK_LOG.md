@@ -4,6 +4,7 @@
 
 - [작성 규칙](#작성-규칙)
 - [작성 형식](#작성-형식)
+- [2026-02-27](#2026-02-27)
 - [2026-02-26](#2026-02-26)
 - [2026-02-25](#2026-02-25)
 - [2026-02-24](#2026-02-24)
@@ -25,6 +26,12 @@
 ## 작성 형식
 
 - `- [단계 또는 영역] 무엇을 했는지 (어떤 파일/기능). 왜 또는 결과 한 줄.`
+
+---
+
+## 2026-02-27
+
+- [Config/Celery/Redis Seen 동작 정정] **(1) LEGACY_CONFIG_FORBIDDEN** — config.py: `_legacy_guard_allow` 스레드 로컬 도입, `settings.db`/`settings.redis` 프로퍼티 getter 내부에서만 평탄 필드 접근 허용(가드 건너뜀). LEGACY_CONFIG_FORBIDDEN=true여도 도메인 뷰 접근은 정상 동작. **(2) Celery import 시점 Fail-fast** — celery_app.py: `_ensure_celery_entry()`를 모듈 로드 시점에 호출, `on_after_configure`에서는 로깅 필터만 등록. APP_ENTRY≠celery일 때 import 즉시 RuntimeError. **(3) Redis Seen required 런타임** — crawl_service.py: `_RedisSeenSet`에 `_required` 저장, required=True일 때 `add`/`__contains__`에서 Redis 실패 시 warning 대신 예외 발생(run 실패). **(4) 테스트** — conftest: APP_ENTRY=celery 강제, client 픽스처에서만 api로 전환 후 main 로드. test_tasks_and_config·test_env_and_config_whitespace 수정(진입점 fail-fast·redis fallback 검증). pytest: tasks_and_config·env_whitespace 8 passed. test_security_features 5건 실패는 기존(내부 인증/프록시) 이슈.
 
 ---
 

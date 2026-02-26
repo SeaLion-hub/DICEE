@@ -20,6 +20,7 @@
 - 환경 변수: `TRUSTED_PROXY_IPS` (쉼표 구분 IP 목록).
 - 예: 로드밸런서가 `10.0.0.1`일 때 `TRUSTED_PROXY_IPS=10.0.0.1`.
 - 비우면 프록시 뒤가 아니거나 검증을 원하지 않는 환경으로 간주되어, 항상 `request.client.host`만 사용.
+- **프로덕션 Fail-fast**: `ENVIRONMENT=production`일 때 `TRUSTED_PROXY_IPS`가 비어 있으면 **부팅 실패**(ValueError). 리버스 프록시 뒤에 두는 프로덕션은 반드시 프록시 IP를 설정. 프록시 뒤에 두지 않는 프로덕션만 예외 플래그 `TRUSTED_PROXY_SKIP_FAST=1`로 검사 생략.
 
 ---
 

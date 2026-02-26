@@ -57,13 +57,13 @@ async def init_database() -> None:
 def check_startup_pool_budget() -> None:
     """부팅 시 풀 예산 검사. 초과 시 strict면 RuntimeError, 아니면 critical 로그 + Sentry."""
     effective_max_conn = (
-        settings.db_max_connections
-        if settings.db_max_connections is not None
+        settings.db.db_max_connections
+        if settings.db.db_max_connections is not None
         else get_resolved_max_connections()
     )
     budget_result = check_pool_budget(effective_max_conn)
     if not budget_result.within_budget and budget_result.app_budget > 0:
-        if settings.db_pool_strict_budget:
+        if settings.db.db_pool_strict_budget:
             raise RuntimeError(budget_result.message)
         logger.critical("%s", budget_result.message)
         try:

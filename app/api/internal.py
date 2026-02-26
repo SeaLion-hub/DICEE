@@ -226,9 +226,9 @@ async def post_trigger_crawl(
         allowed = await check_rate_limit(
             redis_client,
             identifier=rate_identifier,
-            max_requests=getattr(settings, "internal_trigger_crawl_rate_limit_per_minute", 30),
+            max_requests=settings.internal_trigger_crawl_rate_limit_per_minute,
             window_seconds=60,
-            require_redis=getattr(settings, "api_rate_limit_require_redis", False),
+            require_redis=settings.api_rate_limit_require_redis,
         )
     except RateLimitUnavailableError:
         raise HTTPException(
@@ -255,7 +255,7 @@ async def post_trigger_crawl(
             redis_client,
             key_stripped,
             idempotency_scope,
-            fail_closed=settings.redis_trigger_idempotency_required,
+            fail_closed=settings.redis.redis_trigger_idempotency_required,
         )
     except RedisIdempotencyUnavailableError:
         return JSONResponse(
@@ -268,7 +268,7 @@ async def post_trigger_crawl(
     if not claimed:
         return JSONResponse(status_code=202, content=cached or {})
 
-    if redis_client is None and getattr(settings, "redis_trigger_lock_required", False):
+    if redis_client is None and settings.redis.redis_trigger_lock_required:
         return JSONResponse(
             status_code=503,
             content={
@@ -323,9 +323,9 @@ async def get_crawl_stats(
         allowed = await check_rate_limit(
             redis_client,
             identifier=rate_identifier,
-            max_requests=getattr(settings, "internal_crawl_stats_rate_limit_per_minute", 60),
+            max_requests=settings.internal_crawl_stats_rate_limit_per_minute,
             window_seconds=60,
-            require_redis=getattr(settings, "api_rate_limit_require_redis", False),
+            require_redis=settings.api_rate_limit_require_redis,
         )
     except RateLimitUnavailableError:
         raise HTTPException(
@@ -358,7 +358,7 @@ def _metrics_allowed_client_ip(request: Request) -> bool:
     프록시 환경: get_client_ip 사용으로 X-Forwarded-For + trusted_proxy 검사 후 실제 클라이언트 IP로
     allowlist 검사. request.client.host만 쓰면 프록시 IP 하나로 통과되어 외부 트래픽이 우회할 수 있음.
     """
-    allowed_ips_str = getattr(settings, "metrics_allowed_ips", "") or ""
+    allowed_ips_str = (settings.metrics_allowed_ips or "").strip() or ""
     if not allowed_ips_str.strip():
         return False
     allowed = {ip.strip() for ip in allowed_ips_str.split(",") if ip.strip()}

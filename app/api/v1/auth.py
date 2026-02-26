@@ -43,7 +43,7 @@ async def get_current_user_id(
         payload = await verify_access_token(
             credentials.credentials,
             redis_blocklist,
-            fail_closed=settings.redis_blocklist_fail_closed,
+            fail_closed=settings.redis.redis_blocklist_fail_closed,
         )
         return uuid_mod.UUID(payload["sub"])
     except (AuthError, ValueError):
@@ -62,7 +62,7 @@ async def get_current_user_id_and_jti(
         payload = await verify_access_token(
             credentials.credentials,
             redis_blocklist,
-            fail_closed=settings.redis_blocklist_fail_closed,
+            fail_closed=settings.redis.redis_blocklist_fail_closed,
         )
         return uuid_mod.UUID(payload["sub"]), payload.get("jti")
     except (AuthError, ValueError):
@@ -94,9 +94,9 @@ async def post_google_auth(
         allowed = await check_rate_limit(
             redis_rate,
             identifier=identifier,
-            max_requests=getattr(settings, "auth_google_rate_limit_per_minute", 10),
+            max_requests=settings.auth_google_rate_limit_per_minute,
             window_seconds=60,
-            require_redis=getattr(settings, "api_rate_limit_require_redis", False),
+            require_redis=settings.api_rate_limit_require_redis,
         )
     except RateLimitUnavailableError:
         raise HTTPException(
@@ -159,9 +159,9 @@ async def post_refresh(
         allowed = await check_rate_limit(
             redis_rate,
             identifier=identifier,
-            max_requests=getattr(settings, "auth_refresh_rate_limit_per_minute", 60),
+            max_requests=settings.auth_refresh_rate_limit_per_minute,
             window_seconds=60,
-            require_redis=getattr(settings, "api_rate_limit_require_redis", False),
+            require_redis=settings.api_rate_limit_require_redis,
         )
     except RateLimitUnavailableError:
         raise HTTPException(

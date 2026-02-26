@@ -20,9 +20,10 @@ python-dotenv==1.1.1
 celery==5.6.2
 redis==5.2.1
 
-# Crawlers (requests + BeautifulSoup)
+# Crawlers (requests + BeautifulSoup) & retry (tenacity)
 beautifulsoup4==4.13.5
 requests==2.32.5
+tenacity==9.0.0
 
 # Auth (Google OAuth, JWT)
 httpx==0.28.1

@@ -57,8 +57,8 @@ else:
 
 # 3. 모듈 로드 및 설정 확인
 try:
-    masked_settings_url = _mask_db_url(settings.database_url)
-    print(f"⚙️ [DEBUG] settings.database_url 값(마스킹): {masked_settings_url}")
+    masked_settings_url = _mask_db_url(settings.db.database_url)
+    print(f"⚙️ [DEBUG] settings.db.database_url 값(마스킹): {masked_settings_url}")
 
     print("🔄 [DEBUG] DB 초기화(init_db) 시도 중...")
     database.init_db()
@@ -67,7 +67,7 @@ try:
         print("✅ [DEBUG] Engine 생성 성공!")
         print(f"   -> 접속 URL(마스킹): {_mask_db_url(str(database.engine.url))}")
     else:
-        print("❌ [DEBUG] Engine이 None입니다. (settings.database_url이 비어있을 확률 높음)")
+        print("❌ [DEBUG] Engine이 None입니다. (settings.db.database_url이 비어있을 확률 높음)")
 
 except Exception as e:
     print(f"🔥 [DEBUG] 로드 중 치명적 에러 발생: {e}")

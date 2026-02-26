@@ -2,29 +2,30 @@
 
 import json
 import logging
-import sys
-from typing import NamedTuple
+import os
+import threading
+from typing import Literal, NamedTuple
 
-from pydantic import Field, SecretStr, model_validator
+from pydantic import AliasChoices, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 logger = logging.getLogger(__name__)
 
+# LEGACY_CONFIG_FORBIDDEN=true 시 구형 평탄 필드 접근 시 RuntimeError. 도메인 뷰(.db/.redis) 내부 접근은 제외.
+_legacy_guard_allow = threading.local()
 
-def _is_celery_entry_process() -> bool:
-    """Celery worker/beat 등 진입점인지 여부. 이 경우 JWT는 API에서만 쓰이므로 부팅 시 필수 아님."""
-    try:
-        argv = sys.argv or []
-        if not argv:
-            return False
-        first = (argv[0] or "").lower()
-        if "celery" in first:
-            return True
-        if len(argv) >= 2 and "celery" in (argv[1] or "").lower():
-            return True
-        return False
-    except Exception:
-        return False
+_LEGACY_CONFIG_FIELD_NAMES: frozenset[str] = frozenset({
+    "database_url", "db_connect_retries", "db_connect_retry_interval_sec", "strict_startup_db_check",
+    "db_pool_size_async", "db_pool_max_overflow_async", "db_pool_timeout_async", "db_statement_timeout_ms",
+    "db_pool_size_sync", "db_pool_max_overflow_sync", "db_pool_timeout_sync", "db_pool_recycle_sync",
+    "db_max_connections", "db_reserved", "db_pool_strict_budget", "deploy_surge_factor",
+    "db_api_instances", "db_uvicorn_workers", "db_worker_instances", "db_celery_concurrency",
+    "redis_url", "redis_ca_certs", "redis_socket_timeout", "redis_socket_connect_timeout",
+    "redis_blocklist_fail_closed", "redis_blocklist_circuit_failure_threshold",
+    "redis_blocklist_circuit_open_seconds", "redis_blocklist_circuit_half_open_interval_seconds",
+    "redis_blocklist_max_connections", "redis_trigger_lock_max_connections",
+    "redis_trigger_lock_ttl_seconds", "redis_trigger_lock_required", "redis_trigger_idempotency_required",
+})
 
 
 class _DatabaseConfig(NamedTuple):
@@ -66,6 +67,7 @@ class _RedisConfig(NamedTuple):
     redis_trigger_lock_ttl_seconds: int
     redis_trigger_lock_required: bool
     redis_trigger_idempotency_required: bool
+    redis_crawl_seen_required: bool
 
 
 def _parse_allowed_origins(value: str) -> list[str]:
@@ -101,6 +103,20 @@ def _parse_allowed_origins(value: str) -> list[str]:
 class Settings(BaseSettings):
     """앱 설정. 환경변수에서 로드. 시크릿은 SecretStr로 마스킹, 필수 시크릿은 기본값 없음(Fail-fast)."""
 
+    def __getattribute__(self, name: str):
+        """LEGACY_CONFIG_FORBIDDEN=true 시 구형 평탄 필드 접근 시 부팅 실패. .db/.redis 프로퍼티 내부 접근은 허용."""
+        if name in _LEGACY_CONFIG_FIELD_NAMES and os.environ.get(
+            "LEGACY_CONFIG_FORBIDDEN", ""
+        ).strip().lower() in ("true", "1"):
+            if getattr(_legacy_guard_allow, "value", False):
+                pass
+            else:
+                raise RuntimeError(
+                    "LEGACY_CONFIG_FORBIDDEN: use settings.db.* / settings.redis.* instead of flat "
+                    f"settings.{name}. Set LEGACY_CONFIG_FORBIDDEN=false or migrate the caller."
+                )
+        return object.__getattribute__(self, name)
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
@@ -110,6 +126,13 @@ class Settings(BaseSettings):
     # 1단계 (선택)
     sentry_dsn: SecretStr | None = None
     environment: str = "development"  # Sentry/로깅용. production, staging, development 등.
+
+    # 진입점. APP_ENTRY 또는 ROLE 환경 변수 필수(Fail-fast). api=FastAPI, celery=워커/beat.
+    app_entry: Literal["api", "celery"] = Field(
+        ...,
+        description="Entry point: api | celery. Set APP_ENTRY or ROLE. Required at boot.",
+        validation_alias=AliasChoices("APP_ENTRY", "ROLE"),
+    )
 
     # 2단계~
     database_url: str | None = None
@@ -149,6 +172,11 @@ class Settings(BaseSettings):
 
     # X-Forwarded-For: 직전 피어가 이 목록에 있을 때만 헤더 신뢰. 비어 있으면 request.client.host만 사용.
     trusted_proxy_ips: str = ""
+    # 프로덕션에서 TRUSTED_PROXY_IPS 비어 있으면 부팅 실패(Fail-fast). True면 해당 검사 생략(프록시 뒤에 두지 않는 프로덕션만).
+    trusted_proxy_skip_fast: bool = Field(
+        False,
+        description="If True, skip production Fail-fast for empty TRUSTED_PROXY_IPS. Set only when not behind a reverse proxy.",
+    )
 
     # 2단계 Auth (워커·Cron 등은 미설정 가능. production 시 validator에서 필수 검사)
     jwt_secret: SecretStr = SecretStr("")
@@ -206,6 +234,11 @@ class Settings(BaseSettings):
     redis_trigger_lock_required: bool = True
     # True면 idempotency 클레임 Redis 실패 시 503(fail-closed). production 권장. 기본 False.
     redis_trigger_idempotency_required: bool = False
+    # True면 크롤 분산 Seen Set Redis 연결 실패 시 run 즉시 실패(no silent fallback). 멀티 워커 필수.
+    redis_crawl_seen_required: bool = Field(
+        False,
+        description="If True, crawl Redis Seen init failure fails the run immediately (no in-memory fallback). Required for multi-worker.",
+    )
     crawl_trigger_secret: SecretStr | None = None
     internal_trigger_crawl_rate_limit_per_minute: int = Field(
         10,
@@ -252,8 +285,22 @@ class Settings(BaseSettings):
     ip_hmac_key: SecretStr = SecretStr("")
     ip_hmac_key_version: str = "v1"
 
-    # 6단계 CORS (내부적으로 list[str] 사용. validator에서 CSV/JSON 둘 다 수용)
+    # 6단계 CORS (내부적으로 list[str] 사용). allowed_origins_list property에서 _parse_allowed_origins 파싱. * 금지, http(s) URL만.
     allowed_origins: str = ""
+
+    @field_validator("allowed_origins", mode="after")
+    @classmethod
+    def validate_allowed_origins(cls, v: str) -> str:
+        """ALLOWED_ORIGINS 형식 검증(JSON 배열 또는 CSV). 부팅 시 잘못된 형식이면 ValueError."""
+        if not v or not v.strip():
+            return v
+        _parse_allowed_origins(v)
+        return v
+
+    @property
+    def allowed_origins_list(self) -> list[str]:
+        """CORS 허용 오리진 리스트. JSON 배열 또는 CSV. * 포함 시 ValueError(allow_credentials 사용 시)."""
+        return _parse_allowed_origins(self.allowed_origins)
 
     @model_validator(mode="after")
     def fail_fast_s3_bucket_when_s3(self: "Settings") -> "Settings":
@@ -269,7 +316,7 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def fail_fast_jwt_secret_at_boot(self: "Settings") -> "Settings":
         """JWT 시크릿 누락 시 부팅 시점에 즉시 크래시(Fail-Fast). Celery worker/beat 등은 JWT 미사용이므로 제외."""
-        if _is_celery_entry_process():
+        if self.app_entry == "celery":
             return self
         has_jwt_secret = (self.jwt_secret.get_secret_value() or "").strip()
         has_rs256 = (
@@ -295,8 +342,7 @@ class Settings(BaseSettings):
             missing.append("DATABASE_URL")
         if not (self.redis_url or "").strip():
             missing.append("REDIS_URL")
-        is_celery = _is_celery_entry_process()
-        if not is_celery:
+        if self.app_entry != "celery":
             has_jwt_secret = (self.jwt_secret.get_secret_value() or "").strip()
             has_rs256 = (
                 self.jwt_private_key_pem
@@ -325,11 +371,11 @@ class Settings(BaseSettings):
                 f"Production environment requires these variables to be set: {', '.join(missing)}. "
                 "Set them in Secret Manager or environment before boot."
             )
-        if not (self.trusted_proxy_ips or "").strip():
-            logger.critical(
+        if not self.trusted_proxy_skip_fast and not (self.trusted_proxy_ips or "").strip():
+            raise ValueError(
                 "TRUSTED_PROXY_IPS is empty in production. If the app is behind a reverse proxy (e.g. Railway), "
                 "set it to the proxy IP(s) so X-Forwarded-For is trusted; otherwise all clients may be seen "
-                "as one IP and rate limiting can block everyone."
+                "as one IP and rate limiting can block everyone. Set TRUSTED_PROXY_SKIP_FAST=1 only when not behind a proxy."
             )
         # Google OAuth 사용 시 redirect allowlist 필수 (비어 있으면 검증 비활성화되어 보안 취약).
         has_google_client = bool(
@@ -366,11 +412,6 @@ class Settings(BaseSettings):
         return self
 
     @property
-    def allowed_origins_list(self) -> list[str]:
-        """CORS 허용 오리진 리스트. JSON 배열만 지원. '*' 포함 시 ValueError(allow_credentials 사용 시)."""
-        return _parse_allowed_origins(self.allowed_origins)
-
-    @property
     def trusted_proxy_ips_set(self) -> frozenset[str]:
         """X-Forwarded-For 신뢰 시 사용할 직전 피어 IP 집합. 빈 문자열이면 빈 집합(헤더 미신뢰)."""
         return frozenset(
@@ -380,47 +421,56 @@ class Settings(BaseSettings):
     @property
     def db(self) -> _DatabaseConfig:
         """DB 관련 설정 뷰. 마이그레이션 후 settings.db.* 만 사용(ADR config-domain-split)."""
-        return _DatabaseConfig(
-            database_url=self.database_url,
-            db_connect_retries=self.db_connect_retries,
-            db_connect_retry_interval_sec=self.db_connect_retry_interval_sec,
-            strict_startup_db_check=self.strict_startup_db_check,
-            db_pool_size_async=self.db_pool_size_async,
-            db_pool_max_overflow_async=self.db_pool_max_overflow_async,
-            db_pool_timeout_async=self.db_pool_timeout_async,
-            db_statement_timeout_ms=self.db_statement_timeout_ms,
-            db_pool_size_sync=self.db_pool_size_sync,
-            db_pool_max_overflow_sync=self.db_pool_max_overflow_sync,
-            db_pool_timeout_sync=self.db_pool_timeout_sync,
-            db_pool_recycle_sync=self.db_pool_recycle_sync,
-            db_max_connections=self.db_max_connections,
-            db_reserved=self.db_reserved,
-            db_pool_strict_budget=self.db_pool_strict_budget,
-            deploy_surge_factor=self.deploy_surge_factor,
-            db_api_instances=self.db_api_instances,
-            db_uvicorn_workers=self.db_uvicorn_workers,
-            db_worker_instances=self.db_worker_instances,
-            db_celery_concurrency=self.db_celery_concurrency,
-        )
+        _legacy_guard_allow.value = True
+        try:
+            return _DatabaseConfig(
+                database_url=self.database_url,
+                db_connect_retries=self.db_connect_retries,
+                db_connect_retry_interval_sec=self.db_connect_retry_interval_sec,
+                strict_startup_db_check=self.strict_startup_db_check,
+                db_pool_size_async=self.db_pool_size_async,
+                db_pool_max_overflow_async=self.db_pool_max_overflow_async,
+                db_pool_timeout_async=self.db_pool_timeout_async,
+                db_statement_timeout_ms=self.db_statement_timeout_ms,
+                db_pool_size_sync=self.db_pool_size_sync,
+                db_pool_max_overflow_sync=self.db_pool_max_overflow_sync,
+                db_pool_timeout_sync=self.db_pool_timeout_sync,
+                db_pool_recycle_sync=self.db_pool_recycle_sync,
+                db_max_connections=self.db_max_connections,
+                db_reserved=self.db_reserved,
+                db_pool_strict_budget=self.db_pool_strict_budget,
+                deploy_surge_factor=self.deploy_surge_factor,
+                db_api_instances=self.db_api_instances,
+                db_uvicorn_workers=self.db_uvicorn_workers,
+                db_worker_instances=self.db_worker_instances,
+                db_celery_concurrency=self.db_celery_concurrency,
+            )
+        finally:
+            _legacy_guard_allow.value = False
 
     @property
     def redis(self) -> _RedisConfig:
         """Redis 관련 설정 뷰. 마이그레이션 후 settings.redis.* 만 사용(ADR config-domain-split)."""
-        return _RedisConfig(
-            redis_url=self.redis_url,
-            redis_ca_certs=self.redis_ca_certs,
-            redis_socket_timeout=self.redis_socket_timeout,
-            redis_socket_connect_timeout=self.redis_socket_connect_timeout,
-            redis_blocklist_fail_closed=self.redis_blocklist_fail_closed,
-            redis_blocklist_circuit_failure_threshold=self.redis_blocklist_circuit_failure_threshold,
-            redis_blocklist_circuit_open_seconds=self.redis_blocklist_circuit_open_seconds,
-            redis_blocklist_circuit_half_open_interval_seconds=self.redis_blocklist_circuit_half_open_interval_seconds,
-            redis_blocklist_max_connections=self.redis_blocklist_max_connections,
-            redis_trigger_lock_max_connections=self.redis_trigger_lock_max_connections,
-            redis_trigger_lock_ttl_seconds=self.redis_trigger_lock_ttl_seconds,
-            redis_trigger_lock_required=self.redis_trigger_lock_required,
-            redis_trigger_idempotency_required=self.redis_trigger_idempotency_required,
-        )
+        _legacy_guard_allow.value = True
+        try:
+            return _RedisConfig(
+                redis_url=self.redis_url,
+                redis_ca_certs=self.redis_ca_certs,
+                redis_socket_timeout=self.redis_socket_timeout,
+                redis_socket_connect_timeout=self.redis_socket_connect_timeout,
+                redis_blocklist_fail_closed=self.redis_blocklist_fail_closed,
+                redis_blocklist_circuit_failure_threshold=self.redis_blocklist_circuit_failure_threshold,
+                redis_blocklist_circuit_open_seconds=self.redis_blocklist_circuit_open_seconds,
+                redis_blocklist_circuit_half_open_interval_seconds=self.redis_blocklist_circuit_half_open_interval_seconds,
+                redis_blocklist_max_connections=self.redis_blocklist_max_connections,
+                redis_trigger_lock_max_connections=self.redis_trigger_lock_max_connections,
+                redis_trigger_lock_ttl_seconds=self.redis_trigger_lock_ttl_seconds,
+                redis_trigger_lock_required=self.redis_trigger_lock_required,
+                redis_trigger_idempotency_required=self.redis_trigger_idempotency_required,
+                redis_crawl_seen_required=self.redis_crawl_seen_required,
+            )
+        finally:
+            _legacy_guard_allow.value = False
 
 
 def check_pool_budget(max_conn_override: int | None = None) -> tuple[bool, int, int]:
@@ -433,7 +483,7 @@ def check_pool_budget(max_conn_override: int | None = None) -> tuple[bool, int, 
     effective = (
         max_conn_override
         if max_conn_override is not None
-        else settings.db_max_connections
+        else settings.db.db_max_connections
     )
     r = _check_pool_budget(effective)
     return r.within_budget, r.peak_pool_conn, r.app_budget

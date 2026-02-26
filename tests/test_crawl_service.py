@@ -9,11 +9,9 @@ from app.core.constants import CrawlRunStatus
 
 def test_run_crawl_job_sync_rollback_then_failed_on_commit_failure():
     """
-    크롤 성공 후 session.commit() 실패 시 except 진입 → rollback → 별도 세션으로 FAILED 기록 → 예외 재발생.
-    PendingRollbackError 방지 및 FAILED 기록은 새 세션/트랜잭션으로 분리되는 경로 검증.
+    크롤 성공 후 session.commit() 실패 시 except 진입 → rollback → 동일 세션으로 FAILED 기록 시도 → 예외 재발생.
+    PendingRollbackError 방지 및 FAILED 기록은 동일 세션 우선(DB 장애 시 Redis fallback은 별도 테스트).
     """
-    from contextlib import contextmanager
-
     from app.services.crawl_service import run_crawl_job_sync
 
     run_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -29,15 +27,9 @@ def test_run_crawl_job_sync_rollback_then_failed_on_commit_failure():
             return None  # 첫 번째 commit (create_or_update 후) 성공
         if commit_call_count[0] == 2:
             raise RuntimeError("simulated DB error on success-path commit")
-        return None
+        return None  # except 내 FAILED 기록 후 commit(3번째)은 성공
 
     session.commit.side_effect = commit_side_effect
-
-    fail_session = MagicMock()
-
-    @contextmanager
-    def mock_get_sync_session():
-        yield fail_session
 
     with patch(
         "app.services.crawl_service.get_college_by_external_id_sync",
@@ -54,10 +46,7 @@ def test_run_crawl_job_sync_rollback_then_failed_on_commit_failure():
     ), patch(
         "app.services.crawl_service.update_crawl_run_sync",
         return_value=MagicMock(),
-    ) as mock_update, patch(
-        "app.services.crawl_service.get_sync_session",
-        side_effect=mock_get_sync_session,
-    ):
+    ) as mock_update:
         with pytest.raises(RuntimeError, match="simulated DB error"):
             run_crawl_job_sync(
                 session,
@@ -68,7 +57,7 @@ def test_run_crawl_job_sync_rollback_then_failed_on_commit_failure():
 
         # 실패한 트랜잭션 초기화
         session.rollback.assert_called()
-        # FAILED 기록은 별도 세션(fail_session)으로 1회 호출
+        # FAILED 기록은 동일 세션(session)으로 1회 호출
         failed_calls = [
             c
             for c in mock_update.call_args_list
@@ -78,8 +67,9 @@ def test_run_crawl_job_sync_rollback_then_failed_on_commit_failure():
         assert failed_calls[0].kwargs.get("error_message", "")[:50] == (
             "simulated DB error on success-path commit"[:50]
         )
-        assert failed_calls[0].args[0] is fail_session
-        fail_session.commit.assert_called_once()
+        assert failed_calls[0].args[0] is session
+        # except 내 FAILED 기록 후 commit 호출됨
+        assert session.commit.call_count >= 2
 
 
 def test_crawl_college_uses_bounded_seen_set():

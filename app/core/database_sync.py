@@ -20,7 +20,7 @@ sync_session_factory = None
 
 def _sync_database_url() -> str | None:
     """asyncpg URL을 동기 드라이버(psycopg3)용으로 변환. plain postgresql:// → +psycopg (psycopg2 미설치 시)."""
-    raw = (settings.database_url or "").strip()
+    raw = (settings.db.database_url or "").strip()
     if not raw:
         return None
     if "postgresql+asyncpg" in raw:
@@ -42,20 +42,20 @@ def init_sync_db() -> None:
 
     from app.core.database import check_pool_budget
 
-    effective_max_conn = settings.db_max_connections
+    effective_max_conn = settings.db.db_max_connections
     budget_result = check_pool_budget(effective_max_conn)
     if not budget_result.within_budget and budget_result.app_budget > 0:
-        if settings.db_pool_strict_budget:
+        if settings.db.db_pool_strict_budget:
             raise RuntimeError(budget_result.message)
         logger.critical("%s", budget_result.message)
 
     pool_kw: dict = {
-        "pool_size": settings.db_pool_size_sync,
-        "max_overflow": settings.db_pool_max_overflow_sync,
-        "pool_timeout": settings.db_pool_timeout_sync,
+        "pool_size": settings.db.db_pool_size_sync,
+        "max_overflow": settings.db.db_pool_max_overflow_sync,
+        "pool_timeout": settings.db.db_pool_timeout_sync,
     }
-    if settings.db_pool_recycle_sync >= 0:
-        pool_kw["pool_recycle"] = settings.db_pool_recycle_sync
+    if settings.db.db_pool_recycle_sync >= 0:
+        pool_kw["pool_recycle"] = settings.db.db_pool_recycle_sync
 
     sync_engine = create_engine(
         url,

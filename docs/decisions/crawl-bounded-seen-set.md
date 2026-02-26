@@ -1,19 +1,20 @@
-# ADR: 크롤 중복 제거용 Bounded Seen Set
+# ADR: 크롤 중복 제거용 Bounded Seen Set 및 분산 Seen Set
 
 ## 상태
 
-**적용 완료.** 동기 크롤(`crawl_college_sync`)에서는 `_BoundedSeenSet(max=CRAWL_SEEN_MAX_SIZE)`를 사용하여 Run 단위 중복 제거를 수행하며, 메모리 상한을 유지한다.
+**적용 완료.** 동기 크롤(`crawl_college_sync`)에서는 Run 단위 중복 제거를 수행한다. **멀티 워커 환경에서는 Redis 분산 Seen Set 필수.**
 
 ## 배경
 
-크롤 1회(Run) 동안 이미 수집한 공지의 `external_id`를 기억해 중복 수집·Upsert를 막아야 한다. 무제한 `set`을 쓰면 Run당 공지 수가 매우 많을 때 메모리가 커질 수 있다.
+크롤 1회(Run) 동안 이미 수집한 공지의 `external_id`를 기억해 중복 수집·Upsert를 막아야 한다. 단일 프로세스에서는 `_BoundedSeenSet`으로 메모리 상한을 유지한다. **멀티 워커**에서는 워커 간 동일 URL 중복 크롤을 막기 위해 **Redis SET** 기반 분산 Seen Set을 사용한다.
 
 ## 결정
 
-- **구조:** `app.services.crawl_service._BoundedSeenSet`. 최대 **10,000개**(`CRAWL_SEEN_MAX_SIZE`) `external_id`만 유지. O(1) add/contains.
-- **Evict 정책:** 크기가 `max_size`를 초과하면 **가장 오래 추가된 항목(FIFO)**부터 제거한 뒤 새 항목을 추가한다. 청크마다 `clear()`를 호출하지 않으며, Run 전체 동안 한 번만 생성·유지된다.
-- **트레이드오프:** 한 Run에서 10,000건을 초과하는 공지를 수집할 경우, evict된 오래된 ID가 페이지네이션·중복 응답 등으로 다시 등장하면 재수집·재 Upsert될 수 있다. 현재 규모와 단과대별 공지량을 고려해 10,000으로 두며, 필요 시 상수만 조정한다.
+- **단일 워커/Redis 미설정:** `_BoundedSeenSet(max=CRAWL_SEEN_MAX_SIZE)`. 최대 10,000개 `external_id`만 유지. O(1) add/contains. Evict: FIFO.
+- **멀티 워커·Redis 설정 시(필수):** `_RedisSeenSet(run_id, redis_url, ttl)`. 키 `dicee:crawl_seen:{run_id}`, TTL 1시간. Redis SET으로 SADD/SISMEMBER. `crawl_college_sync(..., run_id=run_id)` 호출 시 사용.
+- **`redis_crawl_seen_required=True`:** Redis Seen 연결 실패 시 즉시 run 실패(no silent fallback). 인메모리 fallback 없음. 멀티 워커 운영 시 True 권장.
+- **트레이드오프:** Bounded는 10,000건 초과 시 evict로 재수집 가능. Redis 분산은 Run 단위로 워커 간 공유되어 중복 크롤·IP 밴·트래픽 낭비를 방지한다.
 
 ## 참고
 
-- [app/services/crawl_service.py](../../app/services/crawl_service.py): `_BoundedSeenSet` 클래스(88~108라인), `crawl_college_sync`에서 `seen = _BoundedSeenSet(CRAWL_SEEN_MAX_SIZE)` 사용(455라인).
+- [app/services/crawl_service.py](../../app/services/crawl_service.py): `_BoundedSeenSet`, `_RedisSeenSet`, `crawl_college_sync(..., run_id=...)`, `run_crawl_job_sync`에서 `run_id` 전달.

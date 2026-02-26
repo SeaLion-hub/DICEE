@@ -140,7 +140,7 @@ def get_host_rate_limiter_sync(min_interval_sec: float):
     """동기 크롤용 limiter. Redis URL 있으면 RedisHostRateLimiterSync, 없으면 HostRateLimiter."""
     try:
         from app.core.config import settings
-        redis_url = getattr(settings, "redis_url", None) or ""
+        redis_url = (settings.redis.redis_url or "").strip() or ""
         if (redis_url or "").strip():
             return RedisHostRateLimiterSync(min_interval_sec, redis_url.strip())
     except Exception:
@@ -218,7 +218,7 @@ def get_host_rate_limiter_async(min_interval_sec: float):
     try:
         from app.core.config import settings
 
-        redis_url = getattr(settings, "redis_url", None) or ""
+        redis_url = (settings.redis.redis_url or "").strip() or ""
         if (redis_url or "").strip():
             return RedisHostRateLimiterAsync(min_interval_sec, redis_url.strip())
     except Exception:

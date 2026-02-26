@@ -144,7 +144,7 @@ def close_stale_crawl_runs_task():
     Stale RUNNING 정리: started_at이 crawl_run_stale_seconds보다 오래된 crawl_runs를 FAILED로 닫음.
     Celery Beat에서 주기 호출 권장(예: 15분마다). CRAWL_RUN_STALE_SECONDS로 임계값 설정.
     """
-    older_than = getattr(settings, "crawl_run_stale_seconds", 3600.0)
+    older_than = settings.crawl_run_stale_seconds
     with get_sync_session() as session:
         count = close_stale_running_runs_sync(session, older_than)
     if count:
@@ -168,7 +168,7 @@ def process_notice_ai_task(self, notice_id: str):
     """
     from app.core.config import settings
 
-    if not getattr(settings, "ai_pipeline_enabled", False):
+    if not settings.ai_pipeline_enabled:
         logger.debug(
             "process_notice_ai_task: ai_pipeline_enabled=False; skipping notice_id=%s (pending preserved)",
             notice_id,

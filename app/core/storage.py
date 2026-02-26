@@ -106,7 +106,7 @@ def _upload_s3(html_content: str, key: str) -> str | None:
             "ContentType": "text/html; charset=utf-8",
             "ServerSideEncryption": "aws:kms",
         }
-        kms_key_id = getattr(settings, "s3_sse_kms_key_id", None)
+        kms_key_id = settings.s3_sse_kms_key_id
         if kms_key_id and str(kms_key_id).strip():
             put_kw["SSEKMSKeyId"] = str(kms_key_id).strip()
         client.put_object(**put_kw)
