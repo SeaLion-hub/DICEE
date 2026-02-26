@@ -25,6 +25,9 @@ BLOCKLIST_KEY_PREFIX = "dicee:blocklist:access:"
 TRIGGER_IDEMPOTENCY_KEY_PREFIX = "dicee:trigger_idempotency:"
 TRIGGER_IDEMPOTENCY_TTL_SECONDS = 86400  # 24h
 
+# --- Cache Stampede 방어용 Lock Prefix 추가 ---
+CACHE_LOCK_KEY_PREFIX = "dicee:cache_lock:"
+
 # 단과대별 크롤 트리거 분산락. TTL 내 중복 enqueue 방지. 워커 완료 시 조기 해제.
 # 좀비 락 복구: 워커 하드 킬/파티션 시 TTL 만료로만 해제. Compare-and-del은 정상 종료 시 타인 락 삭제 방지용.
 TRIGGER_LOCK_KEY_PREFIX = "dicee:trigger_lock:"
@@ -453,3 +456,80 @@ async def is_access_blocked(
         logger.warning("Blocklist check failed (jti=%s): %s", jti, e, exc_info=True)
         await _blocklist_circuit._record_failure()
         return fail_closed
+
+
+# ==============================================================================
+# Cache Stampede 방어막: Soft TTL + Mutex Lock 로직
+# ==============================================================================
+
+async def set_cache_with_soft_ttl(
+    client: RedisAsyncio | None,
+    key: str,
+    data: Any,
+    soft_ttl_seconds: int,
+    hard_ttl_seconds: int,
+) -> None:
+    """
+    Soft TTL이 포함된 캐시를 저장합니다.
+    실제 데이터와 논리적 만료 시간(soft_ttl)을 함께 JSON으로 묶어 저장합니다.
+    hard_ttl_seconds는 메모리 누수를 막기 위한 최후의 물리적 만료 시간입니다 (soft_ttl보다 넉넉해야 함).
+    """
+    if client is None:
+        return
+    
+    payload = {
+        "data": data,
+        "soft_ttl": time.time() + soft_ttl_seconds
+    }
+    try:
+        await client.set(key, json.dumps(payload), ex=hard_ttl_seconds)
+    except Exception as e:
+        logger.warning("Cache set_with_soft_ttl failed (key=%s): %s", key, e)
+
+
+async def get_cache_with_soft_ttl(
+    client: RedisAsyncio | None,
+    key: str,
+    lock_ttl_seconds: int = 10
+) -> tuple[Any | None, bool]:
+    """
+    Soft TTL 캐시 조회 및 Mutex Lock 획득 (Cache Stampede 방어).
+    
+    반환값: (캐시된 데이터, DB조회_및_갱신_필요여부)
+    - (data, False): 아주 신선한 캐시, 또는 다른 코루틴이 갱신 중이라 바로 반환해야 하는 약간 오래된 캐시
+    - (data, True): 캐시가 오래되었고, '내가' DB를 조회해서 갱신해야 함 (Lock 획득 성공)
+    - (None, True): 캐시가 아예 없음(Hard Miss). '내가' DB를 조회해야 함. (Lock 획득 성공)
+    - (None, False): 캐시가 아예 없는데 다른 코루틴이 DB 조회 중. (호출부에서 짧은 딜레이 후 재시도해야 함)
+    """
+    if client is None:
+        return None, True
+
+    try:
+        raw = await client.get(key)
+        lock_key = f"{CACHE_LOCK_KEY_PREFIX}{key}"
+
+        if not raw:
+            # 완전한 Cache Miss (최초 조회 또는 Hard TTL 만료)
+            acquired = await client.set(lock_key, "1", nx=True, ex=lock_ttl_seconds)
+            return None, bool(acquired)
+
+        payload = json.loads(raw)
+        data = payload.get("data")
+        soft_ttl = payload.get("soft_ttl", 0)
+
+        if time.time() > soft_ttl:
+            # Soft TTL 만료됨 (오래된 데이터). 한 명만 갱신하도록 분산 락(Mutex) 획득 시도
+            acquired = await client.set(lock_key, "1", nx=True, ex=lock_ttl_seconds)
+            if acquired:
+                # 락 획득 성공! 이 요청(코루틴)만 DB에 다녀오도록 True 반환
+                return data, True
+            else:
+                # 락 획득 실패. 다른 누군가가 갱신 중이므로 나는 Stale(오래된) 데이터를 즉시 반환하여 DB 부하를 막음
+                return data, False
+        
+        # Soft TTL도 지나지 않은 신선한 데이터
+        return data, False
+
+    except Exception as e:
+        logger.warning("Cache get_with_soft_ttl failed (key=%s): %s", key, e)
+        return None, True
