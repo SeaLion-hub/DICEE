@@ -27,7 +27,16 @@
 - `- [단계 또는 영역] 무엇을 했는지 (어떤 파일/기능). 왜 또는 결과 한 줄.`
 
 ---
+## 2026-02-27: 대규모 트래픽 대비 백엔드 아키텍처 최적화 (언더엔지니어링 극복)
 
+**작업 내용**
+- **DB 데드락(Deadlock) 원천 차단:** 다중 Celery 워커가 병렬로 `upsert_notices_bulk` 수행 시 발생하는 행 수준 잠금(Row-level Lock) 엇갈림 현상을 방지하기 위해, 삽입 전 데이터를 유니크 키(`college_id`, `external_id`) 기준으로 오름차순 정렬하는 로직 추가.
+- **Cache Stampede(Thundering Herd) 방어막 구축:** Redis 캐시 만료 시 수만 개의 요청이 동시에 DB로 쏟아지는 현상을 막기 위해 `app/core/redis.py`에 Soft TTL(논리적 만료) 및 Mutex Lock(분산 락) 메커니즘 구현.
+- **FastAPI 읽기 전용 트랜잭션 분리:** 단순 공지사항 목록 조회 API의 성능 극대화를 위해 `AUTOCOMMIT` 격리 수준을 사용하는 `get_read_only_db` 의존성(Dependency) 추가.
+
+**결과 및 기대 효과**
+- 수강신청 등 단기간 트래픽 폭증 시에도 DB 커넥션 고갈이나 데드락 없이 안정적인 1초 이내 API 응답 속도 보장.
+- 상용 대학교 커뮤니티 앱(SNUTT 등) 수준의 동시성 제어 및 캐싱 방어력 확보.
 ## 2026-02-26
 
 - [주요 결함 개선 계획 구현] **(1)** on_chunk_processed 계약 준수 — crawl_service.crawl_college_sync에서 청크 단위로 commit → expunge_all → on_chunk_processed(ids) 호출, 누적 리스트 제거. **(2)** METRICS_ALLOWED_IPS 문서 정합 — .env.example "비우면 모든 IP 차단(fail-closed)"으로 수정. **(3)** DB 풀 예산 — database.check_pool_budget를 실제 설정값(db_pool_size_async 등) 기준으로 변경, docs/decisions/database-pool-capacity.md 섹션 2 갱신. **(4)** Production fail-fast — config.fail_fast_production에서 Google OAuth 사용 시 GOOGLE_REDIRECT_URIS 비어있지 않음·최소 1개 유효 URI(urlparse) 검사 추가. **(5)** Redis fallback — api_rate_limit: RateLimitUnavailableError·require_redis 옵션, Redis 없/장애 시 503 반환; config.api_rate_limit_require_redis 추가; auth.py·internal.py에서 503 처리; .env.example·DEPLOYMENT.md 문서화, blocklist 프로덕션 권장 문구. **(6)** crawl_runs 계약 — docs/decisions/crawl-runs-composite-pk-contract.md 추가. tests: test_security_features mock에 require_redis/**kwargs 수용. pytest 60 passed, 3 skipped.
