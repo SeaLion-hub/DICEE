@@ -186,6 +186,8 @@
 - 새로 떠오른 기능·변경은 **여기에만** 적고, 현재 마일스톤이 끝날 때까지 본문은 유지.
 - 각 아이디어는 **고려 시점** 명시. 마일스톤 완료 시 해당·이전 시점 검토 아이디어에 대해 사용자에게 확인 요청(규칙: `.cursor/rules/roadmap-and-worklog.mdc`).
 
+
+
 **3단계·크롤러 관련**
 
 - **3단계 마무리 또는 4단계 전** — 배치 조회: get_by_college_external_sync 호출 배치화.
@@ -230,5 +232,10 @@
 **시니어 리뷰**: SRP(crawl_service 유틸 분리), Sentry 데코레이터 분리(CQ1), 구글 토큰 asyncio.to_thread(CQ2), make_url(PERF1), 트랜잭션·expunge 명시(PERF2), defer 목록 조회(PERF3), 구조화된 에러 응답(SEC1), _build_bulk_upsert_stmt(DRY1), 인덱싱(IDX1~3).
 
 **분산·고성능 크롤 개선(2026-02-24 반영)**: Phase 1(Resilience) TTL·fail-closed·idempotency·본문 백필, Phase 2(Scalability) bounded in-flight·async semaphore·청크 commit·seen 청크 단위, Phase 3(Maintainability) ADR 부분 적용·crawl_policy 분리·uq_notices_college_external·테스트 3종, Phase 4(Observability) 메트릭·health 분리·상관 ID. 상세 WORK_LOG 참고.
+
+- [ ] **(5~6단계 적용 검토) SNUTT 아키텍처 벤치마킹 요소**
+  - **커스텀 에러 코드 (Error Enum):** 프론트엔드 예외 처리 고도화를 위해 `HTTPException`을 래핑하여 비즈니스 전용 에러 코드(예: `CRAWL_ERR_001`, `AUTH_001`)를 응답하는 전역 에러 핸들러 구축.
+  - **Fuzzy Search (퍼지 검색):** 5단계 검색 API 구현 시, 단순 `ILIKE`를 넘어 초성/유사어 검색 및 카테고리 필터링이 가능한 동적 쿼리 빌더(QueryDSL 방식) 적용 검토.
+  - **범용 Cache 컴포넌트:** 5단계 응답 속도 최적화 시, Redis 캐시 레이어 내부에서 Pydantic 모델의 JSON 직렬화/역직렬화를 자동 처리하는 `CacheService` 클래스 도입 검토.
 
 **결론**: 문서 계획이 코드가 되기 전까지는 의미 없다. P0 브랜치부터 작업·PR 시 코드 라인 단위 리뷰.
