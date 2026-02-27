@@ -1,6 +1,7 @@
 """Auth API. 구글 OAuth + JWT."""
 
 import logging
+from collections.abc import Callable
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -29,6 +30,49 @@ from app.services.auth_service import (
 router = APIRouter(prefix="/auth", tags=["auth"])
 logger = logging.getLogger(__name__)
 security = HTTPBearer(auto_error=False)
+
+
+def _auth_rate_limit_dep(
+    action: str,
+    max_requests_getter: Callable[[], int],
+    too_many_detail: str,
+):
+    """Auth 전용 rate-limit 의존성 팩토리. client_ip 확인 → 503, 제한 초과 → 429, 통과 시 client_ip 반환."""
+
+    async def _dep(
+        request: Request,
+        redis_rate=Depends(get_redis_blocklist),
+    ) -> str:
+        client_ip = get_client_ip(request)
+        if client_ip is None:
+            raise HTTPException(
+                status_code=503,
+                detail="Client IP could not be determined; rate limiting requires a valid client identity.",
+            )
+        identifier = f"auth_{action}:{client_ip}"
+        try:
+            allowed = await check_rate_limit(
+                redis_rate,
+                identifier=identifier,
+                max_requests=max_requests_getter(),
+                window_seconds=60,
+                require_redis=settings.api_rate_limit_require_redis,
+            )
+        except RateLimitUnavailableError:
+            raise HTTPException(
+                status_code=503,
+                detail="Rate limiting is temporarily unavailable. Try again later.",
+            ) from None
+        if not allowed:
+            logger.warning(
+                "auth %s rate limit exceeded",
+                action,
+                extra={"client_ip": client_ip, "identifier": identifier},
+            )
+            raise HTTPException(status_code=429, detail=too_many_detail)
+        return client_ip
+
+    return _dep
 
 
 async def get_current_user_id(
@@ -71,47 +115,23 @@ async def get_current_user_id_and_jti(
 
 @router.post("/google", response_model=TokenResponse)
 async def post_google_auth(
-    request: Request,
     payload: TokenPayload,
     session: AsyncSession = Depends(get_db),
     http_client: httpx.AsyncClient = Depends(get_httpx_client),
     key_fetcher=Depends(get_google_key_fetcher),
-    redis_rate=Depends(get_redis_blocklist),
+    client_ip: str = Depends(
+        _auth_rate_limit_dep(
+            "google",
+            lambda: settings.auth_google_rate_limit_per_minute,
+            "Too many authentication attempts, please try again later.",
+        )
+    ),
 ) -> TokenResponse:
     """
     구글 OAuth Authorization Code로 로그인.
     code를 받아 검증 후 Access/Refresh JWT 반환.
     외부 API 장애(타임아웃 등) → 503, 클라이언트 인증 오류 → 400.
     """
-    client_ip = get_client_ip(request)
-    if client_ip is None:
-        raise HTTPException(
-            status_code=503,
-            detail="Client IP could not be determined; rate limiting requires a valid client identity.",
-        )
-    identifier = f"auth_google:{client_ip}"
-    try:
-        allowed = await check_rate_limit(
-            redis_rate,
-            identifier=identifier,
-            max_requests=settings.auth_google_rate_limit_per_minute,
-            window_seconds=60,
-            require_redis=settings.api_rate_limit_require_redis,
-        )
-    except RateLimitUnavailableError:
-        raise HTTPException(
-            status_code=503,
-            detail="Rate limiting is temporarily unavailable. Try again later.",
-        ) from None
-    if not allowed:
-        logger.warning(
-            "auth google rate limit exceeded",
-            extra={"client_ip": client_ip, "identifier": identifier},
-        )
-        raise HTTPException(
-            status_code=429,
-            detail="Too many authentication attempts, please try again later.",
-        )
     try:
         result = await google_login(
             session,
@@ -139,44 +159,20 @@ async def post_google_auth(
 
 @router.post("/refresh", response_model=TokenResponse)
 async def post_refresh(
-    request: Request,
     payload: RefreshTokenPayload,
     session: AsyncSession = Depends(get_db),
-    redis_rate=Depends(get_redis_blocklist),
+    _client_ip: str = Depends(
+        _auth_rate_limit_dep(
+            "refresh",
+            lambda: settings.auth_refresh_rate_limit_per_minute,
+            "Too many refresh requests, please try again later.",
+        )
+    ),
 ) -> TokenResponse:
     """
     Refresh 토큰으로 새 Access/Refresh JWT 발급.
     type=refresh, token_version 검증 후 새 쌍 반환. 무효화된 토큰 시 401.
     """
-    client_ip = get_client_ip(request)
-    if client_ip is None:
-        raise HTTPException(
-            status_code=503,
-            detail="Client IP could not be determined; rate limiting requires a valid client identity.",
-        )
-    identifier = f"auth_refresh:{client_ip}"
-    try:
-        allowed = await check_rate_limit(
-            redis_rate,
-            identifier=identifier,
-            max_requests=settings.auth_refresh_rate_limit_per_minute,
-            window_seconds=60,
-            require_redis=settings.api_rate_limit_require_redis,
-        )
-    except RateLimitUnavailableError:
-        raise HTTPException(
-            status_code=503,
-            detail="Rate limiting is temporarily unavailable. Try again later.",
-        ) from None
-    if not allowed:
-        logger.warning(
-            "auth refresh rate limit exceeded",
-            extra={"client_ip": client_ip, "identifier": identifier},
-        )
-        raise HTTPException(
-            status_code=429,
-            detail="Too many refresh requests, please try again later.",
-        )
     try:
         tokens = await refresh_tokens(payload.refresh_token, session)
         await session.commit()

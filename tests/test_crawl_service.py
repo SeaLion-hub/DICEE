@@ -395,3 +395,84 @@ def test_record_crawl_failure_fallback_uses_shared_sync_client(monkeypatch):
     assert key.startswith(crawl_module.CRAWL_FAILURE_REDIS_KEY_PREFIX)
     assert "engineering" in payload
     assert ttl == crawl_module.CRAWL_FAILURE_REDIS_TTL_SECONDS
+
+
+def test_scrape_one_sync_returns_exception_in_tuple_on_value_error():
+    """_scrape_one_sync: ValueError 발생 시 tuple의 exc에 담겨 반환된다."""
+    from app.services.crawl_service import _scrape_one_sync
+
+    post = {"url": "https://example.com/1", "no": "ext-1"}
+
+    def scrape_raise(_url):
+        raise ValueError("parser error")
+
+    _, detail_url, data, exc = _scrape_one_sync(post, scrape_raise)
+    assert detail_url == "https://example.com/1"
+    assert data is None
+    assert exc is not None
+    assert isinstance(exc, ValueError)
+    assert str(exc) == "parser error"
+
+
+def test_scrape_one_sync_keyboard_interrupt_propagates():
+    """_scrape_one_sync: KeyboardInterrupt 발생 시 메인 스레드에서 함수 밖으로 전파된다."""
+    from app.services.crawl_service import _scrape_one_sync
+
+    post = {"url": "https://example.com/1"}
+
+    def scrape_raise(_url):
+        raise KeyboardInterrupt()
+
+    with pytest.raises(KeyboardInterrupt):
+        _scrape_one_sync(post, scrape_raise)
+
+
+@pytest.mark.asyncio
+async def test_fetch_one_async_returns_exception_in_tuple_on_exception():
+    """_fetch_one_async: 일반 Exception 발생 시 tuple로 반환된다."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from app.services.crawl_service import _fetch_one_async
+
+    post = {"url": "https://example.com/1"}
+    client = MagicMock()
+    rate_limiter = MagicMock()
+    rate_limiter.wait_async = AsyncMock(return_value=None)
+    sem = MagicMock()
+    sem.__aenter__ = AsyncMock(return_value=None)
+    sem.__aexit__ = AsyncMock(return_value=None)
+
+    async def scrape_raise(_client, url):
+        raise RuntimeError("fetch failed")
+
+    _, detail_url, data, exc = await _fetch_one_async(
+        client, post, scrape_raise, rate_limiter, sem
+    )
+    assert detail_url == "https://example.com/1"
+    assert data is None
+    assert exc is not None
+    assert isinstance(exc, RuntimeError)
+    assert str(exc) == "fetch failed"
+
+
+@pytest.mark.asyncio
+async def test_fetch_one_async_cancelled_error_propagates():
+    """_fetch_one_async: asyncio.CancelledError가 전파된다."""
+    import asyncio
+    from unittest.mock import AsyncMock, MagicMock
+
+    from app.services.crawl_service import _fetch_one_async
+
+    post = {"url": "https://example.com/1"}
+    client = MagicMock()
+    rate_limiter = MagicMock()
+    rate_limiter.wait_async = AsyncMock(return_value=None)
+    sem = MagicMock()
+    sem.__aenter__ = AsyncMock(return_value=None)
+    sem.__aexit__ = AsyncMock(return_value=None)
+
+    async def scrape_raise(_client, url):
+        raise asyncio.CancelledError()
+
+    with pytest.raises(asyncio.CancelledError):
+        await _fetch_one_async(client, post, scrape_raise, rate_limiter, sem)

@@ -124,6 +124,64 @@ def test_auth_google_rate_limit_returns_429(client, monkeypatch):
     assert body["detail"].startswith("Too many")
 
 
+def test_auth_refresh_rate_limit_returns_429(client, monkeypatch):
+    """Rate limit 초과 시 /v1/auth/refresh가 429를 반환하고 refresh_tokens는 호출되지 않는다."""
+    from app.api.v1 import auth as auth_module
+
+    async def _deny_rate_limit(
+        _client,
+        *,
+        identifier: str,
+        max_requests: int,
+        window_seconds: int,
+        require_redis: bool = False,
+        **kwargs: object,
+    ) -> bool:
+        return False
+
+    async def _dummy_refresh_tokens(*args, **kwargs):
+        raise AssertionError("refresh_tokens should not be called when rate limited")
+
+    monkeypatch.setattr(auth_module, "check_rate_limit", _deny_rate_limit)
+    monkeypatch.setattr(auth_module, "refresh_tokens", _dummy_refresh_tokens)
+
+    response = client.post(
+        "/v1/auth/refresh",
+        json={"refresh_token": "dummy-refresh-token"},
+    )
+    assert response.status_code == 429
+    body = response.json()
+    assert "Too many" in body["detail"] or "refresh" in body["detail"].lower()
+
+
+def test_auth_google_client_ip_unresolved_returns_503(client, monkeypatch):
+    """/v1/auth/google에서 client IP를 결정할 수 없으면 503을 반환한다."""
+    from app.api.v1 import auth as auth_module
+
+    monkeypatch.setattr(auth_module, "get_client_ip", lambda request: None)
+
+    response = client.post(
+        "/v1/auth/google",
+        json={"code": "dummy-code", "redirect_uri": "https://example.com/callback"},
+    )
+    assert response.status_code == 503
+    assert "Client IP" in response.json().get("detail", "")
+
+
+def test_auth_refresh_client_ip_unresolved_returns_503(client, monkeypatch):
+    """/v1/auth/refresh에서 client IP를 결정할 수 없으면 503을 반환한다."""
+    from app.api.v1 import auth as auth_module
+
+    monkeypatch.setattr(auth_module, "get_client_ip", lambda request: None)
+
+    response = client.post(
+        "/v1/auth/refresh",
+        json={"refresh_token": "dummy-refresh-token"},
+    )
+    assert response.status_code == 503
+    assert "Client IP" in response.json().get("detail", "")
+
+
 def test_check_rate_limit_inmemory_window(monkeypatch):
     """Redis 없는 환경에서 in-memory rate limit가 윈도우 내 횟수를 제한한다."""
     from app.core import api_rate_limit

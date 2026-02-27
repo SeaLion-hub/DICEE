@@ -145,6 +145,20 @@ def _keys_with_content_but_missing(
     return missing
 
 
+def _build_missing_notice_stmt(
+    missing: list[tuple[uuid.UUID, str]],
+):
+    """missing 기준 Notice id/college_id/external_id 조회용 select statement. len(missing) >= 1 전제."""
+    if len(missing) == 1:
+        (cid, eid) = missing[0]
+        return select(Notice.id, Notice.college_id, Notice.external_id).where(
+            Notice.college_id == cid, Notice.external_id == eid
+        )
+    return select(Notice.id, Notice.college_id, Notice.external_id).where(
+        tuple_(Notice.college_id, Notice.external_id).in_(missing)
+    )
+
+
 async def _fill_key_to_id_from_notices(
     session: AsyncSession,
     payloads: list[dict[str, Any]],
@@ -154,15 +168,7 @@ async def _fill_key_to_id_from_notices(
     missing = _keys_with_content_but_missing(payloads, key_to_id)
     if not missing:
         return
-    if len(missing) == 1:
-        (cid, eid) = missing[0]
-        stmt = select(Notice.id, Notice.college_id, Notice.external_id).where(
-            Notice.college_id == cid, Notice.external_id == eid
-        )
-    else:
-        stmt = select(Notice.id, Notice.college_id, Notice.external_id).where(
-            tuple_(Notice.college_id, Notice.external_id).in_(missing)
-        )
+    stmt = _build_missing_notice_stmt(missing)
     result = await session.execute(stmt)
     for row in result.all():
         nid, cid, eid = row[0], row[1], row[2]
@@ -178,15 +184,7 @@ def _fill_key_to_id_from_notices_sync(
     missing = _keys_with_content_but_missing(payloads, key_to_id)
     if not missing:
         return
-    if len(missing) == 1:
-        (cid, eid) = missing[0]
-        stmt = select(Notice.id, Notice.college_id, Notice.external_id).where(
-            Notice.college_id == cid, Notice.external_id == eid
-        )
-    else:
-        stmt = select(Notice.id, Notice.college_id, Notice.external_id).where(
-            tuple_(Notice.college_id, Notice.external_id).in_(missing)
-        )
+    stmt = _build_missing_notice_stmt(missing)
     result = session.execute(stmt)
     for row in result.all():
         nid, cid, eid = row[0], row[1], row[2]
