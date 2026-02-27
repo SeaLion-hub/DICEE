@@ -101,6 +101,17 @@ def _resolve_college_codes(college_code: str | None) -> list[str]:
     return [normalized] if normalized else list(COLLEGE_CODE_TO_MODULE.keys())
 
 
+def _require_client_ip(request: Request, *, endpoint: str) -> str:
+    """Fail-closed: if client IP cannot be resolved, return 503."""
+    client_ip = get_client_ip(request)
+    if client_ip is None:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Client IP could not be determined for {endpoint}",
+        )
+    return client_ip
+
+
 async def _claim_idempotency(
     redis_client: RedisAsyncio | None,
     idempotency_key: str | None,
@@ -218,9 +229,7 @@ async def post_trigger_crawl(
     P1: 인증 후 rate-limit 적용. 식별자는 get_client_ip(프록시 대응) 사용.
     """
     _authorize_internal_trigger(request, x_crawl_trigger_secret, authorization)
-    client_ip = get_client_ip(request) or (
-        request.client.host if request and request.client else "unknown"
-    )
+    client_ip = _require_client_ip(request, endpoint="/internal/trigger-crawl")
     rate_identifier = f"internal_trigger_crawl:{client_ip}"
     try:
         allowed = await check_rate_limit(
@@ -315,9 +324,7 @@ async def get_crawl_stats(
     P1: 인증 후 rate-limit. 식별자는 get_client_ip(프록시 대응) 사용.
     """
     _authorize_internal_trigger(request, x_crawl_trigger_secret, authorization)
-    client_ip = get_client_ip(request) or (
-        request.client.host if request and request.client else "unknown"
-    )
+    client_ip = _require_client_ip(request, endpoint="/internal/crawl-stats")
     rate_identifier = f"internal_crawl_stats:{client_ip}"
     try:
         allowed = await check_rate_limit(

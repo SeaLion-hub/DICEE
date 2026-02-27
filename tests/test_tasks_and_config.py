@@ -1,6 +1,9 @@
 """운영경로 테스트: Celery 태스크 등록, 예외 시 락 해제, production fail-fast."""
 
 import importlib
+import json
+import uuid
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -136,3 +139,194 @@ def test_celery_entry_fail_fast_when_app_entry_api():
             sys.modules["app.core.celery_app"] = celery_app_module
         with patch.dict("os.environ", {"APP_ENTRY": "celery"}, clear=False):
             importlib.reload(config_module)
+
+
+def test_production_local_spool_fail_fast_without_ephemeral_override():
+    with patch.dict(
+        "os.environ",
+        {
+            "ENVIRONMENT": "production",
+            "APP_ENTRY": "api",
+            "DATABASE_URL": "postgresql://localhost/test",
+            "REDIS_URL": "redis://localhost/0",
+            "JWT_SIGNING_MODE": "hs256",
+            "JWT_SECRET": "test-secret",
+            "GOOGLE_CLIENT_ID": "",
+            "GOOGLE_CLIENT_SECRET": "",
+            "TRUSTED_PROXY_IPS": "10.0.0.1",
+            "CRAWL_TRIGGER_SECRET": "test-trigger-secret",
+            "IP_HMAC_KEY": "test-ip-hmac-key",
+            "CONTENT_UPLOAD_FAILURE_POLICY": "fail",
+            "CONTENT_SPOOL_BACKEND": "local",
+            "CONTENT_SPOOL_ALLOW_EPHEMERAL": "false",
+        },
+        clear=False,
+    ):
+        from app.core.config import Settings
+
+        with pytest.raises(ValueError) as exc_info:
+            Settings()
+        assert "CONTENT_SPOOL_ALLOW_EPHEMERAL" in str(exc_info.value)
+
+
+def test_production_local_spool_allows_ephemeral_override():
+    with patch.dict(
+        "os.environ",
+        {
+            "ENVIRONMENT": "production",
+            "APP_ENTRY": "api",
+            "DATABASE_URL": "postgresql://localhost/test",
+            "REDIS_URL": "redis://localhost/0",
+            "JWT_SIGNING_MODE": "hs256",
+            "JWT_SECRET": "test-secret",
+            "GOOGLE_CLIENT_ID": "",
+            "GOOGLE_CLIENT_SECRET": "",
+            "TRUSTED_PROXY_IPS": "10.0.0.1",
+            "CRAWL_TRIGGER_SECRET": "test-trigger-secret",
+            "IP_HMAC_KEY": "test-ip-hmac-key",
+            "CONTENT_UPLOAD_FAILURE_POLICY": "fail",
+            "CONTENT_SPOOL_BACKEND": "local",
+            "CONTENT_SPOOL_ALLOW_EPHEMERAL": "true",
+        },
+        clear=False,
+    ):
+        from app.core.config import Settings
+
+        settings = Settings()
+        assert settings.content_spool_allow_ephemeral is True
+
+
+def test_non_production_local_spool_is_allowed():
+    with patch.dict(
+        "os.environ",
+        {
+            "ENVIRONMENT": "development",
+            "APP_ENTRY": "api",
+            "JWT_SIGNING_MODE": "hs256",
+            "JWT_SECRET": "test-secret",
+            "CONTENT_UPLOAD_FAILURE_POLICY": "fail",
+            "CONTENT_SPOOL_BACKEND": "local",
+            "CONTENT_SPOOL_ALLOW_EPHEMERAL": "false",
+        },
+        clear=False,
+    ):
+        from app.core.config import Settings
+
+        settings = Settings()
+        assert settings.environment == "development"
+
+
+def test_settings_fail_fast_rs256_mode_requires_complete_keys():
+    with patch.dict(
+        "os.environ",
+        {
+            "APP_ENTRY": "api",
+            "JWT_SIGNING_MODE": "rs256",
+            "JWT_PRIVATE_KEY_PEM": "private-only",
+            "JWT_PUBLIC_KEY_PEM": "",
+            "JWT_SECRET": "",
+        },
+        clear=False,
+    ):
+        from app.core.config import Settings
+
+        with pytest.raises(ValueError) as exc_info:
+            Settings()
+        assert "JWT_SIGNING_MODE=rs256" in str(exc_info.value)
+
+
+def test_settings_fail_fast_hs256_mode_requires_secret():
+    with patch.dict(
+        "os.environ",
+        {
+            "APP_ENTRY": "api",
+            "JWT_SIGNING_MODE": "hs256",
+            "JWT_SECRET": "",
+            "JWT_PRIVATE_KEY_PEM": "",
+            "JWT_PUBLIC_KEY_PEM": "",
+        },
+        clear=False,
+    ):
+        from app.core.config import Settings
+
+        with pytest.raises(ValueError) as exc_info:
+            Settings()
+        assert "JWT_SIGNING_MODE=hs256" in str(exc_info.value)
+
+
+def test_config_package_import_smoke():
+    import app.core.config as config_module
+    from app.core.config import base as base_module
+
+    assert config_module.settings is not None
+    assert base_module.Settings is config_module.Settings
+
+def test_drain_content_spool_updates_retry_metadata_on_upload_failure(tmp_path, monkeypatch):
+    from app.core import storage
+    from app.services import tasks as tasks_module
+
+    monkeypatch.setattr(tasks_module.settings, "content_spool_backend", "local")
+    monkeypatch.setattr(tasks_module.settings, "content_spool_dir", str(tmp_path / "spool"))
+    monkeypatch.setattr(tasks_module.settings, "content_spool_max_retries", 5)
+    monkeypatch.setattr(storage.settings, "content_spool_backend", "local")
+    monkeypatch.setattr(storage.settings, "content_spool_dir", str(tmp_path / "spool"))
+    monkeypatch.setattr(storage.settings, "content_spool_max_retries", 5)
+
+    storage._spool_write_failure(
+        uuid.UUID("00000000-0000-0000-0000-000000000001"),
+        "ext-1",
+        "hash-1",
+        "<html>hello</html>",
+    )
+
+    def _raise_upload(*args, **kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(tasks_module, "upload_notice_html", _raise_upload)
+
+    result = tasks_module.drain_content_spool_task()
+    assert result["drained"] == 0
+    assert result["dlq"] == 0
+
+    spool_files = sorted((tmp_path / "spool").glob("*.json"))
+    assert len(spool_files) == 1
+    payload = json.loads(spool_files[0].read_text(encoding="utf-8"))
+    assert payload["retry_count"] == 1
+    assert payload["last_error_type"] == "RuntimeError"
+    assert payload["last_error_stage"] == "upload"
+
+
+def test_drain_content_spool_moves_to_dlq_with_dead_letter_metadata(tmp_path, monkeypatch):
+    from app.core import storage
+    from app.services import tasks as tasks_module
+
+    spool_dir = tmp_path / "spool"
+    monkeypatch.setattr(tasks_module.settings, "content_spool_backend", "local")
+    monkeypatch.setattr(tasks_module.settings, "content_spool_dir", str(spool_dir))
+    monkeypatch.setattr(tasks_module.settings, "content_spool_max_retries", 1)
+    monkeypatch.setattr(storage.settings, "content_spool_backend", "local")
+    monkeypatch.setattr(storage.settings, "content_spool_dir", str(spool_dir))
+    monkeypatch.setattr(storage.settings, "content_spool_max_retries", 1)
+
+    storage._spool_write_failure(
+        uuid.UUID("00000000-0000-0000-0000-000000000001"),
+        "ext-1",
+        "hash-1",
+        "<html>hello</html>",
+    )
+
+    def _raise_upload(*args, **kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(tasks_module, "upload_notice_html", _raise_upload)
+
+    result = tasks_module.drain_content_spool_task()
+    assert result["dlq"] == 1
+    assert result["failed"] == 1
+
+    dlq_dir = Path(str(spool_dir) + "_dlq")
+    dlq_files = sorted(dlq_dir.glob("*.json"))
+    assert len(dlq_files) == 1
+    payload = json.loads(dlq_files[0].read_text(encoding="utf-8"))
+    assert payload["dead_letter_reason"] == "max_retries_exceeded"
+    assert "dead_lettered_at" in payload

@@ -365,6 +365,11 @@ def _get_sync_redis_client():
     return _sync_redis_client
 
 
+def get_shared_sync_redis_client():
+    """Shared sync Redis client singleton for worker-side sync paths."""
+    return _get_sync_redis_client()
+
+
 def renew_trigger_lock_sync(college_code: str, lock_token: str | None) -> bool:
     """
     단과대별 크롤 트리거 락 TTL 갱신(소유자만). 워커 장시간 실행/재시도 중 heartbeat용.

@@ -62,3 +62,88 @@ def test_upload_local_does_not_escape_base(tmp_path, monkeypatch):
     # 실제 파일이 생성되지 않았는지 확인
     assert not (Path(tmp_path).parent / "escape.html").exists()
 
+
+def test_apply_error_metadata_adds_expected_fields():
+    entry = {"college_id": "c", "external_id": "e", "html_content": "h"}
+    updated = storage.apply_error_metadata(
+        entry,
+        error=RuntimeError("x" * 1000),
+        stage="upload",
+        retry_count=3,
+    )
+    assert updated[storage.SPOOL_RETRY_COUNT_KEY] == 3
+    assert updated[storage.SPOOL_LAST_ERROR_TYPE_KEY] == "RuntimeError"
+    assert len(updated[storage.SPOOL_LAST_ERROR_MESSAGE_KEY]) == storage.SPOOL_LAST_ERROR_MESSAGE_MAX_LEN
+    assert updated[storage.SPOOL_LAST_ERROR_STAGE_KEY] == "upload"
+    assert storage.SPOOL_LAST_ERROR_AT_KEY in updated
+
+
+def test_spool_read_entry_accepts_legacy_payload(tmp_path):
+    file_path = tmp_path / "legacy.json"
+    file_path.write_text(
+        '{"college_id":"a","external_id":"b","html_content":"<html></html>","retry_count":1}',
+        encoding="utf-8",
+    )
+    entry = storage.spool_read_entry(file_path)
+    assert entry is not None
+    assert entry["college_id"] == "a"
+
+
+def test_spool_move_to_dlq_s3_writes_dead_letter_metadata(monkeypatch):
+    puts = []
+    deletes = []
+
+    class _FakeClient:
+        def put_object(self, **kwargs):
+            puts.append(kwargs)
+
+        def delete_object(self, **kwargs):
+            deletes.append(kwargs)
+
+    monkeypatch.setattr(
+        storage,
+        "settings",
+        storage.settings.model_copy(update={"s3_bucket": "bucket", "content_spool_s3_prefix": "pref"}),
+    )
+    monkeypatch.setattr(storage, "_build_s3_client", lambda: _FakeClient())
+
+    moved = storage.spool_move_to_dlq_s3(
+        "pref/123.json",
+        {"college_id": "a", "external_id": "b", "html_content": "h"},
+        reason="max_retries_exceeded",
+    )
+    assert moved is True
+    assert len(puts) == 1
+    assert len(deletes) == 1
+    body = puts[0]["Body"].decode("utf-8")
+    assert "dead_lettered_at" in body
+    assert "max_retries_exceeded" in body
+
+
+def test_spool_list_s3_skips_dlq_entries(monkeypatch):
+    class _FakePaginator:
+        def paginate(self, **kwargs):
+            return [
+                {
+                    "Contents": [
+                        {"Key": "pref/1.json"},
+                        {"Key": "pref/dlq/2.json"},
+                        {"Key": "pref/3.txt"},
+                    ]
+                }
+            ]
+
+    class _FakeClient:
+        def get_paginator(self, name):
+            assert name == "list_objects_v2"
+            return _FakePaginator()
+
+    monkeypatch.setattr(
+        storage,
+        "settings",
+        storage.settings.model_copy(update={"s3_bucket": "bucket", "content_spool_s3_prefix": "pref"}),
+    )
+    monkeypatch.setattr(storage, "_build_s3_client", lambda: _FakeClient())
+
+    keys = storage.spool_list_s3()
+    assert keys == ["pref/1.json"]

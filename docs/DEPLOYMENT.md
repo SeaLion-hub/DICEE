@@ -471,3 +471,26 @@ Private Key 내용을 `JWT_PRIVATE_KEY_PEM`, Public Key 내용을 `JWT_PUBLIC_KE
 - Vercel에서 **Import Git Repository** 후 해당 폴더를 **Root Directory**로 지정.
 - 환경 변수: `NEXT_PUBLIC_API_URL`(백엔드 Railway URL), 구글 로그인용 클라이언트 ID 등.
 - 상세는 6단계 진행 시 ROADMAP·이 문서에 추가.
+
+---
+
+## 2026-02-27 Additions
+
+### New environment variables
+
+- `JWT_SIGNING_MODE` (`auto|hs256|rs256`, default `auto`)
+  - `auto` chooses RS first when both HS and RS are configured.
+- `CONTENT_SPOOL_ALLOW_EPHEMERAL` (default `false`)
+  - In production with `CONTENT_UPLOAD_FAILURE_POLICY=fail` and `CONTENT_SPOOL_BACKEND=local`, boot fails unless this is explicitly `true`.
+- `CONTENT_SPOOL_S3_PREFIX` (default `content-spool`)
+  - Prefix for S3 spool objects.
+
+### Internal API fail-closed update
+
+- `/internal/trigger-crawl` and `/internal/crawl-stats` now return `503` when client IP cannot be resolved.
+- The `"unknown"` fallback identifier path was removed.
+
+### Spool backend update
+
+- `CONTENT_SPOOL_BACKEND=s3` is now supported for drain paths.
+- Local and S3 spool entries share the same retry/error/dead-letter metadata schema.

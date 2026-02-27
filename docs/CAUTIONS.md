@@ -185,3 +185,12 @@
 7. 작업 끝나면 **WORK_LOG**에 한 줄이라도 썼는가?
 
 이 문서는 ROADMAP·비판 반영 내용을 바탕으로 작성됨. 수정·추가 시 WORK_LOG에 기록할 것.
+
+---
+
+## 2026-02-27 Additional Cautions
+
+- `JWT_SIGNING_MODE=auto` now has fixed precedence: RS key pair wins over HS secret.
+- Internal protected endpoints (`/internal/trigger-crawl`, `/internal/crawl-stats`) fail-closed (`503`) when client IP cannot be determined.
+- If external AI calls are added to `process_notice_ai_task`, do not hold a DB connection during the external call. Split claim/update transactions around the call.
+- Config package extension rule: no circular imports and no submodule import of runtime `settings`.

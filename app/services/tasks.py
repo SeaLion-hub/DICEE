@@ -1,6 +1,6 @@
-"""
-Celery 워커가 실행할 작업(Task) 정의.
-동기 DB(psycopg2)·crawl_service.run_crawl_job_sync 사용. "Too many connections" 방지.
+﻿"""
+Celery ?뚯빱媛 ?ㅽ뻾???묒뾽(Task) ?뺤쓽.
+?숆린 DB(psycopg2)쨌crawl_service.run_crawl_job_sync ?ъ슜. "Too many connections" 諛⑹?.
 """
 
 import logging
@@ -24,9 +24,19 @@ from app.core.metrics import (
 )
 from app.core.redis import release_trigger_lock_sync, renew_trigger_lock_sync
 from app.core.storage import (
+    SPOOL_LAST_ERROR_TYPE_KEY,
     SPOOL_RETRY_COUNT_KEY,
+    apply_error_metadata,
+    spool_delete_local,
+    spool_delete_s3,
     spool_list_local,
+    spool_list_s3,
+    spool_move_to_dlq_local,
+    spool_move_to_dlq_s3,
+    spool_overwrite_entry,
+    spool_overwrite_s3,
     spool_read_entry,
+    spool_read_s3,
     upload_notice_html,
 )
 from app.repositories.crawl_run_repository import close_stale_running_runs_sync
@@ -43,7 +53,7 @@ TRIGGER_LOCK_HEARTBEAT_INTERVAL_SECONDS = 60
 
 
 def _set_task_context(task_id: str | None, college_code: str | None = None):
-    """Sentry·로그용 컨텍스트. task_id·college_code로 4단계 디버깅 용이."""
+    """Sentry쨌濡쒓렇??而⑦뀓?ㅽ듃. task_id쨌college_code濡?4?④퀎 ?붾쾭源??⑹씠."""
     try:
         import sentry_sdk
 
@@ -60,7 +70,7 @@ def _heartbeat_loop(
     lock_token: str | None,
     stop_event: threading.Event,
 ) -> None:
-    """주기적으로 락 TTL 갱신. stop_event가 set될 때까지 TRIGGER_LOCK_HEARTBEAT_INTERVAL_SECONDS마다 실행."""
+    """二쇨린?곸쑝濡???TTL 媛깆떊. stop_event媛 set???뚭퉴吏 TRIGGER_LOCK_HEARTBEAT_INTERVAL_SECONDS留덈떎 ?ㅽ뻾."""
     while not stop_event.wait(TRIGGER_LOCK_HEARTBEAT_INTERVAL_SECONDS):
         if renew_trigger_lock_sync(college_code, lock_token):
             logger.debug("Trigger lock heartbeat renewed: college=%s", college_code)
@@ -80,10 +90,10 @@ def crawl_college_task(
     lock_token: str | None = None,
     enqueued_at: float | None = None,
 ):
-    """Celery 크롤 태스크. 동기 세션·crawl_college_sync. finally 락 해제; heartbeat로 TTL 갱신."""
+    """Celery ?щ· ?쒖뒪?? ?숆린 ?몄뀡쨌crawl_college_sync. finally ???댁젣; heartbeat濡?TTL 媛깆떊."""
     task_id = getattr(self.request, "id", None) or ""
     _set_task_context(str(task_id) if task_id else None, college_code)
-    lock_hint = (lock_token[:8] + "…") if lock_token else "none"
+    lock_hint = (lock_token[:8] + "...") if lock_token else "none"
     logger.info(
         "Task Started: task_id=%s college_code=%s lock_token=%s",
         task_id, college_code, lock_hint,
@@ -143,7 +153,7 @@ def crawl_college_task(
         raise
     finally:
         set_gauge(CRAWL_DURATION_SECONDS, time.monotonic() - started_at, labels=labels)
-        # heartbeat 중지 → join → 락 해제 순서 유지(경합 창 최소화). Lua 소유권 검사로 치명적 오작동 없음.
+        # heartbeat 以묒? ??join ?????댁젣 ?쒖꽌 ?좎?(寃쏀빀 李?理쒖냼??. Lua ?뚯쑀沅?寃?щ줈 移섎챸???ㅼ옉???놁쓬.
         stop_heartbeat.set()
         if heartbeat_thread is not None:
             heartbeat_thread.join(timeout=2.0)
@@ -153,8 +163,8 @@ def crawl_college_task(
 @app.task(name="app.services.tasks.close_stale_crawl_runs_task")
 def close_stale_crawl_runs_task():
     """
-    Stale RUNNING 정리: started_at이 crawl_run_stale_seconds보다 오래된 crawl_runs를 FAILED로 닫음.
-    Celery Beat에서 주기 호출 권장(예: 15분마다). CRAWL_RUN_STALE_SECONDS로 임계값 설정.
+    Stale RUNNING ?뺣━: started_at??crawl_run_stale_seconds蹂대떎 ?ㅻ옒??crawl_runs瑜?FAILED濡??レ쓬.
+    Celery Beat?먯꽌 二쇨린 ?몄텧 沅뚯옣(?? 15遺꾨쭏??. CRAWL_RUN_STALE_SECONDS濡??꾧퀎媛??ㅼ젙.
     """
     older_than = settings.crawl_run_stale_seconds
     with get_sync_session() as session:
@@ -174,9 +184,9 @@ def close_stale_crawl_runs_task():
 )
 def process_notice_ai_task(self, notice_id: str):
     """
-    AI 처리 태스크. FOR UPDATE SKIP LOCKED + ai_status 선점으로 동시 워커 중복 처리 방지.
-    AI_PIPELINE_ENABLED=False면 스킵(pending 유지). True일 때만 Gemini 호출 후 update_ai_result_sync.
-    notice_id: UUID 문자열 (Celery 직렬화용).
+    AI 泥섎━ ?쒖뒪?? FOR UPDATE SKIP LOCKED + ai_status ?좎젏?쇰줈 ?숈떆 ?뚯빱 以묐났 泥섎━ 諛⑹?.
+    AI_PIPELINE_ENABLED=False硫??ㅽ궢(pending ?좎?). True???뚮쭔 Gemini ?몄텧 ??update_ai_result_sync.
+    notice_id: UUID 臾몄옄??(Celery 吏곷젹?붿슜).
     """
     from app.core.config import settings
 
@@ -197,97 +207,162 @@ def process_notice_ai_task(self, notice_id: str):
                 notice_id,
             )
             return
-        # 4단계: Gemini 호출 후 ai_extracted_json 생성. ai_pipeline_enabled=True일 때만 여기 도달.
+        # AI pipeline constraint:
+        # If an external AI call is added here later, split the transaction into
+        # (1) claim/update status, (2) external call outside DB session,
+        # (3) result update transaction. Do not hold DB connections during AI calls.
         logger.info("process_notice_ai_task: task_id=%s notice_id=%s", task_id, notice_id)
         update_ai_result_sync(session, notice_uuid, {})
 
 
-def _move_spool_to_dlq(path: Path, dlq_dir: Path) -> bool:
-    """스풀 파일을 DLQ 디렉터리로 이동. 성공 시 True."""
-    try:
-        dlq_dir.mkdir(parents=True, exist_ok=True)
-        dest = dlq_dir / path.name
-        path.rename(dest)
-        return True
-    except OSError:
-        logger.exception("drain_content_spool_task: move to DLQ failed path=%s", path)
-        return False
+def _resolve_spool_backend_ops(backend: str):
+    if backend == "local":
+        return (
+            spool_list_local,
+            spool_read_entry,
+            spool_overwrite_entry,
+            spool_delete_local,
+            lambda item, entry, reason: spool_move_to_dlq_local(item, entry, reason=reason),
+        )
+    if backend == "s3":
+        return (
+            spool_list_s3,
+            spool_read_s3,
+            spool_overwrite_s3,
+            spool_delete_s3,
+            lambda item, entry, reason: spool_move_to_dlq_s3(item, entry, reason=reason),
+        )
+    return None
 
 
 @app.task(name="app.services.tasks.drain_content_spool_task")
 def drain_content_spool_task():
-    """
-    스풀에 쌓인 업로드 실패 건을 재업로드 후 DB(notice_contents)에 반영.
-    local 백엔드만 지원. 성공 시 파일 삭제, 최대 재시도·파싱 실패·notice 없음 시 DLQ로 이동.
-    재업로드 실패 시 기존 파일을 덮어써 retry_count만 갱신(중복 파일 생성 안 함).
-    """
-    from app.core.storage import _spool_base_path, spool_overwrite_entry
-
+    """Drain failed content uploads from spool and update notice content URLs."""
     backend = (getattr(settings, "content_spool_backend", None) or "local").strip().lower()
-    if backend != "local":
-        logger.warning(
-            "drain_content_spool_task: backend=%s not implemented (only local). "
-            "Spool drain skipped; set CONTENT_SPOOL_BACKEND=local or use persistent volume.",
-            backend,
-        )
+    ephemeral = bool(getattr(settings, "content_spool_allow_ephemeral", False))
+    logger.info(
+        "drain_content_spool_task: start backend=%s allow_ephemeral=%s",
+        backend,
+        ephemeral,
+    )
+
+    ops = _resolve_spool_backend_ops(backend)
+    if ops is None:
+        logger.warning("drain_content_spool_task: unsupported backend=%s", backend)
         return {"drained": 0, "failed": 0, "dlq": 0}
-    base = _spool_base_path()
-    dlq_dir = base.parent / (base.name + "_dlq")
-    max_retries = getattr(settings, "content_spool_max_retries", 5)
+
+    list_fn, read_fn, overwrite_fn, delete_fn, move_to_dlq_fn = ops
+    max_retries = int(getattr(settings, "content_spool_max_retries", 5) or 5)
+
     drained = 0
     dlq_count = 0
     failed = 0
-    for path in spool_list_local():
-        entry = spool_read_entry(path)
+
+    def _move_to_dlq_or_mark(
+        item: Path | str,
+        entry: dict,
+        *,
+        reason: str,
+    ) -> bool:
+        moved = bool(move_to_dlq_fn(item, entry, reason))
+        if moved:
+            return True
+
+        marked = apply_error_metadata(
+            entry,
+            error=f"DLQ move failed: {reason}",
+            stage="dlq_move",
+            retry_count=int(entry.get(SPOOL_RETRY_COUNT_KEY, 0) or 0),
+        )
+        overwrite_fn(item, marked)
+        return False
+
+    for item in list_fn():
+        entry = read_fn(item)
         if not entry:
-            if _move_spool_to_dlq(path, dlq_dir):
-                dlq_count += 1
+            _move_to_dlq_or_mark(item, {}, reason="invalid_spool_entry")
             failed += 1
             continue
+
         try:
             cid = uuid_mod.UUID(entry["college_id"])
-        except (ValueError, KeyError):
-            if _move_spool_to_dlq(path, dlq_dir):
+        except (ValueError, KeyError, TypeError):
+            marked = apply_error_metadata(entry, error="invalid college_id", stage="db_update")
+            if _move_to_dlq_or_mark(item, marked, reason="invalid_college_id"):
                 dlq_count += 1
             failed += 1
             continue
+
         eid = entry.get("external_id", "")
         ch = entry.get("content_hash")
         html = entry.get("html_content", "")
-        retry = int(entry.get(SPOOL_RETRY_COUNT_KEY, 0))
-        content_url = None
+        retry = int(entry.get(SPOOL_RETRY_COUNT_KEY, 0) or 0)
+
         try:
             content_url = upload_notice_html(html, college_id=cid, external_id=eid, content_hash=ch)
         except Exception as e:
-            logger.warning("drain_content_spool_task: upload failed path=%s retry=%s error=%s", path, retry, e)
             retry += 1
+            marked = apply_error_metadata(entry, error=e, stage="upload", retry_count=retry)
+            logger.warning(
+                "drain_content_spool_task: upload failed item=%s retry=%s error_type=%s",
+                item,
+                retry,
+                marked.get(SPOOL_LAST_ERROR_TYPE_KEY),
+            )
             if retry >= max_retries:
-                if _move_spool_to_dlq(path, dlq_dir):
+                if _move_to_dlq_or_mark(item, marked, reason="max_retries_exceeded"):
                     dlq_count += 1
                 failed += 1
             else:
-                spool_overwrite_entry(path, {**entry, SPOOL_RETRY_COUNT_KEY: retry})
+                overwrite_fn(item, marked)
             continue
+
         if not content_url:
-            failed += 1
+            retry += 1
+            marked = apply_error_metadata(
+                entry,
+                error="upload returned empty content_url",
+                stage="upload",
+                retry_count=retry,
+            )
+            if retry >= max_retries:
+                if _move_to_dlq_or_mark(item, marked, reason="empty_content_url"):
+                    dlq_count += 1
+                failed += 1
+            else:
+                overwrite_fn(item, marked)
             continue
+
         with get_sync_session() as session:
             if update_notice_content_url_sync(session, cid, eid, content_url):
                 drained += 1
                 try:
-                    path.unlink()
-                except OSError:
-                    logger.warning("drain_content_spool_task: unlink after success failed path=%s", path)
+                    delete_fn(item)
+                except Exception:
+                    logger.warning("drain_content_spool_task: delete after success failed item=%s", item)
             else:
-                logger.warning("drain_content_spool_task: notice not found college_id=%s external_id=%s", cid, eid)
-                if _move_spool_to_dlq(path, dlq_dir):
+                marked = apply_error_metadata(
+                    entry,
+                    error="notice not found during content URL update",
+                    stage="db_update",
+                    retry_count=retry,
+                )
+                logger.warning(
+                    "drain_content_spool_task: notice not found college_id=%s external_id=%s",
+                    cid,
+                    eid,
+                )
+                if _move_to_dlq_or_mark(item, marked, reason="notice_not_found"):
                     dlq_count += 1
                 failed += 1
+
     if drained or dlq_count or failed:
         logger.info(
-            "drain_content_spool_task: drained=%s dlq=%s failed=%s",
+            "drain_content_spool_task: drained=%s dlq=%s failed=%s backend=%s allow_ephemeral=%s",
             drained,
             dlq_count,
             failed,
+            backend,
+            ephemeral,
         )
     return {"drained": drained, "failed": failed, "dlq": dlq_count}

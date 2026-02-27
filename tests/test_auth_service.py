@@ -54,3 +54,66 @@ def test_allowed_redirect_uris_raises_when_config_set_but_all_invalid(monkeypatc
             _allowed_redirect_uris()
     finally:
         _allowed_redirect_uris.cache_clear()
+
+
+def test_jwt_auto_prefers_rs_when_hs_and_rs_both_present(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("app.services.auth_service.settings.jwt_signing_mode", "auto")
+    monkeypatch.setattr("app.services.auth_service.settings.jwt_secret", SecretStr("hs-secret"))
+    monkeypatch.setattr("app.services.auth_service.settings.jwt_private_key_pem", SecretStr("private-key"))
+    monkeypatch.setattr("app.services.auth_service.settings.jwt_public_key_pem", SecretStr("public-key"))
+
+    with patch("app.services.auth_service.jwt.encode", return_value="token") as mock_encode:
+        create_jwt_pair(user_id=uuid.UUID("00000000-0000-7000-8000-000000000001"))
+
+    assert mock_encode.call_count == 2
+    assert all(call.kwargs["algorithm"] == "RS256" for call in mock_encode.call_args_list)
+
+
+def test_jwt_auto_falls_back_to_hs_when_rs_keypair_incomplete(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("app.services.auth_service.settings.jwt_signing_mode", "auto")
+    monkeypatch.setattr("app.services.auth_service.settings.jwt_secret", SecretStr("hs-secret"))
+    monkeypatch.setattr("app.services.auth_service.settings.jwt_private_key_pem", SecretStr(""))
+    monkeypatch.setattr("app.services.auth_service.settings.jwt_public_key_pem", SecretStr("public-key-only"))
+
+    with patch("app.services.auth_service.jwt.encode", return_value="token") as mock_encode:
+        create_jwt_pair(user_id=uuid.UUID("00000000-0000-7000-8000-000000000001"))
+
+    assert mock_encode.call_count == 2
+    assert all(call.kwargs["algorithm"] == "HS256" for call in mock_encode.call_args_list)
+
+
+def test_jwt_rs256_mode_requires_complete_keypair(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("app.services.auth_service.settings.jwt_signing_mode", "rs256")
+    monkeypatch.setattr("app.services.auth_service.settings.jwt_secret", SecretStr("hs-secret"))
+    monkeypatch.setattr("app.services.auth_service.settings.jwt_private_key_pem", SecretStr("private-only"))
+    monkeypatch.setattr("app.services.auth_service.settings.jwt_public_key_pem", None)
+
+    with pytest.raises(AuthError, match="JWT_SIGNING_MODE=rs256"):
+        create_jwt_pair(user_id=uuid.UUID("00000000-0000-7000-8000-000000000001"))
+
+
+def test_jwt_hs256_mode_requires_secret(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("app.services.auth_service.settings.jwt_signing_mode", "hs256")
+    monkeypatch.setattr("app.services.auth_service.settings.jwt_secret", SecretStr(""))
+    monkeypatch.setattr("app.services.auth_service.settings.jwt_private_key_pem", SecretStr("private"))
+    monkeypatch.setattr("app.services.auth_service.settings.jwt_public_key_pem", SecretStr("public"))
+
+    with pytest.raises(AuthError, match="JWT_SIGNING_MODE=hs256"):
+        create_jwt_pair(user_id=uuid.UUID("00000000-0000-7000-8000-000000000001"))
+
+
+def test_encode_decode_use_same_mode_in_auto(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.services.auth_service import (
+        _jwt_decode_key_and_algorithm,
+        _jwt_encode_key_and_algorithm,
+    )
+
+    monkeypatch.setattr("app.services.auth_service.settings.jwt_signing_mode", "auto")
+    monkeypatch.setattr("app.services.auth_service.settings.jwt_secret", SecretStr("hs-secret"))
+    monkeypatch.setattr("app.services.auth_service.settings.jwt_private_key_pem", None)
+    monkeypatch.setattr("app.services.auth_service.settings.jwt_public_key_pem", SecretStr("public-only"))
+
+    _, encode_alg = _jwt_encode_key_and_algorithm()
+    _, decode_alg = _jwt_decode_key_and_algorithm()
+    assert encode_alg == "HS256"
+    assert decode_alg == "HS256"

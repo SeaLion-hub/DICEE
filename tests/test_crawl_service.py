@@ -106,3 +106,81 @@ def test_crawl_college_uses_bounded_seen_set():
 
     assert len(seen_captured) == 1
     assert isinstance(seen_captured[0], _BoundedSeenSet)
+
+def test_redis_seen_set_uses_shared_sync_client(monkeypatch):
+    from app.services import crawl_service as crawl_module
+
+    class _FakePipe:
+        def __init__(self):
+            self.ops = []
+
+        def sadd(self, key, value):
+            self.ops.append(("sadd", key, value))
+            return self
+
+        def expire(self, key, ttl):
+            self.ops.append(("expire", key, ttl))
+            return self
+
+        def execute(self):
+            return True
+
+    class _FakeClient:
+        def __init__(self):
+            self.pipe = _FakePipe()
+
+        def pipeline(self):
+            return self.pipe
+
+        def sismember(self, key, value):
+            return True
+
+    fake_client = _FakeClient()
+    call_count = {"count": 0}
+
+    def _shared_client():
+        call_count["count"] += 1
+        return fake_client
+
+    monkeypatch.setattr(crawl_module, "get_shared_sync_redis_client", _shared_client)
+
+    seen = crawl_module._RedisSeenSet(
+        uuid.UUID("00000000-0000-0000-0000-000000000001"),
+        "redis://localhost/0",
+        required=True,
+    )
+    seen.add("id-1")
+    assert "id-1" in seen
+    seen.close()
+
+    assert call_count["count"] == 1
+    assert fake_client.pipe.ops
+
+
+def test_record_crawl_failure_fallback_uses_shared_sync_client(monkeypatch):
+    from app.services import crawl_service as crawl_module
+
+    class _FakeClient:
+        def __init__(self):
+            self.calls = []
+
+        def set(self, key, payload, ex):
+            self.calls.append((key, payload, ex))
+
+    fake_client = _FakeClient()
+
+    monkeypatch.setattr(crawl_module.settings, "redis_url", "redis://localhost/0")
+    monkeypatch.setattr(crawl_module, "get_shared_sync_redis_client", lambda: fake_client)
+
+    crawl_module._record_crawl_failure_fallback(
+        uuid.UUID("00000000-0000-0000-0000-000000000001"),
+        "task-1",
+        "engineering",
+        "error",
+    )
+
+    assert len(fake_client.calls) == 1
+    key, payload, ttl = fake_client.calls[0]
+    assert key.startswith(crawl_module.CRAWL_FAILURE_REDIS_KEY_PREFIX)
+    assert "engineering" in payload
+    assert ttl == crawl_module.CRAWL_FAILURE_REDIS_TTL_SECONDS

@@ -18,3 +18,22 @@
 
 - [app/core/config.py](../../app/core/config.py): `Settings`, 도메인 뷰(`.db`, `.redis` 등). 구형 평탄 필드 접근 차단은 `Settings.__getattribute__` 가드(구형 필드명 집합)로 구현되어 있으며, `LEGACY_CONFIG_FORBIDDEN=true` 시 해당 필드 접근 시 `RuntimeError` 발생.
 - 마이그레이션 기한 및 `LEGACY_CONFIG_FORBIDDEN` 정책은 배포·CI에서 적용.
+
+---
+
+## 2026-02-27 Update
+
+Config is now physically split into `app/core/config/` modules.
+
+Rules added for safe extension:
+
+1. Submodules under `app/core/config/` must not import the runtime `settings` instance.
+2. `app/core/config/base.py` is the only assembly point for the `Settings` model.
+3. `app/core/config/__init__.py` is the only place that creates `settings = Settings()`.
+4. Circular imports between config submodules are prohibited.
+5. Reverse references from submodules to `base`/`settings` are prohibited.
+
+Compatibility contract is preserved:
+
+- `from app.core.config import settings`
+- `from app.core.config import Settings`

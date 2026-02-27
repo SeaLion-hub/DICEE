@@ -30,3 +30,16 @@ Private Key 내용을 한 줄로(줄바꿈을 `\n`으로) 환경 변수에 넣�
 ## 배포
 
 - [DEPLOYMENT.md](../DEPLOYMENT.md)의 환경 변수 섹션에 `JWT_PRIVATE_KEY_PEM`, `JWT_PUBLIC_KEY_PEM` 설명 및 RS256 선택 시 `JWT_SECRET` 불필요함을 명시한다.
+
+---
+
+## 2026-02-27 Update
+
+- Added `JWT_SIGNING_MODE` (`auto|hs256|rs256`).
+- `auto` precedence is explicitly fixed to **RS first**:
+  1. If a complete RS key pair exists (`JWT_PRIVATE_KEY_PEM` + `JWT_PUBLIC_KEY_PEM`), use `RS256`.
+  2. Otherwise, if `JWT_SECRET` exists, use `HS256`.
+  3. Otherwise fail-fast at boot.
+- Encode and decode now use the same resolver; RS mode is selected only when the key pair is complete.
+- `rs256` mode fails fast when RS key material is incomplete.
+- `hs256` mode fails fast when `JWT_SECRET` is missing.

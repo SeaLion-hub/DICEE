@@ -318,6 +318,34 @@ def test_trigger_crawl_invalid_secret_returns_401_before_rate_limit(client, monk
     assert response.status_code == 401
 
 
+def test_trigger_crawl_returns_503_when_client_ip_unresolved(client, monkeypatch):
+    from app.api import internal as internal_module
+    from app.core.deps import get_redis_trigger_lock
+    from app.main import app
+
+    def _noop_authorize(request, x_secret, auth):
+        pass
+
+    async def _allow_rate_limit(*args, **kwargs):
+        return True
+
+    async def _fake_redis():
+        yield None
+
+    monkeypatch.setattr(internal_module, "_authorize_internal_trigger", _noop_authorize)
+    monkeypatch.setattr(internal_module, "get_client_ip", lambda request: None)
+    monkeypatch.setattr(internal_module, "check_rate_limit", _allow_rate_limit)
+    monkeypatch.setattr(internal_module.settings, "redis_trigger_lock_required", False)
+    app.dependency_overrides[get_redis_trigger_lock] = _fake_redis
+    try:
+        response = client.post("/internal/trigger-crawl", params={"college_code": "engineering"})
+    finally:
+        app.dependency_overrides.pop(get_redis_trigger_lock, None)
+
+    assert response.status_code == 503
+    assert "Client IP could not be determined" in response.json().get("detail", "")
+
+
 def test_check_crawl_trigger_secret_valid_and_invalid(monkeypatch):
     """check_crawl_trigger_secret가 올바른/잘못된 시크릿에 대해 예외를 올바르게 처리한다."""
     from unittest.mock import MagicMock
@@ -347,6 +375,42 @@ def test_check_crawl_trigger_secret_valid_and_invalid(monkeypatch):
     # 잘못된 시크릿은 InvalidCrawlTriggerSecretError 발생
     with pytest.raises(InvalidCrawlTriggerSecretError):
         check_crawl_trigger_secret("wrong-secret", None)
+
+
+def test_crawl_stats_returns_503_when_client_ip_unresolved(client, monkeypatch):
+    from app.api import internal as internal_module
+    from app.core.database import get_db
+    from app.core.deps import get_redis_trigger_lock
+    from app.main import app
+
+    def _noop_authorize(request, x_secret, auth):
+        pass
+
+    async def _allow_rate_limit(*args, **kwargs):
+        return True
+
+    async def _fake_get_db():
+        class _DummySession:
+            pass
+
+        yield _DummySession()
+
+    async def _fake_redis():
+        yield None
+
+    monkeypatch.setattr(internal_module, "_authorize_internal_trigger", _noop_authorize)
+    monkeypatch.setattr(internal_module, "get_client_ip", lambda request: None)
+    monkeypatch.setattr(internal_module, "check_rate_limit", _allow_rate_limit)
+    app.dependency_overrides[get_db] = _fake_get_db
+    app.dependency_overrides[get_redis_trigger_lock] = _fake_redis
+    try:
+        response = client.get("/internal/crawl-stats")
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+        app.dependency_overrides.pop(get_redis_trigger_lock, None)
+
+    assert response.status_code == 503
+    assert "Client IP could not be determined" in response.json().get("detail", "")
 
 
 def test_logout_blocklist_unavailable_returns_503(client, monkeypatch):

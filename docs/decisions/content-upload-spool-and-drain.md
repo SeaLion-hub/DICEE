@@ -19,3 +19,20 @@
 
 - 크롤 시 업로드 실패 시에도 스풀에 남고, 드레인이 재업로드 및 DB 반영까지 수행해 정합성 유지.
 - CONTENT_SPOOL_DIR·CONTENT_SPOOL_BACKEND·CONTENT_SPOOL_MAX_RETRIES 설정 및 배포 가이드 반영.
+
+---
+
+## 2026-02-27 Update
+
+- Spool backend now supports both `local` and `s3`.
+- `drain_content_spool_task` processes both backends through a common contract (`list/read/overwrite/delete/move_to_dlq`).
+- Spool entry metadata schema (local/S3 common) now includes:
+  - `retry_count`
+  - `last_error_type`
+  - `last_error_message` (truncated)
+  - `last_error_at` (UTC ISO8601)
+  - `last_error_stage` (`upload|db_update|dlq_move`)
+- DLQ entries now include:
+  - `dead_lettered_at`
+  - `dead_letter_reason`
+- Legacy spool JSON without new fields remains readable.

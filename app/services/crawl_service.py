@@ -32,6 +32,7 @@ from app.core.crawl_rate_limit import (
     host_from_url,
 )
 from app.core.crawler_config import COLLEGE_CODE_TO_MODULE, CRAWLER_CONFIG, get_crawler, get_crawler_async
+from app.core.redis import get_shared_sync_redis_client
 from app.repositories.college_repository import (
     get_by_external_id as get_college_by_external_id,
 )
@@ -127,7 +128,7 @@ class _RedisSeenSet:
     def __init__(
         self,
         run_id: uuid.UUID,
-        redis_url: str,
+        _redis_url: str,
         ttl_seconds: int = CRAWL_SEEN_REDIS_TTL_SECONDS,
         *,
         required: bool = False,
@@ -138,20 +139,17 @@ class _RedisSeenSet:
         self._required = required
         self._client: Any | None = None
         try:
-            import redis as redis_sync
-
-            self._client = redis_sync.Redis.from_url(
-                redis_url,
-                decode_responses=True,
-                socket_timeout=5.0,
-                socket_connect_timeout=2.0,
-            )
+            self._client = get_shared_sync_redis_client()
         except Exception as e:
             if required:
                 raise RuntimeError(
                     f"Redis Seen Set required but connection failed (run_id={run_id}): {e}"
                 ) from e
             logger.warning("RedisSeenSet init failed: %s; falling back to in-memory", e)
+        if self._client is None and required:
+            raise RuntimeError(
+                f"Redis Seen Set required but connection failed (run_id={run_id}): redis client unavailable"
+            )
 
     def add(self, x: str) -> None:
         if self._client is None:
@@ -184,11 +182,7 @@ class _RedisSeenSet:
     def close(self) -> None:
         if getattr(self, "_closed", True) or self._client is None:
             return
-        try:
-            self._client.close()
-            self._closed = True
-        except Exception:
-            pass
+        self._closed = True
 
 
 async def crawl_college(session: AsyncSession, college_code: str) -> int:
@@ -660,14 +654,9 @@ def _record_crawl_failure_fallback(
         )
         return
     try:
-        import redis as redis_sync
-
-        client = redis_sync.Redis.from_url(
-            raw_url,
-            decode_responses=True,
-            socket_timeout=5.0,
-            socket_connect_timeout=2.0,
-        )
+        client = get_shared_sync_redis_client()
+        if client is None:
+            raise RuntimeError("shared redis client unavailable")
         key = f"{CRAWL_FAILURE_REDIS_KEY_PREFIX}{run_id}"
         payload = {
             "run_id": str(run_id),
@@ -677,7 +666,6 @@ def _record_crawl_failure_fallback(
             "recorded_at": datetime.now(UTC).isoformat(),
         }
         client.set(key, json.dumps(payload), ex=CRAWL_FAILURE_REDIS_TTL_SECONDS)
-        client.close()
         logger.info(
             "Crawl failure context recorded to Redis (run_id=%s key=%s)",
             run_id,
