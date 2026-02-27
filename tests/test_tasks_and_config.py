@@ -1,5 +1,6 @@
 """운영경로 테스트: Celery 태스크 등록, 예외 시 락 해제, production fail-fast."""
 
+import importlib
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -47,9 +48,12 @@ def test_production_fail_fast_requires_ip_hmac_key():
         "os.environ",
         {
             "ENVIRONMENT": "production",
+            "APP_ENTRY": "api",
             "DATABASE_URL": "postgresql://localhost/test",
             "REDIS_URL": "redis://localhost/0",
             "JWT_SECRET": "test-secret",
+            "TRUSTED_PROXY_IPS": "10.0.0.1",
+            "CRAWL_TRIGGER_SECRET": "test-trigger-secret",
             "IP_HMAC_KEY": "",
         },
         clear=False,
@@ -60,3 +64,75 @@ def test_production_fail_fast_requires_ip_hmac_key():
         with pytest.raises(ValueError) as exc_info:
             Settings()
         assert "IP_HMAC_KEY" in str(exc_info.value)
+
+
+def test_production_fail_fast_requires_trusted_proxy_ips():
+    """environment=production이고 TRUSTED_PROXY_IPS가 비어 있으면(및 TRUSTED_PROXY_SKIP_FAST 미설정) Settings 로드 시 ValidationError."""
+    import app.core.config as config_module
+
+    with patch.dict(
+        "os.environ",
+        {
+            "ENVIRONMENT": "production",
+            "APP_ENTRY": "api",
+            "DATABASE_URL": "postgresql://localhost/test",
+            "REDIS_URL": "redis://localhost/0",
+            "JWT_SECRET": "test-secret",
+            "TRUSTED_PROXY_IPS": "",
+            "CRAWL_TRIGGER_SECRET": "test-trigger-secret",
+            "IP_HMAC_KEY": "test-ip-hmac-key",
+            "CONTENT_UPLOAD_FAILURE_POLICY": "fail",
+        },
+        clear=False,
+    ):
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError) as exc_info:
+            importlib.reload(config_module)
+        assert "TRUSTED_PROXY_IPS" in str(exc_info.value)
+    # Restore config module with normal env so later tests get valid settings
+    importlib.reload(config_module)
+
+
+def test_api_entry_fail_fast_when_app_entry_celery():
+    """APP_ENTRY=celery일 때 app.main 로드 시 RuntimeError (API는 api 전용)."""
+    import sys
+    import app.core.config as config_module
+
+    with patch.dict("os.environ", {"APP_ENTRY": "celery", "ROLE": "celery"}, clear=False):
+        importlib.reload(config_module)
+        main_module = sys.modules.get("app.main")
+        with pytest.raises(RuntimeError) as exc_info:
+            if main_module is not None:
+                importlib.reload(main_module)
+            else:
+                importlib.import_module("app.main")
+        assert "APP_ENTRY=api" in str(exc_info.value)
+        assert "celery" in str(exc_info.value).lower()
+    sys.modules.pop("app.main", None)
+    with patch.dict("os.environ", {"APP_ENTRY": "celery"}, clear=False):
+        importlib.reload(config_module)
+
+
+def test_celery_entry_fail_fast_when_app_entry_api():
+    """APP_ENTRY=api일 때 celery_app import는 성공(API에서 tasks import 가능). worker_init 시에만 RuntimeError."""
+    import sys
+    import app.core.config as config_module
+
+    celery_app_module = sys.modules.pop("app.core.celery_app", None)
+    try:
+        with patch.dict("os.environ", {"APP_ENTRY": "api", "ROLE": "api"}, clear=False):
+            importlib.reload(config_module)
+            import app.core.celery_app as celery_app_mod
+            # Import 시점에는 검사하지 않음 (API 프로세스에서 trigger-crawl enqueue 가능)
+            assert celery_app_mod.app is not None
+            # worker_init에서 호출되는 _ensure_celery_entry는 APP_ENTRY=api면 RuntimeError
+            with pytest.raises(RuntimeError) as exc_info:
+                celery_app_mod._ensure_celery_entry()
+            assert "APP_ENTRY=celery" in str(exc_info.value)
+            assert "api" in str(exc_info.value).lower()
+    finally:
+        if celery_app_module is not None:
+            sys.modules["app.core.celery_app"] = celery_app_module
+        with patch.dict("os.environ", {"APP_ENTRY": "celery"}, clear=False):
+            importlib.reload(config_module)

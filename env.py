@@ -56,8 +56,8 @@ def _url_to_connect_args(url: str) -> dict:
 
 
 def get_url() -> str:
-    """마이그레이션용 DB URL. 앱과 동일하게 오직 settings.database_url 단 하나만 사용합니다."""
-    url = settings.database_url or ""
+    """마이그레이션용 DB URL. 앱과 동일하게 settings.db.database_url 사용."""
+    url = settings.db.database_url or ""
     if not url:
         raise ValueError(
             "DATABASE_URL not set. Set it in .env or environment."

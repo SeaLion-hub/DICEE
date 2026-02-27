@@ -7,8 +7,8 @@ Repository·파서는 이미 열린 세션으로 쿼리만 수행하며, 세션 
 """
 
 import asyncio
+import json
 import logging
-import random
 import time
 import uuid
 from collections import deque
@@ -19,6 +19,7 @@ from datetime import UTC, datetime
 import httpx
 from bs4 import BeautifulSoup
 from requests.exceptions import RequestException
+from tenacity import AsyncRetrying, retry_if_exception_type, stop_after_attempt, wait_exponential_jitter
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
@@ -69,17 +70,24 @@ UPSERT_CHUNK_SIZE = 50
 COLLECT_PAYLOADS_MAX_WORKERS = 5
 # 동기 수집 시 동시에 유지할 Future 상한. O(N) 메모리 방지.
 COLLECT_IN_FLIGHT_LIMIT = 500
+# Run당 링크 수 상한. 초과 시 잘라서 처리해 단일 노드 OOM 방지(선제 대응). 스트리밍/Redis 큐는 추후 확장.
+MAX_LINKS_PER_RUN = 50_000
 # 비동기 수집 시 전체 동시 요청 수. 호스트별 delay는 유지.
 COLLECT_ASYNC_CONCURRENCY = 10
 
 # Bounded Seen Set: 최대 보유 개수. 초과 시 가장 오래된 항목 evict. OOM 방지.
 CRAWL_SEEN_MAX_SIZE = 10_000
 
-# 비동기 재시도: Exponential Backoff + Jitter. Thundering Herd 방지.
+# 비동기 재시도: tenacity wait_exponential_jitter 사용. Thundering Herd 방지.
 CRAWL_RETRY_BASE_SEC = 1.0
 CRAWL_RETRY_MAX_SEC = 60.0
-CRAWL_RETRY_JITTER_SEC = 1.0
 CRAWL_RETRY_MAX_ATTEMPTS = 5
+# tenacity wait: (initial, max) + jitter. retry_state.attempt_number 기반.
+_crawl_retry_wait = wait_exponential_jitter(
+    initial=CRAWL_RETRY_BASE_SEC,
+    max=CRAWL_RETRY_MAX_SEC,
+    jitter=1.0,
+)
 
 
 class _BoundedSeenSet:
@@ -105,6 +113,84 @@ class _BoundedSeenSet:
         return x in self._set
 
 
+CRAWL_SEEN_REDIS_KEY_PREFIX = "dicee:crawl_seen:"
+CRAWL_SEEN_REDIS_TTL_SECONDS = 3600  # Run 단위 1시간 (멀티 워커 간 중복 크롤 방지)
+
+
+class _RedisSeenSet:
+    """
+    Redis SET 기반 분산 Seen Set. run_id 단위로 워커 간 이미 본 URL 공유.
+    멀티 워커 환경에서 동일 URL 중복 크롤 방지(필수). add/__contains__ 인터페이스.
+    """
+
+    __slots__ = ("_key", "_client", "_ttl", "_closed")
+
+    def __init__(
+        self,
+        run_id: uuid.UUID,
+        redis_url: str,
+        ttl_seconds: int = CRAWL_SEEN_REDIS_TTL_SECONDS,
+        *,
+        required: bool = False,
+    ) -> None:
+        self._key = f"{CRAWL_SEEN_REDIS_KEY_PREFIX}{run_id}"
+        self._ttl = ttl_seconds
+        self._closed = False
+        self._required = required
+        try:
+            import redis as redis_sync
+            self._client = redis_sync.Redis.from_url(
+                redis_url,
+                decode_responses=True,
+                socket_timeout=5.0,
+                socket_connect_timeout=2.0,
+            )
+        except Exception as e:
+            if required:
+                raise RuntimeError(
+                    f"Redis Seen Set required but connection failed (run_id={run_id}): {e}"
+                ) from e
+            logger.warning("RedisSeenSet init failed: %s; falling back to in-memory", e)
+            self._client = None
+
+    def add(self, x: str) -> None:
+        if self._client is None:
+            if self._required:
+                raise RuntimeError("Redis Seen Set required but client is unavailable (init failed).")
+            return
+        try:
+            pipe = self._client.pipeline()
+            pipe.sadd(self._key, x)
+            pipe.expire(self._key, self._ttl)
+            pipe.execute()
+        except Exception as e:
+            if self._required:
+                raise RuntimeError(f"Redis Seen Set add failed (required): {e}") from e
+            logger.warning("RedisSeenSet add failed: %s", e)
+
+    def __contains__(self, x: str) -> bool:
+        if self._client is None:
+            if self._required:
+                raise RuntimeError("Redis Seen Set required but client is unavailable (init failed).")
+            return False
+        try:
+            return bool(self._client.sismember(self._key, x))
+        except Exception as e:
+            if self._required:
+                raise RuntimeError(f"Redis Seen Set __contains__ failed (required): {e}") from e
+            logger.warning("RedisSeenSet __contains__ failed: %s", e)
+            return False
+
+    def close(self) -> None:
+        if getattr(self, "_closed", True) or self._client is None:
+            return
+        try:
+            self._client.close()
+            self._closed = True
+        except Exception:
+            pass
+
+
 async def crawl_college(session: AsyncSession, college_code: str) -> int:
     """
     단과대 1개 크롤 (완전 비동기). httpx.AsyncClient + get_*_links_async / scrape_*_detail_async.
@@ -127,9 +213,22 @@ async def crawl_college(session: AsyncSession, college_code: str) -> int:
     seen = _BoundedSeenSet(CRAWL_SEEN_MAX_SIZE)
 
     async with httpx.AsyncClient(timeout=CRAWL_PAGE_TIMEOUT_SECONDS) as client:
-        links = await get_links_async_fn(client, list_url)
+        links_raw = await get_links_async_fn(client, list_url)
+        if len(links_raw) > MAX_LINKS_PER_RUN:
+            logger.warning(
+                "Links capped for OOM prevention: college_code=%s total=%d cap=%d",
+                college_code,
+                len(links_raw),
+                MAX_LINKS_PER_RUN,
+            )
+        links = links_raw[:MAX_LINKS_PER_RUN]
+        total_links = len(links)
 
         if not links:
+            logger.info(
+                "crawl finished college_code=%s total_links=0 upserted=0",
+                college_code,
+            )
             return 0
 
         total_count = 0
@@ -145,6 +244,13 @@ async def crawl_college(session: AsyncSession, college_code: str) -> int:
         if chunk:
             ids = await upsert_notices_bulk(session, chunk)
             total_count += len(ids)
+
+        logger.info(
+            "crawl finished college_code=%s total_links=%d upserted=%d",
+            college_code,
+            total_links,
+            total_count,
+        )
     return total_count
 
 
@@ -189,13 +295,39 @@ async def _fetch_one_async(
             return (post, detail_url, None, e)
 
 
+async def _fetch_one_with_retry(
+    client: httpx.AsyncClient,
+    post: dict,
+    scrape_async_fn,
+    rate_limiter,
+    sem: asyncio.Semaphore,
+) -> tuple[dict, str, ScrapeResult | None, BaseException | None]:
+    """한 건 비동기 스크랩 + 네트워크/타임아웃 시 tenacity 재시도. 재시도 소진 시 마지막 결과 반환."""
+    last_result: tuple[dict, str, ScrapeResult | None, BaseException | None] | None = None
+    async for attempt in AsyncRetrying(
+        stop=stop_after_attempt(CRAWL_RETRY_MAX_ATTEMPTS),
+        wait=_crawl_retry_wait,
+        retry=retry_if_exception_type(*_NETWORK_EXC_TYPES),
+        reraise=False,
+    ):
+        with attempt:
+            last_result = await _fetch_one_async(
+                client, post, scrape_async_fn, rate_limiter, sem
+            )
+            _, _, _, exc = last_result
+            if exc is not None and isinstance(exc, _NETWORK_EXC_TYPES):
+                raise exc
+            return last_result
+    return last_result if last_result is not None else (post, post.get("url") or "", None, None)
+
+
 def _process_scrape_result(
     post: dict,
     detail_url: str,
     data: ScrapeResult | None,
     exc: BaseException | None,
     college_id: uuid.UUID,
-    seen: set[str] | _BoundedSeenSet,
+    seen: set[str] | _BoundedSeenSet | _RedisSeenSet,
     tracker: CrawlErrorTracker,
 ) -> tuple[dict | None, CrawlThresholdExceeded | BaseException | None]:
     """
@@ -268,7 +400,7 @@ def _collect_payloads_sync(
     college_id: uuid.UUID,
     scrape_fn: Callable,
     delay_sec: float,
-    seen: set[str] | _BoundedSeenSet | None = None,
+    seen: set[str] | _BoundedSeenSet | _RedisSeenSet | None = None,
 ) -> Iterator[dict]:
     """
     동기: Bounded in-flight(K)로 링크 처리. delay → scrape_fn 병렬 → build_notice_payload → 중복 제거.
@@ -337,7 +469,7 @@ async def _collect_payloads_async(
     college_id: uuid.UUID,
     scrape_async_fn,
     delay_sec: float,
-    seen: set[str] | _BoundedSeenSet | None = None,
+    seen: set[str] | _BoundedSeenSet | _RedisSeenSet | None = None,
 ):
     """
     비동기: Semaphore(W) + 호스트별 delay로 제한된 병렬 수집. 1 req/s 직렬 완화.
@@ -349,22 +481,13 @@ async def _collect_payloads_async(
     sem = asyncio.Semaphore(COLLECT_ASYNC_CONCURRENCY)
     tracker = CrawlErrorTracker()
     remaining = deque(links)
-    post_retries: dict[str, int] = {}  # url -> retry count (Exponential Backoff + Jitter)
-    retry_queue: list[tuple[dict, float]] = []  # (post, ready_at_ts) 재시도 예약; 이벤트 루프 블로킹 방지
 
     def _task(post: dict) -> asyncio.Task:
         return asyncio.create_task(
-            _fetch_one_async(client, post, scrape_async_fn, rate_limiter, sem)
+            _fetch_one_with_retry(client, post, scrape_async_fn, rate_limiter, sem)
         )
 
     def _refill_pending() -> None:
-        nonlocal retry_queue
-        now_ts = time.monotonic()
-        still_deferred = [(p, t) for p, t in retry_queue if t > now_ts]
-        for p, t in retry_queue:
-            if t <= now_ts:
-                pending.add(_task(p))
-        retry_queue = still_deferred
         while len(pending) < COLLECT_ASYNC_CONCURRENCY and remaining:
             pending.add(_task(remaining.popleft()))
 
@@ -375,22 +498,12 @@ async def _collect_payloads_async(
         pending.add(_task(remaining.popleft()))
 
     try:
-        while pending or retry_queue or remaining:
+        while pending or remaining:
             _refill_pending()
             if not pending:
-                if retry_queue:
-                    now_ts = time.monotonic()
-                    earliest = min(ready_at for _, ready_at in retry_queue)
-                    await asyncio.sleep(max(0.0, min(earliest - now_ts, CRAWL_RETRY_MAX_SEC)))
                 continue
-            timeout_sec = None
-            if retry_queue:
-                now_ts = time.monotonic()
-                earliest = min(ready_at for _, ready_at in retry_queue)
-                if earliest > now_ts:
-                    timeout_sec = min(earliest - now_ts, CRAWL_RETRY_MAX_SEC)
             done, pending = await asyncio.wait(
-                pending, return_when=asyncio.FIRST_COMPLETED, timeout=timeout_sec
+                pending, return_when=asyncio.FIRST_COMPLETED
             )
             for task in done:
                 try:
@@ -402,23 +515,8 @@ async def _collect_payloads_async(
                     continue
                 if exc is not None and isinstance(exc, _NETWORK_EXC_TYPES):
                     tracker.record_attempt()
-                    logger.warning(
-                        "scrape failed (network/timeout): url=%s error=%s",
-                        detail_url[:200] if detail_url else "",
-                        exc,
-                        exc_info=True,
-                    )
                     tracker.record_network_or_skip()
-                    retry_count = post_retries.get(detail_url, 0) + 1
-                    post_retries[detail_url] = retry_count
-                    if retry_count <= CRAWL_RETRY_MAX_ATTEMPTS:
-                        backoff = min(
-                            CRAWL_RETRY_BASE_SEC * (2 ** (retry_count - 1))
-                            + random.uniform(0, CRAWL_RETRY_JITTER_SEC),
-                            CRAWL_RETRY_MAX_SEC,
-                        )
-                        retry_queue.append((post, time.monotonic() + backoff))
-                    elif remaining:
+                    if remaining:
                         pending.add(_task(remaining.popleft()))
                     continue
                 payload, raise_exc = _process_scrape_result(
@@ -426,7 +524,6 @@ async def _collect_payloads_async(
                 )
                 if raise_exc is not None:
                     raise raise_exc
-                post_retries.pop(post.get("url") or "", None)
                 if payload is not None:
                     yield payload
                 if remaining:
@@ -449,12 +546,13 @@ def crawl_college_sync(
     session: Session,
     college_code: str,
     *,
+    run_id: uuid.UUID | None = None,
     on_chunk_processed: Callable[[list[uuid.UUID]], None] | None = None,
 ) -> tuple[int, list[uuid.UUID]]:
     """
     단과대 1개 크롤 (동기, Celery 워커 전용). 동기 DB 세션·Repository 사용.
     get_*_links / (1초 sleep) / scrape_*_detail → upsert_notice_sync.
-    content_hash가 바뀌었거나 신규 공지는 4단계 AI 큐 대상.
+    run_id가 있고 REDIS_URL이 있으면 Redis 분산 Seen Set 사용(멀티 워커 중복 크롤 방지).
     on_chunk_processed: 청크 upsert 직후 호출(메모리 누적 없이 즉시 enqueue용). None이면 notice_id 목록 반환.
     반환: (upsert한 개수, AI 처리 대상 notice_id 목록). on_chunk_processed 사용 시 목록은 [].
     트랜잭션 경계: 호출자(run_crawl_job_sync 등)가 세션을 소유. 이 함수는 전달받은 세션으로 Repository만 호출.
@@ -473,11 +571,31 @@ def crawl_college_sync(
 
     list_url = config["url"]
     get_links_fn, scrape_fn = get_crawler(module_name)
-    links = get_links_fn(list_url)
+    links_raw = get_links_fn(list_url)
+    if len(links_raw) > MAX_LINKS_PER_RUN:
+        logger.warning(
+            "Links capped for OOM prevention: college_code=%s total=%d cap=%d",
+            college_code,
+            len(links_raw),
+            MAX_LINKS_PER_RUN,
+        )
+    links = links_raw[:MAX_LINKS_PER_RUN]
+    total_links = len(links)
     if not links:
+        logger.info(
+            "crawl finished college_code=%s total_links=0 upserted=0",
+            college_code,
+        )
         return (0, [])
 
-    seen = _BoundedSeenSet(CRAWL_SEEN_MAX_SIZE)
+    raw_redis = (settings.redis.redis_url or "").strip()
+    crawl_seen_required = settings.redis.redis_crawl_seen_required
+    if run_id and raw_redis:
+        seen: _BoundedSeenSet | _RedisSeenSet = _RedisSeenSet(
+            run_id, raw_redis, CRAWL_SEEN_REDIS_TTL_SECONDS, required=crawl_seen_required
+        )
+    else:
+        seen = _BoundedSeenSet(CRAWL_SEEN_MAX_SIZE)
     notice_ids_to_process: list[uuid.UUID] = []
     total_upserted = 0
     chunk: list[dict] = []
@@ -504,9 +622,74 @@ def crawl_college_sync(
             on_chunk_processed(ids)
         else:
             notice_ids_to_process.extend(ids)
+
+    logger.info(
+        "crawl finished college_code=%s total_links=%d upserted=%d",
+        college_code,
+        total_links,
+        total_upserted,
+    )
+    if isinstance(seen, _RedisSeenSet):
+        seen.close()
     if on_chunk_processed is not None:
         return (total_upserted, [])
     return (total_upserted, notice_ids_to_process)
+
+
+CRAWL_FAILURE_REDIS_KEY_PREFIX = "dicee:crawl_failure:"
+CRAWL_FAILURE_REDIS_TTL_SECONDS = 86400 * 7  # 7일 (중앙 추적·모니터링용)
+
+
+def _record_crawl_failure_fallback(
+    run_id: uuid.UUID,
+    task_id: str,
+    college_code: str,
+    error_message: str,
+) -> None:
+    """
+    DB 장애 시 실패 컨텍스트를 Redis에 기록해 중앙에서 추적 가능하게 함.
+    Redis 미설정/장애 시 로그만 남기고 반환(예외 전파하지 않음).
+    """
+    raw_url = (settings.redis.redis_url or "").strip()
+    if not raw_url:
+        logger.warning(
+            "Crawl failure fallback skipped: REDIS_URL not set (run_id=%s task_id=%s college_code=%s)",
+            run_id,
+            task_id,
+            college_code,
+        )
+        return
+    try:
+        import redis as redis_sync
+
+        client = redis_sync.Redis.from_url(
+            raw_url,
+            decode_responses=True,
+            socket_timeout=5.0,
+            socket_connect_timeout=2.0,
+        )
+        key = f"{CRAWL_FAILURE_REDIS_KEY_PREFIX}{run_id}"
+        payload = {
+            "run_id": str(run_id),
+            "task_id": task_id,
+            "college_code": college_code,
+            "error_message": error_message[:2000],
+            "recorded_at": datetime.now(UTC).isoformat(),
+        }
+        client.set(key, json.dumps(payload), ex=CRAWL_FAILURE_REDIS_TTL_SECONDS)
+        client.close()
+        logger.info(
+            "Crawl failure context recorded to Redis (run_id=%s key=%s)",
+            run_id,
+            key,
+        )
+    except Exception as redis_err:
+        logger.warning(
+            "Failed to record crawl failure to Redis (run_id=%s): %s",
+            run_id,
+            redis_err,
+            exc_info=True,
+        )
 
 
 def run_crawl_job_sync(
@@ -530,7 +713,10 @@ def run_crawl_job_sync(
     session.commit()
     try:
         count, _ = crawl_college_sync(
-            session, college_code, on_chunk_processed=on_chunk_processed
+            session,
+            college_code,
+            run_id=run_id,
+            on_chunk_processed=on_chunk_processed,
         )
         update_crawl_run_sync(
             session,
@@ -544,22 +730,24 @@ def run_crawl_job_sync(
     except Exception as e:
         # 실패한 트랜잭션 초기화 (PendingRollbackError 방지)
         session.rollback()
-        # FAILED 기록은 새 세션/새 트랜잭션으로 분리해 원래 트랜잭션이 깨져도 실패 상태가 남도록 함
+        error_msg = (str(e))[:2000]
+        # 1) 동일 세션으로 FAILED 기록 시도 (DB 장애가 아닐 때 성공)
         try:
-            with get_sync_session() as fail_session:
-                update_crawl_run_sync(
-                    fail_session,
-                    run_id,
-                    finished_at=datetime.now(UTC),
-                    status=CrawlRunStatus.FAILED.value,
-                    error_message=(str(e))[:2000],
-                )
-                fail_session.commit()
+            update_crawl_run_sync(
+                session,
+                run_id,
+                finished_at=datetime.now(UTC),
+                status=CrawlRunStatus.FAILED.value,
+                error_message=error_msg,
+            )
+            session.commit()
         except Exception as record_err:
+            # 2) 동일 세션도 실패(DB 장애·풀 고갈) 시 Redis 등 외부 저장소에 실패 컨텍스트 격리(중앙 추적용)
             logger.warning(
-                "Failed to record crawl run FAILED state (run_id=%s): %s",
+                "Failed to record crawl run FAILED in DB (run_id=%s): %s",
                 run_id,
                 record_err,
                 exc_info=True,
             )
+            _record_crawl_failure_fallback(run_id, task_id, college_code, error_msg)
         raise

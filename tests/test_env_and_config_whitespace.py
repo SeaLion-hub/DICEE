@@ -17,6 +17,9 @@ def test_sync_database_url_treats_whitespace_as_unset(monkeypatch):
 
 def test_worker_redis_url_whitespace_falls_back_to_default(monkeypatch):
     """REDIS_URL이 공백 문자열일 때 celery_app이 로컬 기본값으로 fallback한다."""
+    monkeypatch.setenv("APP_ENTRY", "celery")
+    import app.core.config as config_module
+    importlib.reload(config_module)
     from app.core import config
 
     monkeypatch.setattr(config.settings, "redis_url", "   ")

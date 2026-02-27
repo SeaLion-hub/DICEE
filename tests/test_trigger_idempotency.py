@@ -60,8 +60,11 @@ def test_get_set_trigger_idempotency_result_roundtrip():
 
 def test_trigger_crawl_unknown_college_then_same_idempotency_key_succeeds(client, monkeypatch):
     """unknown college_code로 400 받은 뒤, 같은 Idempotency-Key로 유효한 college로 재요청 시 200(고착 없음)."""
+    from fastapi import Request
+
     from app.core.config import settings
-    from app.core.lifespan import create_app_state
+    from app.core.deps import get_redis_trigger_lock
+    from app.main import app
     from pydantic import SecretStr
 
     class AsyncMockRedis:
@@ -77,18 +80,20 @@ def test_trigger_crawl_unknown_college_then_same_idempotency_key_succeeds(client
         async def get(self, key):
             return self.stored.get(key)
 
+        async def eval(self, script, numkeys, key, *args):
+            # check_rate_limit: current count <= max_requests 이면 허용. 1 반환.
+            # release_trigger_lock: 사용 시 1 반환(삭제됨).
+            return 1
+
     mock_redis = AsyncMockRedis()
 
-    original_create_app_state = create_app_state
-
-    def _create_app_state_with_mock_redis():
-        state = original_create_app_state()
-        state.redis_trigger_lock_client = mock_redis
-        return state
+    def _override_redis(request: Request):
+        return mock_redis
 
     monkeypatch.setattr(settings, "crawl_trigger_secret", SecretStr("test-secret"))
+    monkeypatch.setattr("app.core.internal_auth.settings.crawl_trigger_secret", SecretStr("test-secret"))
     monkeypatch.setattr(settings, "redis_trigger_lock_required", False)
-    monkeypatch.setattr("app.core.lifespan.create_app_state", _create_app_state_with_mock_redis)
+    app.dependency_overrides[get_redis_trigger_lock] = _override_redis
 
     mock_result = MagicMock()
     mock_result.id = "task-1"
@@ -102,20 +107,23 @@ def test_trigger_crawl_unknown_college_then_same_idempotency_key_succeeds(client
         "Idempotency-Key": "stucktestkey1",
     }
 
-    r1 = client.post(
-        "/internal/trigger-crawl",
-        params={"college_code": "unknown_college_999"},
-        headers=headers,
-    )
-    assert r1.status_code == 400, f"First request (unknown college) expected 400, got {r1.status_code}: {r1.json()}"
-    assert "Unknown college_code" in str(r1.json().get("detail", ""))
+    try:
+        r1 = client.post(
+            "/internal/trigger-crawl",
+            params={"college_code": "unknown_college_999"},
+            headers=headers,
+        )
+        assert r1.status_code == 400, f"First request (unknown college) expected 400, got {r1.status_code}: {r1.json()}"
+        assert "Unknown college_code" in str(r1.json().get("detail", ""))
 
-    r2 = client.post(
-        "/internal/trigger-crawl",
-        params={"college_code": "engineering"},
-        headers=headers,
-    )
-    assert r2.status_code == 200, f"Second request expected 200, got {r2.status_code}: {r2.json()}"
-    data = r2.json()
-    assert "enqueued" in data and data.get("enqueued", 0) >= 1
-    assert data.get("detail") != "in_progress"
+        r2 = client.post(
+            "/internal/trigger-crawl",
+            params={"college_code": "engineering"},
+            headers=headers,
+        )
+        assert r2.status_code == 200, f"Second request expected 200, got {r2.status_code}: {r2.json()}"
+        data = r2.json()
+        assert "enqueued" in data and data.get("enqueued", 0) >= 1
+        assert data.get("detail") != "in_progress"
+    finally:
+        app.dependency_overrides.pop(get_redis_trigger_lock, None)

@@ -116,6 +116,8 @@
 | **Windows에서 Celery prefork** | Windows에서 `celery worker` 기본(prefork) 실행 시 billiard 세마포어 `PermissionError`/`OSError` 발생. | **Windows**에서는 `celery -A app.worker worker -l info --pool=solo` 로 실행. |
 | **Tombstone(Soft Delete) 부재** | 크롤 목록에서 사라진(삭제/비공개) 공지를 DB에서 어떻게 할지 코드 없음. 사용자에게 '없는 페이지' 추천 가능. | **3단계 마무리** 시 **is_deleted**(Tombstone) 구현 권장. ROADMAP "Tombstone·원본 삭제 공지" 참고. |
 | **다중 워커·visibility_timeout** | 크롤 태스크가 장시간이면 Redis visibility 타임아웃 만료 후 같은 메시지가 다른 워커에 재전달될 수 있음. | **broker_transport_options = {"visibility_timeout": 3600}**(1시간) 등 넉넉히 설정. DEPLOYMENT·worker.py 참고. |
+| **라우팅 후 워커 큐 미명시** | task_queues/task_routes 도입 시 태스크는 명명 큐로만 전달됨. 워커가 소비 큐를 지정하지 않으면 태스크 미처리. | 워커 시작 시 **`-Q critical,crawl,ai`** 필수(단일 워커). DEPLOYMENT Start Command 참고. |
+| **스풀 경로 이탈** | content 스풀 디렉터리에 쓸 때 상위 디렉터리로 이탈하면 보안·디스크 오염. | 스풀 경로는 **resolve().relative_to(base)** 로 이탈 검사. storage.py 패턴 준수. |
 
 ---
 

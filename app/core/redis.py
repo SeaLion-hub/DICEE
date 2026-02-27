@@ -74,19 +74,19 @@ def _redis_pool_kwargs() -> dict:
     """Redis ConnectionPool 공통 옵션. 타임아웃·디코드."""
     return {
         "decode_responses": True,
-        "socket_timeout": getattr(settings, "redis_socket_timeout", 5.0),
-        "socket_connect_timeout": getattr(settings, "redis_socket_connect_timeout", 2.0),
+        "socket_timeout": settings.redis.redis_socket_timeout,
+        "socket_connect_timeout": settings.redis.redis_socket_connect_timeout,
     }
 
 
 def _redis_ssl_kwargs() -> dict:
     """rediss:// 사용 시 TLS 검증 옵션을 반환. 그렇지 않으면 빈 dict."""
-    url = getattr(settings, "redis_url", None) or ""
+    url = (settings.redis.redis_url or "").strip()
     if not url.strip().startswith("rediss://"):
         return {}
     kwargs: dict = {"ssl_cert_reqs": ssl.CERT_REQUIRED}
-    if getattr(settings, "redis_ca_certs", None):
-        kwargs["ssl_ca_certs"] = settings.redis_ca_certs
+    if settings.redis.redis_ca_certs:
+        kwargs["ssl_ca_certs"] = settings.redis.redis_ca_certs
     return kwargs
 
 
@@ -95,8 +95,7 @@ def create_blocklist_client() -> RedisAsyncio | None:
     Blocklist용 비동기 Redis 클라이언트. max_connections·타임아웃 명시.
     redis_url 없으면 None. lifespan에서 한 번 생성해 app.state에 보관.
     """
-    raw_url = getattr(settings, "redis_url", None) or ""
-    redis_url = raw_url.strip()
+    redis_url = (settings.redis.redis_url or "").strip()
     if not redis_url:
         return None
     try:
@@ -106,7 +105,7 @@ def create_blocklist_client() -> RedisAsyncio | None:
         return None
     pool = redis.ConnectionPool.from_url(
         redis_url,
-        max_connections=settings.redis_blocklist_max_connections,
+        max_connections=settings.redis.redis_blocklist_max_connections,
         **_redis_pool_kwargs(),
         **_redis_ssl_kwargs(),
     )
@@ -118,8 +117,7 @@ def create_trigger_lock_client() -> RedisAsyncio | None:
     Trigger 락 전용 비동기 Redis 클라이언트. Blocklist 풀과 분리해 인증 장애 전파 완화.
     단일 Redis 인스턴스는 SPOF이므로 풀 분리만으로는 완전 격리 아님(CAUTIONS 참고).
     """
-    raw_url = getattr(settings, "redis_url", None) or ""
-    redis_url = raw_url.strip()
+    redis_url = (settings.redis.redis_url or "").strip()
     if not redis_url:
         return None
     try:
@@ -129,7 +127,7 @@ def create_trigger_lock_client() -> RedisAsyncio | None:
         return None
     pool = redis.ConnectionPool.from_url(
         redis_url,
-        max_connections=getattr(settings, "redis_trigger_lock_max_connections", 5),
+        max_connections=settings.redis.redis_trigger_lock_max_connections,
         **_redis_pool_kwargs(),
         **_redis_ssl_kwargs(),
     )
@@ -164,13 +162,9 @@ class BlocklistCircuitBreaker:
     async def _record_failure(self) -> None:
         async with self._lock:
             self._failures += 1
-            if self._failures >= getattr(
-                settings, "redis_blocklist_circuit_failure_threshold", 5
-            ):
+            if self._failures >= settings.redis.redis_blocklist_circuit_failure_threshold:
                 self._state = "open"
-                self._open_until = time.monotonic() + getattr(
-                    settings, "redis_blocklist_circuit_open_seconds", 30.0
-                )
+                self._open_until = time.monotonic() + settings.redis.redis_blocklist_circuit_open_seconds
 
     async def _maybe_try_half_open(self) -> bool:
         async with self._lock:
@@ -213,12 +207,12 @@ async def acquire_trigger_lock(
     client는 redis.asyncio.Redis. None이면 redis_trigger_lock_required=True 시 에러, 아니면 (True, None).
     """
     if client is None:
-        if getattr(settings, "redis_trigger_lock_required", False):
+        if settings.redis.redis_trigger_lock_required:
             raise RedisLockUnavailableError("Redis trigger lock required but client not configured")
         return (True, None)
     key = f"{TRIGGER_LOCK_KEY_PREFIX}{college_code}"
     token = str(uuid.uuid4())
-    ttl = getattr(settings, "redis_trigger_lock_ttl_seconds", 2400)
+    ttl = settings.redis.redis_trigger_lock_ttl_seconds
     try:
         ok = await client.set(key, token, nx=True, ex=ttl)
         if ok:
@@ -351,18 +345,16 @@ def _get_sync_redis_client():
     if _sync_redis_client is None:
         import redis
 
-        raw_url = getattr(settings, "redis_url", None) or ""
-        if not raw_url.strip():
+        url_stripped = (settings.redis.redis_url or "").strip()
+        if not url_stripped:
             return None
-        url_stripped = raw_url.strip()
         ssl_kwargs: dict[str, Any] = {}
         if url_stripped.startswith("rediss://"):
             ssl_kwargs["ssl_cert_reqs"] = ssl.CERT_REQUIRED
-            ca = getattr(settings, "redis_ca_certs", None)
-            if ca is not None:
-                ssl_kwargs["ssl_ca_certs"] = ca
-        socket_timeout = getattr(settings, "redis_socket_timeout", 5.0)
-        socket_connect_timeout = getattr(settings, "redis_socket_connect_timeout", 2.0)
+            if settings.redis.redis_ca_certs:
+                ssl_kwargs["ssl_ca_certs"] = settings.redis.redis_ca_certs
+        socket_timeout = settings.redis.redis_socket_timeout
+        socket_connect_timeout = settings.redis.redis_socket_connect_timeout
         _sync_redis_client = redis.Redis.from_url(
             url_stripped,
             decode_responses=True,
@@ -382,10 +374,9 @@ def renew_trigger_lock_sync(college_code: str, lock_token: str | None) -> bool:
         return False
     from app.core.config import settings
 
-    raw_url = getattr(settings, "redis_url", None) or ""
-    if not raw_url.strip():
+    if not (settings.redis.redis_url or "").strip():
         return False
-    ttl = getattr(settings, "redis_trigger_lock_ttl_seconds", 2400)
+    ttl = settings.redis.redis_trigger_lock_ttl_seconds
     client = _get_sync_redis_client()
     if client is None:
         return False
@@ -410,8 +401,7 @@ def release_trigger_lock_sync(college_code: str, lock_token: str | None) -> None
         return
     from app.core.config import settings
 
-    raw_url = getattr(settings, "redis_url", None) or ""
-    if not raw_url.strip():
+    if not (settings.redis.redis_url or "").strip():
         return
     client = _get_sync_redis_client()
     if client is None:

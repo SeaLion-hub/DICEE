@@ -1,8 +1,9 @@
 """Pytest fixtures. 테스트 시 DB 없이 실행 가능하도록 환경 조정."""
 
+import importlib
 import os
 from contextlib import asynccontextmanager
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -10,6 +11,8 @@ from fastapi.testclient import TestClient
 # CI에서 DATABASE_URL이 주입되면 그대로 사용. 로컬에서 비어 있으면 DB 없이 부팅 가능하도록 빈 문자열.
 if not os.environ.get("DATABASE_URL"):
     os.environ["DATABASE_URL"] = ""
+# Celery 앱은 import 시점에 APP_ENTRY=celery 검사. 테스트 세션 전체에서 tasks/celery_app import 가능하도록 강제.
+os.environ["APP_ENTRY"] = "celery"
 # Settings Fail-fast 대비: 테스트 시 필수 Auth env 설정
 os.environ.setdefault("JWT_SECRET", "test-jwt-secret-for-pytest")
 os.environ.setdefault("GOOGLE_CLIENT_ID", "test-google-client-id")
@@ -64,11 +67,16 @@ def _dummy_session_maker():
 
 @pytest.fixture
 def client() -> TestClient:
-    """FastAPI TestClient. DB 없이 /health 등 테스트용. DB 미초기화 시 get_db가 더미 세션을 반환하도록 주입."""
-    from app.main import app
+    """FastAPI TestClient. DB 없이 /health 등 테스트용. APP_ENTRY=api로 전환 후 main 로드."""
+    import app.core.config as config_module
 
-    with TestClient(app) as c:
-        state = getattr(c.app, "state", None)
-        if state is not None and getattr(state, "async_session_maker", None) is None:
-            state.async_session_maker = _dummy_session_maker
-        yield c
+    with patch.dict(os.environ, {"APP_ENTRY": "api"}):
+        importlib.reload(config_module)
+        from app.main import app
+        with TestClient(app) as c:
+            state = getattr(c.app, "state", None)
+            if state is not None and getattr(state, "async_session_maker", None) is None:
+                state.async_session_maker = _dummy_session_maker
+            yield c
+    with patch.dict(os.environ, {"APP_ENTRY": "celery"}):
+        importlib.reload(config_module)

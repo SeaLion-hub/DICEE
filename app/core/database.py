@@ -75,20 +75,20 @@ def check_pool_budget(effective_max_conn: int | None) -> PoolBudgetResult:
             peak_pool_conn=0,
             message="Pool budget check skipped (no effective max_connections).",
         )
-    reserved = settings.db_reserved
+    reserved = settings.db.db_reserved
     app_budget = int((effective_max_conn - reserved) * 0.7)
     api_conn = (
-        settings.db_api_instances
-        * settings.db_uvicorn_workers
-        * (settings.db_pool_size_async + settings.db_pool_max_overflow_async)
+        settings.db.db_api_instances
+        * settings.db.db_uvicorn_workers
+        * (settings.db.db_pool_size_async + settings.db.db_pool_max_overflow_async)
     )
     worker_conn = (
-        settings.db_worker_instances
-        * settings.db_celery_concurrency
-        * (settings.db_pool_size_sync + settings.db_pool_max_overflow_sync)
+        settings.db.db_worker_instances
+        * settings.db.db_celery_concurrency
+        * (settings.db.db_pool_size_sync + settings.db.db_pool_max_overflow_sync)
     )
     total_pool_conn = api_conn + worker_conn
-    peak_pool_conn = int(total_pool_conn * settings.deploy_surge_factor)
+    peak_pool_conn = int(total_pool_conn * settings.db.deploy_surge_factor)
     within_budget = peak_pool_conn <= app_budget
     if within_budget:
         msg = (
@@ -152,7 +152,7 @@ def get_async_session_maker() -> async_sessionmaker[AsyncSession] | None:
 
 def init_db() -> None:
     """DATABASE_URL이 있으면 엔진·세션 팩토리 초기화. Holder에 설정."""
-    raw_url = (settings.database_url or "").strip()
+    raw_url = (settings.db.database_url or "").strip()
     if not raw_url:
         logger.warning("DATABASE_URL not set or empty. DB features disabled.")
         return
@@ -176,16 +176,16 @@ def init_db() -> None:
     # 연결 단위 statement_timeout 적용. docs/decisions/database-pool-capacity.md.
     # psycopg3 (postgresql+psycopg)는 server_settings 미지원 → libpq options 사용.
     connect_args: dict = {}
-    timeout_ms = getattr(settings, "db_statement_timeout_ms", 30000)
+    timeout_ms = settings.db.db_statement_timeout_ms
     connect_args["options"] = f"-c statement_timeout={timeout_ms}"
 
     _db_holder.engine = create_async_engine(
         _async_database_url(raw_url),
         echo=False,
         pool_pre_ping=True,
-        pool_size=settings.db_pool_size_async,
-        max_overflow=settings.db_pool_max_overflow_async,
-        pool_timeout=settings.db_pool_timeout_async,
+        pool_size=settings.db.db_pool_size_async,
+        max_overflow=settings.db.db_pool_max_overflow_async,
+        pool_timeout=settings.db.db_pool_timeout_async,
         connect_args=connect_args,
     )
     _db_holder.async_session_maker = async_sessionmaker(
@@ -215,8 +215,8 @@ async def verify_db_connection() -> None:
         return
 
     last_exc: Exception | None = None
-    retries = max(1, settings.db_connect_retries)
-    interval = max(0.5, settings.db_connect_retry_interval_sec)
+    retries = max(1, settings.db.db_connect_retries)
+    interval = max(0.5, settings.db.db_connect_retry_interval_sec)
 
     global _resolved_max_connections
     for attempt in range(1, retries + 1):
@@ -255,7 +255,7 @@ async def verify_db_connection() -> None:
             scope.set_context(
                 "database",
                 {
-                    "url_set": bool((settings.database_url or "").strip()),
+                    "url_set": bool((settings.db.database_url or "").strip()),
                     "retries": retries,
                 },
             )
@@ -269,7 +269,7 @@ async def verify_db_connection() -> None:
         last_exc,
         exc_info=True,
     )
-    if settings.strict_startup_db_check:
+    if settings.db.strict_startup_db_check:
         raise RuntimeError(
             f"Database connection failed after {retries} attempts: {last_exc}"
         ) from last_exc

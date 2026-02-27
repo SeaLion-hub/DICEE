@@ -4,6 +4,7 @@
 
 - [작성 규칙](#작성-규칙)
 - [작성 형식](#작성-형식)
+- [2026-02-27](#2026-02-27)
 - [2026-02-26](#2026-02-26)
 - [2026-02-25](#2026-02-25)
 - [2026-02-24](#2026-02-24)
@@ -27,16 +28,18 @@
 - `- [단계 또는 영역] 무엇을 했는지 (어떤 파일/기능). 왜 또는 결과 한 줄.`
 
 ---
-## 2026-02-27: 대규모 트래픽 대비 백엔드 아키텍처 최적화 (언더엔지니어링 극복)
+## 2026-02-27
 
-**작업 내용**
-- **DB 데드락(Deadlock) 원천 차단:** 다중 Celery 워커가 병렬로 `upsert_notices_bulk` 수행 시 발생하는 행 수준 잠금(Row-level Lock) 엇갈림 현상을 방지하기 위해, 삽입 전 데이터를 유니크 키(`college_id`, `external_id`) 기준으로 오름차순 정렬하는 로직 추가.
-- **Cache Stampede(Thundering Herd) 방어막 구축:** Redis 캐시 만료 시 수만 개의 요청이 동시에 DB로 쏟아지는 현상을 막기 위해 `app/core/redis.py`에 Soft TTL(논리적 만료) 및 Mutex Lock(분산 락) 메커니즘 구현.
-- **FastAPI 읽기 전용 트랜잭션 분리:** 단순 공지사항 목록 조회 API의 성능 극대화를 위해 `AUTOCOMMIT` 격리 수준을 사용하는 `get_read_only_db` 의존성(Dependency) 추가.
+- [P0 대규모 트래픽 대비] **DB 데드락 원천 차단:** upsert_notices_bulk 삽입 전 (college_id, external_id) 기준 오름차순 정렬. **Cache Stampede 방어:** app/core/redis.py Soft TTL·Mutex Lock(분산 락). **읽기 전용 트랜잭션:** get_read_only_db(AUTOCOMMIT) 의존성. 수강신청 등 트래픽 폭증 시 1초 이내 API 응답·SNUTT 수준 동시성 제어 목표.
 
-**결과 및 기대 효과**
-- 수강신청 등 단기간 트래픽 폭증 시에도 DB 커넥션 고갈이나 데드락 없이 안정적인 1초 이내 API 응답 속도 보장.
-- 상용 대학교 커뮤니티 앱(SNUTT 등) 수준의 동시성 제어 및 캐싱 방어력 확보.
+- [안티프래질 인프라 4단계 구현] **(Phase 1)** Redis 역할 분리: config.redis_celery_url 추가, celery_app에서 broker/result_backend에 celery_url or redis_url 사용. task_queues (critical, crawl, ai) 및 task_routes 도입. DEPLOYMENT·.env.example에 REDIS_CELERY_URL·워커 -Q critical,crawl,ai 필수 안내. **(Phase 2)** content 업로드 실패 스풀: content_spool_dir·content_spool_backend·content_spool_max_retries 설정, storage에서 policy=fail 시 _spool_write_failure 후 예외 전파, spool_list_local/spool_read_entry, drain_content_spool_task(재업로드+update_notice_content_url_sync로 DB 반영), beat 스케줄 300s. notice_repository에 update_notice_content_url_sync 추가. **(Phase 3)** 읽기 캐시: read_cache_ttl_seconds·read_cache_key_prefix, app/core/read_cache.py (get_cached/set_cached), /internal/crawl-stats에 read-through 캐시 적용. **(Phase 4)** 자율 모드: degraded_failure_threshold·degraded_recovery_success_count, AppState에 operational_mode·consecutive_failure_count·consecutive_success_count, /ready 호출 시 _update_operational_mode로 연속 N실패→DEGRADED·M성공→NORMAL, DEGRADED 시 crawl-stats는 캐시만 서빙·미스 시 503+Retry-After. ADR: redis-celery-separation.md·content-upload-spool-and-drain.md. CAUTIONS: 워커 큐 명시·스풀 경로 이탈.
+
+- [Config/Celery/Redis Seen 동작 정정] **(1) LEGACY_CONFIG_FORBIDDEN** — config.py: `_legacy_guard_allow` 스레드 로컬 도입, `settings.db`/`settings.redis` 프로퍼티 getter 내부에서만 평탄 필드 접근 허용(가드 건너뜀). LEGACY_CONFIG_FORBIDDEN=true여도 도메인 뷰 접근은 정상 동작. **(2) Celery import 시점 Fail-fast** — celery_app.py: `_ensure_celery_entry()`를 모듈 로드 시점에 호출, `on_after_configure`에서는 로깅 필터만 등록. APP_ENTRY≠celery일 때 import 즉시 RuntimeError. **(3) Redis Seen required 런타임** — crawl_service.py: `_RedisSeenSet`에 `_required` 저장, required=True일 때 `add`/`__contains__`에서 Redis 실패 시 warning 대신 예외 발생(run 실패). **(4) 테스트** — conftest: APP_ENTRY=celery 강제, client 픽스처에서만 api로 전환 후 main 로드. test_tasks_and_config·test_env_and_config_whitespace 수정(진입점 fail-fast·redis fallback 검증). pytest: tasks_and_config·env_whitespace 8 passed. test_security_features 5건 실패는 기존(내부 인증/프록시) 이슈.
+
+- [main·Dev4 머지·보안 테스트 정리] **(1) 머지 확인** — Dev4와 origin/main은 **unrelated histories**(공통 조상 없음)로 `git merge origin/main` 시 "refusing to merge unrelated histories" 발생. main은 2커밋(초기 세팅·crawl_service/yonsei_business 포맷), Dev4는 29커밋 선행. 자동 머지 불가 원인: 히스토리 분기. **(2) 보안 테스트 5건 수정** — tests/test_security_features.py: test_crawl_stats_masks_error_message·test_trigger_crawl_all_enqueues_fail_returns_503는 내부 인증 우회(_authorize_internal_trigger no-op) 후 응답/503 검증; test_get_client_ip_trusted_proxy_invalid_header_raises는 network.settings mock·Starlette Headers 사용; test_invalid_forwarded_header_returns_400는 핸들러 직접 호출로 400+code 검증; test_check_crawl_trigger_secret_valid_and_invalid는 internal_auth.settings를 None 시크릿 mock으로 교체 후 CrawlTriggerNotConfiguredError 검증; test_trigger_crawl은 acquire_trigger_lock·release_trigger_lock mock으로 Redis 락 통과 후 ALL_ENQUEUES_FAILED 검증. pytest 64 passed, 3 skipped.
+
+---
+
 ## 2026-02-26
 
 - [주요 결함 개선 계획 구현] **(1)** on_chunk_processed 계약 준수 — crawl_service.crawl_college_sync에서 청크 단위로 commit → expunge_all → on_chunk_processed(ids) 호출, 누적 리스트 제거. **(2)** METRICS_ALLOWED_IPS 문서 정합 — .env.example "비우면 모든 IP 차단(fail-closed)"으로 수정. **(3)** DB 풀 예산 — database.check_pool_budget를 실제 설정값(db_pool_size_async 등) 기준으로 변경, docs/decisions/database-pool-capacity.md 섹션 2 갱신. **(4)** Production fail-fast — config.fail_fast_production에서 Google OAuth 사용 시 GOOGLE_REDIRECT_URIS 비어있지 않음·최소 1개 유효 URI(urlparse) 검사 추가. **(5)** Redis fallback — api_rate_limit: RateLimitUnavailableError·require_redis 옵션, Redis 없/장애 시 503 반환; config.api_rate_limit_require_redis 추가; auth.py·internal.py에서 503 처리; .env.example·DEPLOYMENT.md 문서화, blocklist 프로덕션 권장 문구. **(6)** crawl_runs 계약 — docs/decisions/crawl-runs-composite-pk-contract.md 추가. tests: test_security_features mock에 require_redis/**kwargs 수용. pytest 60 passed, 3 skipped.

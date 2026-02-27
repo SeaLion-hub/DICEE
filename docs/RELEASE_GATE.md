@@ -13,26 +13,26 @@
 
 ## 2) P0 체크리스트 (Release Blocker, 하나라도 미충족이면 No-Go)
 
-- [ ] 인증/세션 보안 경로가 장애 시 의도대로 fail-closed 동작한다.
-- [ ] OAuth redirect_uri allowlist가 production에서 강제된다.
-- [ ] 내부 트리거(/internal/trigger-crawl) 부분 실패를 성공(200)으로 숨기지 않는다.
-- [ ] idempotency 실패 시 중복 실행 폭주를 허용하지 않는다.
-- [ ] 스토리지 업로드 실패가 무음 데이터 유실로 끝나지 않는다.
-- [ ] 크롤러 반환 타입 계약(ScrapeResult)이 모든 예외 경로에서 일관된다.
-- [ ] run/task idempotency가 재시도 시 결정적으로 유지된다(랜덤 대체 금지).
-- [ ] readiness가 보안 핵심 의존성 저하를 정상으로 보고하지 않는다.
-- [ ] P0 수정마다 회귀 테스트가 추가되어 재발을 방지한다.
+- 인증/세션 보안 경로가 장애 시 의도대로 fail-closed 동작한다.
+- OAuth redirect_uri allowlist가 production에서 강제된다.
+- 내부 트리거(/internal/trigger-crawl) 부분 실패를 성공(200)으로 숨기지 않는다.
+- idempotency 실패 시 중복 실행 폭주를 허용하지 않는다.
+- 스토리지 업로드 실패가 무음 데이터 유실로 끝나지 않는다.
+- 크롤러 반환 타입 계약(ScrapeResult)이 모든 예외 경로에서 일관된다.
+- run/task idempotency가 재시도 시 결정적으로 유지된다(랜덤 대체 금지).
+- readiness가 보안 핵심 의존성 저하를 정상으로 보고하지 않는다.
+- P0 수정마다 회귀 테스트가 추가되어 재발을 방지한다.
 
 ## 3) P1 체크리스트 (High, 배포 전 정리 권장)
 
-- [ ] content_hash가 실제 변경 요소(첨부/이미지 포함)를 반영한다.
-- [ ] 비동기 재시도(backoff)가 워커 처리량을 과도하게 블로킹하지 않는다.
-- [ ] X-Forwarded-For private/invalid 처리 정책이 스푸핑 우회 없이 일관된다.
-- [ ] S3 저장 시 암호화(KMS/SSE) 정책이 코드 또는 버킷 정책으로 강제된다.
-- [ ] production에서 s3 설정 누락 시 local fallback 대신 fail-fast 한다.
-- [ ] 운영 문서(.env.example, DEPLOYMENT, ADR)와 실제 코드 정책이 일치한다.
-- [ ] 관측성 지표가 실패를 "성공처럼" 보이게 만들지 않는다.
-- [ ] 에러 코드/응답 계약(4xx/5xx)이 재시도 전략과 일치한다.
+- content_hash가 실제 변경 요소(첨부/이미지 포함)를 반영한다.
+- 비동기 재시도(backoff)가 워커 처리량을 과도하게 블로킹하지 않는다.
+- X-Forwarded-For private/invalid 처리 정책이 스푸핑 우회 없이 일관된다.
+- S3 저장 시 암호화(KMS/SSE) 정책이 코드 또는 버킷 정책으로 강제된다.
+- production에서 s3 설정 누락 시 local fallback 대신 fail-fast 한다.
+- 운영 문서(.env.example, DEPLOYMENT, ADR)와 실제 코드 정책이 일치한다.
+- 관측성 지표가 실패를 "성공처럼" 보이게 만들지 않는다.
+- 에러 코드/응답 계약(4xx/5xx)이 재시도 전략과 일치한다.
 
 ## 4) 필수 검증 커맨드 (증빙)
 
@@ -65,7 +65,10 @@
 
 ## 참고
 
-| 문서 | 용도 |
-|------|------|
-| [ROADMAP](ROADMAP.md) | 현재 마일스톤·전략. 배포 전 단계 정합성 확인. |
+
+| 문서                          | 용도                                  |
+| --------------------------- | ----------------------------------- |
+| [ROADMAP](ROADMAP.md)       | 현재 마일스톤·전략. 배포 전 단계 정합성 확인.         |
 | [DEPLOYMENT](DEPLOYMENT.md) | Railway·환경변수·staging DB·Go-Live 검증. |
+
+
