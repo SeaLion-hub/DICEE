@@ -127,10 +127,10 @@ class Settings(BaseSettings):
     sentry_dsn: SecretStr | None = None
     environment: str = "development"  # Sentry/로깅용. production, staging, development 등.
 
-    # 진입점. APP_ENTRY 또는 ROLE 환경 변수 필수(Fail-fast). api=FastAPI, celery=워커/beat.
+    # 진입점. api=FastAPI, celery=워커/beat. 미설정 시 기본값 api(웹 서비스). Celery 워커는 APP_ENTRY=celery 필수.
     app_entry: Literal["api", "celery"] = Field(
-        ...,
-        description="Entry point: api | celery. Set APP_ENTRY or ROLE. Required at boot.",
+        default="api",
+        description="Entry point: api | celery. Set APP_ENTRY or ROLE. Default api for web service.",
         validation_alias=AliasChoices("APP_ENTRY", "ROLE"),
     )
 

@@ -392,6 +392,18 @@ Private Key 내용을 `JWT_PRIVATE_KEY_PEM`, Public Key 내용을 `JWT_PUBLIC_KE
   2. 또는 Railway **Settings → Build**에서 **배포 브랜치**를 `007_merge_heads.py`가 있는 브랜치(예: P0)로 변경한 뒤 재배포한다.
 - **확인:** 로컬에서 `git ls-tree <배포브랜치> alembic/versions/` 후 `007_merge_heads.py`가 목록에 있어야 한다.
 
+**트러블슈팅: `relation "colleges" already exists` (DuplicateTable, upgrade  -> 001)**
+
+- **원인:** DB에는 이미 테이블이 있는데 `alembic_version`이 비어 있거나, 한쪽 체인(v7_001→…→006_schema_contract_fix)만 적용된 상태에서 `alembic upgrade head`가 **다른 체인(001→…→006)**을 처음부터 적용하려다 001에서 `colleges` 생성 시 중복 오류가 난 경우.
+- **조치 (한 번만 수행):** DB의 버전을 현재 head로 **스탬프**해서, 이후 배포 시 `upgrade head`가 추가 마이그레이션만 적용하도록 맞춘다.  
+  1. Railway에서 해당 프로젝트의 **Postgres 서비스** → **Variables** 또는 **Connect**에서 **DATABASE_URL**(또는 공개 URL) 복사.  
+  2. 로컬 터미널에서 프로젝트 루트로 이동 후, **동일 DB를 가리키도록** 환경 변수 설정.  
+     - PowerShell: `$env:DATABASE_URL="postgresql://...복사한_URL..."; $env:APP_ENTRY="api"`  
+     - Bash: `export DATABASE_URL="postgresql://..."; export APP_ENTRY=api`  
+  3. `alembic stamp 007_merge_heads` 실행. (또는 `alembic stamp head` — 현재 head가 007_merge_heads 하나일 때.)  
+  4. 출력에 에러가 없으면 완료. 이후 Railway에서 서비스를 **Redeploy**하면 시작 시 `alembic upgrade head`는 이미 적용된 상태라 스킵되고 앱만 기동한다.
+- **주의:** 스탬프는 “이 DB는 이미 해당 리비전까지 적용된 상태”라고 Alembic에 알리는 것이므로, **실제 DB 스키마가 007_merge_heads 기준과 일치할 때만** 사용한다. v7 체인만 적용된 DB라면 스키마가 이미 그에 맞춰져 있으므로 007로 스탬프해도 된다.
+
 **크롤 운영 정책:** FastAPI 내 크롤 트리거(POST /internal/trigger-crawl 또는 동기 호출)는 **개발·소량 테스트용**이다. **프로덕션 정기 크롤은 Celery 워커만 사용**한다. Cron이 6시간마다 trigger-crawl을 호출하면 Celery 태스크가 enqueue되고 워커가 실행한다.
 
 **첨부파일 저장 원칙:** 첨부파일은 **원격 URL(또는 파일명) 리스트만** DB(Notice.attachments JSONB)에 보관한다. **로컬 파일시스템에 다운로드·저장하지 않는다.** (Railway 등 컨테이너는 휘발성 파일시스템이므로 재시작 시 파일이 사라진다.) 클라이언트가 직접 원본 URL로 다운로드하거나, 백엔드를 거칠 경우 **S3 등 외부 오브젝트 스토리지**로 업로드하는 파이프라인만 사용한다.
