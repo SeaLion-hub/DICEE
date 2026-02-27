@@ -35,6 +35,8 @@
 
 - [Config/Celery/Redis Seen 동작 정정] **(1) LEGACY_CONFIG_FORBIDDEN** — config.py: `_legacy_guard_allow` 스레드 로컬 도입, `settings.db`/`settings.redis` 프로퍼티 getter 내부에서만 평탄 필드 접근 허용(가드 건너뜀). LEGACY_CONFIG_FORBIDDEN=true여도 도메인 뷰 접근은 정상 동작. **(2) Celery import 시점 Fail-fast** — celery_app.py: `_ensure_celery_entry()`를 모듈 로드 시점에 호출, `on_after_configure`에서는 로깅 필터만 등록. APP_ENTRY≠celery일 때 import 즉시 RuntimeError. **(3) Redis Seen required 런타임** — crawl_service.py: `_RedisSeenSet`에 `_required` 저장, required=True일 때 `add`/`__contains__`에서 Redis 실패 시 warning 대신 예외 발생(run 실패). **(4) 테스트** — conftest: APP_ENTRY=celery 강제, client 픽스처에서만 api로 전환 후 main 로드. test_tasks_and_config·test_env_and_config_whitespace 수정(진입점 fail-fast·redis fallback 검증). pytest: tasks_and_config·env_whitespace 8 passed. test_security_features 5건 실패는 기존(내부 인증/프록시) 이슈.
 
+- [main·Dev4 머지·보안 테스트 정리] **(1) 머지 확인** — Dev4와 origin/main은 **unrelated histories**(공통 조상 없음)로 `git merge origin/main` 시 "refusing to merge unrelated histories" 발생. main은 2커밋(초기 세팅·crawl_service/yonsei_business 포맷), Dev4는 29커밋 선행. 자동 머지 불가 원인: 히스토리 분기. **(2) 보안 테스트 5건 수정** — tests/test_security_features.py: test_crawl_stats_masks_error_message·test_trigger_crawl_all_enqueues_fail_returns_503는 내부 인증 우회(_authorize_internal_trigger no-op) 후 응답/503 검증; test_get_client_ip_trusted_proxy_invalid_header_raises는 network.settings mock·Starlette Headers 사용; test_invalid_forwarded_header_returns_400는 핸들러 직접 호출로 400+code 검증; test_check_crawl_trigger_secret_valid_and_invalid는 internal_auth.settings를 None 시크릿 mock으로 교체 후 CrawlTriggerNotConfiguredError 검증; test_trigger_crawl은 acquire_trigger_lock·release_trigger_lock mock으로 Redis 락 통과 후 ALL_ENQUEUES_FAILED 검증. pytest 64 passed, 3 skipped.
+
 ---
 
 ## 2026-02-26
