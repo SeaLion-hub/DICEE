@@ -384,6 +384,14 @@ Private Key 내용을 `JWT_PRIVATE_KEY_PEM`, Public Key 내용을 `JWT_PUBLIC_KE
   2. 또는 DB를 011 이전으로 되돌리고 싶다면, **로컬에서** 공개 DB URL로 `alembic downgrade 010` 실행 후, 그 다음 main으로 배포한다. (011에서 추가된 스키마/인덱스가 있다면 수동 정리 필요.)
 - **원칙:** 배포 브랜치에 포함된 마이그레이션 파일이 DB에 기록된 리비전과 일치해야 한다.
 
+**트러블슈팅: `Multiple head revisions are present for given argument 'head'` (Alembic)**
+
+- **원인:** 배포에 사용한 브랜치(예: main)에 `alembic/versions/007_merge_heads.py`가 없을 때 발생한다. 두 개의 마이그레이션 체인(006, 006_schema_contract_fix)만 있고 이를 합치는 머지 리비전이 없으면 `alembic upgrade head`가 실패한다.
+- **조치:**  
+  1. **main을 배포 중인 경우:** main에 `007_merge_heads.py`가 포함된 커밋을 푸시한 뒤 재배포한다. (이미 main에 추가했다면 `git push origin main` 후 Railway가 자동 재배포하거나 수동 Redeploy.)  
+  2. 또는 Railway **Settings → Build**에서 **배포 브랜치**를 `007_merge_heads.py`가 있는 브랜치(예: P0)로 변경한 뒤 재배포한다.
+- **확인:** 로컬에서 `git ls-tree <배포브랜치> alembic/versions/` 후 `007_merge_heads.py`가 목록에 있어야 한다.
+
 **크롤 운영 정책:** FastAPI 내 크롤 트리거(POST /internal/trigger-crawl 또는 동기 호출)는 **개발·소량 테스트용**이다. **프로덕션 정기 크롤은 Celery 워커만 사용**한다. Cron이 6시간마다 trigger-crawl을 호출하면 Celery 태스크가 enqueue되고 워커가 실행한다.
 
 **첨부파일 저장 원칙:** 첨부파일은 **원격 URL(또는 파일명) 리스트만** DB(Notice.attachments JSONB)에 보관한다. **로컬 파일시스템에 다운로드·저장하지 않는다.** (Railway 등 컨테이너는 휘발성 파일시스템이므로 재시작 시 파일이 사라진다.) 클라이언트가 직접 원본 URL로 다운로드하거나, 백엔드를 거칠 경우 **S3 등 외부 오브젝트 스토리지**로 업로드하는 파이프라인만 사용한다.
