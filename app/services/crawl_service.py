@@ -11,10 +11,11 @@ import json
 import logging
 import uuid
 from collections import deque
-from collections.abc import Callable, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Protocol
 
 import httpx
 from bs4 import BeautifulSoup
@@ -57,26 +58,44 @@ from app.services.crawlers.base import ScrapeResult
 
 logger = logging.getLogger(__name__)
 
+
+@dataclass(frozen=True, slots=True)
+class CrawlRuntimeConfig:
+    polite_delay_seconds: float
+    page_timeout_seconds: float
+    upsert_chunk_size: int
+    collect_sync_max_workers: int
+    collect_in_flight_limit: int
+    max_links_per_run: int
+    collect_async_concurrency: int
+    crawl_seen_max_size: int
+
+
+def _load_crawl_runtime_config() -> CrawlRuntimeConfig:
+    """Load crawl runtime knobs at call time."""
+    return CrawlRuntimeConfig(
+        polite_delay_seconds=settings.polite_delay_seconds,
+        page_timeout_seconds=settings.crawl_page_timeout_seconds,
+        upsert_chunk_size=settings.crawl_upsert_chunk_size,
+        collect_sync_max_workers=settings.crawl_collect_sync_max_workers,
+        collect_in_flight_limit=settings.crawl_collect_in_flight_limit,
+        max_links_per_run=settings.crawl_max_links_per_run,
+        collect_async_concurrency=settings.crawl_collect_async_concurrency,
+        crawl_seen_max_size=settings.crawl_seen_max_size,
+    )
+
 # 요청/페이지 간 최소 딜레이(초). 부하·IP 차단 완화. .env POLITE_DELAY_SECONDS로 오버라이드 가능.
-POLITE_DELAY_SECONDS = settings.polite_delay_seconds
 
 # 비동기 크롤 페이지 타임아웃(초).
-CRAWL_PAGE_TIMEOUT_SECONDS = 30
 
 # sync 경로 청크 단위 upsert 크기. commit 후 expunge_all로 세션 Identity Map 비우기(E1).
-UPSERT_CHUNK_SIZE = 50
 
 # 상세 페이지 병렬 수집 시 최대 워커 수 (rate limit은 메인 스레드에서만 적용).
-COLLECT_PAYLOADS_MAX_WORKERS = 5
 # 동기 수집 시 동시에 유지할 Future 상한. O(N) 메모리 방지.
-COLLECT_IN_FLIGHT_LIMIT = 500
 # Run당 링크 수 상한. 초과 시 잘라서 처리해 단일 노드 OOM 방지(선제 대응). 스트리밍/Redis 큐는 추후 확장.
-MAX_LINKS_PER_RUN = 50_000
 # 비동기 수집 시 전체 동시 요청 수. 호스트별 delay는 유지.
-COLLECT_ASYNC_CONCURRENCY = 10
 
 # Bounded Seen Set: 최대 보유 개수. 초과 시 가장 오래된 항목 evict. OOM 방지.
-CRAWL_SEEN_MAX_SIZE = settings.crawl_seen_max_size
 
 # 비동기 재시도: tenacity wait_exponential_jitter 사용. Thundering Herd 방지.
 CRAWL_RETRY_BASE_SEC = 1.0
@@ -95,10 +114,10 @@ class _BoundedSeenSet:
 
     __slots__ = ("_deque", "_set", "_max_size")
 
-    def __init__(self, max_size: int = CRAWL_SEEN_MAX_SIZE) -> None:
+    def __init__(self, max_size: int | None = None) -> None:
         self._deque: deque[str] = deque()
         self._set: set[str] = set()
-        self._max_size = max_size
+        self._max_size = max_size or settings.crawl_seen_max_size
 
     def add(self, x: str) -> None:
         if x in self._set:
@@ -185,6 +204,195 @@ class _RedisSeenSet:
         self._closed = True
 
 
+_SeenSet = set[str] | _BoundedSeenSet | _RedisSeenSet
+
+
+def _resolve_module_and_list_url(college_code: str) -> tuple[str, str]:
+    module_name = COLLEGE_CODE_TO_MODULE.get(college_code)
+    if not module_name:
+        raise ValueError(f"No crawler module for college: {college_code}")
+    config = CRAWLER_CONFIG.get(module_name)
+    if not config or not config.get("url"):
+        raise ValueError(f"No crawler config or url for: {module_name}")
+    return module_name, config["url"]
+
+
+def _cap_links_for_run(links_raw: list[dict], college_code: str, max_links: int) -> list[dict]:
+    if len(links_raw) > max_links:
+        logger.warning(
+            "Links capped for OOM prevention: college_code=%s total=%d cap=%d",
+            college_code,
+            len(links_raw),
+            max_links,
+        )
+    return links_raw[:max_links]
+
+
+def _init_seen_set(
+    *,
+    run_id: uuid.UUID | None,
+    redis_url: str,
+    redis_required: bool,
+    seen_max_size: int,
+) -> _BoundedSeenSet | _RedisSeenSet:
+    if run_id and redis_url:
+        return _RedisSeenSet(
+            run_id,
+            redis_url,
+            CRAWL_SEEN_REDIS_TTL_SECONDS,
+            required=redis_required,
+        )
+    return _BoundedSeenSet(seen_max_size)
+
+
+class _SyncCrawlAdapter(Protocol):
+    def collect_payloads(
+        self,
+        *,
+        links: list[dict],
+        college_id: uuid.UUID,
+        scrape_fn: Callable,
+        seen: _SeenSet,
+        cfg: CrawlRuntimeConfig,
+    ) -> Iterator[dict]: ...
+
+    def upsert_chunk(self, session: Session, chunk: list[dict]) -> list[uuid.UUID]: ...
+
+
+class _AsyncCrawlAdapter(Protocol):
+    def collect_payloads(
+        self,
+        *,
+        client: httpx.AsyncClient,
+        links: list[dict],
+        college_id: uuid.UUID,
+        scrape_async_fn: Callable,
+        seen: _SeenSet,
+        cfg: CrawlRuntimeConfig,
+    ) -> AsyncIterator[dict]: ...
+
+    async def upsert_chunk(
+        self,
+        session: AsyncSession,
+        chunk: list[dict],
+    ) -> list[uuid.UUID]: ...
+
+
+class _DefaultSyncCrawlAdapter:
+    def collect_payloads(
+        self,
+        *,
+        links: list[dict],
+        college_id: uuid.UUID,
+        scrape_fn: Callable,
+        seen: _SeenSet,
+        cfg: CrawlRuntimeConfig,
+    ) -> Iterator[dict]:
+        return _collect_payloads_sync(
+            links,
+            college_id,
+            scrape_fn,
+            cfg.polite_delay_seconds,
+            seen=seen,
+            max_workers=cfg.collect_sync_max_workers,
+            in_flight_limit=cfg.collect_in_flight_limit,
+        )
+
+    def upsert_chunk(self, session: Session, chunk: list[dict]) -> list[uuid.UUID]:
+        return upsert_notices_bulk_sync(session, chunk)
+
+
+class _DefaultAsyncCrawlAdapter:
+    async def collect_payloads(
+        self,
+        *,
+        client: httpx.AsyncClient,
+        links: list[dict],
+        college_id: uuid.UUID,
+        scrape_async_fn: Callable,
+        seen: _SeenSet,
+        cfg: CrawlRuntimeConfig,
+    ) -> AsyncIterator[dict]:
+        async for payload in _collect_payloads_async(
+            client,
+            links,
+            college_id,
+            scrape_async_fn,
+            cfg.polite_delay_seconds,
+            seen=seen,
+            concurrency=cfg.collect_async_concurrency,
+        ):
+            yield payload
+
+    async def upsert_chunk(
+        self,
+        session: AsyncSession,
+        chunk: list[dict],
+    ) -> list[uuid.UUID]:
+        return await upsert_notices_bulk(session, chunk)
+
+
+async def _finalize_chunk_async(
+    session: AsyncSession,
+    adapter: _AsyncCrawlAdapter,
+    chunk: list[dict],
+) -> int:
+    ids = await adapter.upsert_chunk(session, chunk)
+    chunk.clear()
+    return len(ids)
+
+
+async def _run_crawl_pipeline_async(
+    session: AsyncSession,
+    *,
+    college_code: str,
+    college_id: uuid.UUID,
+    list_url: str,
+    get_links_async_fn: Callable,
+    scrape_async_fn: Callable,
+    cfg: CrawlRuntimeConfig,
+    adapter: _AsyncCrawlAdapter,
+) -> int:
+    seen = _init_seen_set(
+        run_id=None,
+        redis_url="",
+        redis_required=False,
+        seen_max_size=cfg.crawl_seen_max_size,
+    )
+    async with httpx.AsyncClient(timeout=cfg.page_timeout_seconds) as client:
+        links_raw = await get_links_async_fn(client, list_url)
+        links = _cap_links_for_run(links_raw, college_code, cfg.max_links_per_run)
+        total_links = len(links)
+        if not links:
+            logger.info(
+                "crawl finished college_code=%s total_links=0 upserted=0",
+                college_code,
+            )
+            return 0
+        total_count = 0
+        chunk: list[dict] = []
+        async for payload in adapter.collect_payloads(
+            client=client,
+            links=links,
+            college_id=college_id,
+            scrape_async_fn=scrape_async_fn,
+            seen=seen,
+            cfg=cfg,
+        ):
+            chunk.append(payload)
+            if len(chunk) >= cfg.upsert_chunk_size:
+                total_count += await _finalize_chunk_async(session, adapter, chunk)
+        if chunk:
+            total_count += await _finalize_chunk_async(session, adapter, chunk)
+        logger.info(
+            "crawl finished college_code=%s total_links=%d upserted=%d",
+            college_code,
+            total_links,
+            total_count,
+        )
+        return total_count
+
+
 async def crawl_college(session: AsyncSession, college_code: str) -> int:
     """
     단과대 1개 크롤 (완전 비동기). httpx.AsyncClient + get_*_links_async / scrape_*_detail_async.
@@ -193,70 +401,30 @@ async def crawl_college(session: AsyncSession, college_code: str) -> int:
     college = await get_college_by_external_id(session, college_code)
     if not college:
         raise ValueError(f"College not found: {college_code}")
-
-    module_name = COLLEGE_CODE_TO_MODULE.get(college_code)
-    if not module_name:
-        raise ValueError(f"No crawler module for college: {college_code}")
-
-    config = CRAWLER_CONFIG.get(module_name)
-    if not config or not config.get("url"):
-        raise ValueError(f"No crawler config or url for: {module_name}")
-
-    list_url = config["url"]
+    module_name, list_url = _resolve_module_and_list_url(college_code)
     get_links_async_fn, scrape_async_fn = get_crawler_async(module_name)
-    seen = _BoundedSeenSet(CRAWL_SEEN_MAX_SIZE)
-
-    async with httpx.AsyncClient(timeout=CRAWL_PAGE_TIMEOUT_SECONDS) as client:
-        links_raw = await get_links_async_fn(client, list_url)
-        if len(links_raw) > MAX_LINKS_PER_RUN:
-            logger.warning(
-                "Links capped for OOM prevention: college_code=%s total=%d cap=%d",
-                college_code,
-                len(links_raw),
-                MAX_LINKS_PER_RUN,
-            )
-        links = links_raw[:MAX_LINKS_PER_RUN]
-        total_links = len(links)
-
-        if not links:
-            logger.info(
-                "crawl finished college_code=%s total_links=0 upserted=0",
-                college_code,
-            )
-            return 0
-
-        total_count = 0
-        chunk: list[dict] = []
-        async for payload in _collect_payloads_async(
-            client, links, college.id, scrape_async_fn, POLITE_DELAY_SECONDS, seen
-        ):
-            chunk.append(payload)
-            if len(chunk) >= UPSERT_CHUNK_SIZE:
-                ids = await upsert_notices_bulk(session, chunk)
-                total_count += len(ids)
-                chunk.clear()
-        if chunk:
-            ids = await upsert_notices_bulk(session, chunk)
-            total_count += len(ids)
-
-        logger.info(
-            "crawl finished college_code=%s total_links=%d upserted=%d",
-            college_code,
-            total_links,
-            total_count,
-        )
-    return total_count
+    cfg = _load_crawl_runtime_config()
+    return await _run_crawl_pipeline_async(
+        session,
+        college_code=college_code,
+        college_id=college.id,
+        list_url=list_url,
+        get_links_async_fn=get_links_async_fn,
+        scrape_async_fn=scrape_async_fn,
+        cfg=cfg,
+        adapter=_DefaultAsyncCrawlAdapter(),
+    )
 
 
 def _scrape_one_sync(
     post: dict, scrape_fn: Callable
-) -> tuple[dict, str, ScrapeResult | None, BaseException | None]:
+) -> tuple[dict, str, ScrapeResult | None, Exception | None]:
     """워커용: scrape_fn(detail_url) 호출. (post, detail_url, data, exc) 반환. data는 ScrapeResult 또는 None."""
     detail_url = post.get("url") or ""
     try:
         data = scrape_fn(detail_url)
         return (post, detail_url, data, None)
-    except BaseException as e:
+    except Exception as e:
         return (post, detail_url, None, e)
 
 
@@ -277,7 +445,7 @@ async def _fetch_one_async(
     scrape_async_fn,
     rate_limiter,
     sem: asyncio.Semaphore,
-) -> tuple[dict, str, ScrapeResult | None, BaseException | None]:
+) -> tuple[dict, str, ScrapeResult | None, Exception | None]:
     """한 건 비동기 스크랩. 모듈 레벨로 분리해 단위 테스트 가능."""
     async with sem:
         detail_url = post.get("url") or ""
@@ -285,7 +453,7 @@ async def _fetch_one_async(
         try:
             data = await scrape_async_fn(client, detail_url)
             return (post, detail_url, data, None)
-        except BaseException as e:
+        except Exception as e:
             return (post, detail_url, None, e)
 
 
@@ -295,9 +463,9 @@ async def _fetch_one_with_retry(
     scrape_async_fn,
     rate_limiter,
     sem: asyncio.Semaphore,
-) -> tuple[dict, str, ScrapeResult | None, BaseException | None]:
+) -> tuple[dict, str, ScrapeResult | None, Exception | None]:
     """한 건 비동기 스크랩 + 네트워크/타임아웃 시 tenacity 재시도. 재시도 소진 시 마지막 결과 반환."""
-    last_result: tuple[dict, str, ScrapeResult | None, BaseException | None] | None = None
+    last_result: tuple[dict, str, ScrapeResult | None, Exception | None] | None = None
     async for attempt in AsyncRetrying(
         stop=stop_after_attempt(CRAWL_RETRY_MAX_ATTEMPTS),
         wait=_crawl_retry_wait,
@@ -319,11 +487,11 @@ def _process_scrape_result(
     post: dict,
     detail_url: str,
     data: ScrapeResult | None,
-    exc: BaseException | None,
+    exc: Exception | None,
     college_id: uuid.UUID,
     seen: set[str] | _BoundedSeenSet | _RedisSeenSet,
     tracker: CrawlErrorTracker,
-) -> tuple[dict | None, CrawlThresholdExceeded | BaseException | None]:
+) -> tuple[dict | None, CrawlThresholdExceeded | Exception | None]:
     """
     한 건 스크랩 결과 처리. CrawlErrorTracker로 상태 캡슐화. sync/async 공통.
     반환: (payload 또는 None, raise할 예외 또는 None).
@@ -394,6 +562,9 @@ def _collect_payloads_sync(
     college_id: uuid.UUID,
     scrape_fn: Callable,
     delay_sec: float,
+    *,
+    max_workers: int,
+    in_flight_limit: int,
     seen: set[str] | _BoundedSeenSet | _RedisSeenSet | None = None,
 ) -> Iterator[dict]:
     """
@@ -406,10 +577,10 @@ def _collect_payloads_sync(
     tracker = CrawlErrorTracker()
     remaining = deque(links)
 
-    executor = ThreadPoolExecutor(max_workers=COLLECT_PAYLOADS_MAX_WORKERS)
+    executor = ThreadPoolExecutor(max_workers=max_workers)
     try:
         futures: dict = {}
-        for _ in range(min(COLLECT_IN_FLIGHT_LIMIT, len(remaining))):
+        for _ in range(min(in_flight_limit, len(remaining))):
             if not remaining:
                 break
             post = remaining.popleft()
@@ -422,7 +593,7 @@ def _collect_payloads_sync(
             for fut in done:
                 post = futures.pop(fut)
                 try:
-                    p, detail_url, data, exc = fut.result()
+                    _, detail_url, data, exc = fut.result()
                 except Exception as e:
                     logger.warning("scrape future exception: %s", e, exc_info=True)
                     if remaining:
@@ -463,6 +634,8 @@ async def _collect_payloads_async(
     college_id: uuid.UUID,
     scrape_async_fn,
     delay_sec: float,
+    *,
+    concurrency: int,
     seen: set[str] | _BoundedSeenSet | _RedisSeenSet | None = None,
 ):
     """
@@ -472,7 +645,7 @@ async def _collect_payloads_async(
     if seen is None:
         seen = set()
     rate_limiter = get_host_rate_limiter_async(delay_sec)
-    sem = asyncio.Semaphore(COLLECT_ASYNC_CONCURRENCY)
+    sem = asyncio.Semaphore(concurrency)
     tracker = CrawlErrorTracker()
     remaining = deque(links)
 
@@ -482,11 +655,11 @@ async def _collect_payloads_async(
         )
 
     def _refill_pending() -> None:
-        while len(pending) < COLLECT_ASYNC_CONCURRENCY and remaining:
+        while len(pending) < concurrency and remaining:
             pending.add(_task(remaining.popleft()))
 
     pending: set[asyncio.Task] = set()
-    for _ in range(min(COLLECT_ASYNC_CONCURRENCY, len(remaining))):
+    for _ in range(min(concurrency, len(remaining))):
         if not remaining:
             break
         pending.add(_task(remaining.popleft()))
@@ -536,6 +709,99 @@ async def _collect_payloads_async(
                 pass
 
 
+def _finalize_chunk_sync(
+    session: Session,
+    adapter: _SyncCrawlAdapter,
+    chunk: list[dict],
+    *,
+    on_chunk_processed: Callable[[list[uuid.UUID]], None] | None,
+    notice_ids_to_process: list[uuid.UUID],
+) -> int:
+    ids = adapter.upsert_chunk(session, chunk)
+    chunk.clear()
+    if on_chunk_processed is not None:
+        session.commit()
+        session.expunge_all()
+        on_chunk_processed(ids)
+    else:
+        notice_ids_to_process.extend(ids)
+    return len(ids)
+
+
+def _run_crawl_pipeline_sync(
+    session: Session,
+    *,
+    college_code: str,
+    college_id: uuid.UUID,
+    list_url: str,
+    get_links_fn: Callable,
+    scrape_fn: Callable,
+    run_id: uuid.UUID | None,
+    on_chunk_processed: Callable[[list[uuid.UUID]], None] | None,
+    cfg: CrawlRuntimeConfig,
+    adapter: _SyncCrawlAdapter,
+) -> tuple[int, list[uuid.UUID]]:
+    links_raw = get_links_fn(list_url)
+    links = _cap_links_for_run(links_raw, college_code, cfg.max_links_per_run)
+    total_links = len(links)
+    if not links:
+        logger.info(
+            "crawl finished college_code=%s total_links=0 upserted=0",
+            college_code,
+        )
+        return (0, [])
+
+    raw_redis = (settings.redis.redis_url or "").strip()
+    crawl_seen_required = settings.redis.redis_crawl_seen_required
+    seen = _init_seen_set(
+        run_id=run_id,
+        redis_url=raw_redis,
+        redis_required=crawl_seen_required,
+        seen_max_size=cfg.crawl_seen_max_size,
+    )
+    notice_ids_to_process: list[uuid.UUID] = []
+    total_upserted = 0
+    chunk: list[dict] = []
+    try:
+        for payload in adapter.collect_payloads(
+            links=links,
+            college_id=college_id,
+            scrape_fn=scrape_fn,
+            seen=seen,
+            cfg=cfg,
+        ):
+            chunk.append(payload)
+            if len(chunk) >= cfg.upsert_chunk_size:
+                total_upserted += _finalize_chunk_sync(
+                    session,
+                    adapter,
+                    chunk,
+                    on_chunk_processed=on_chunk_processed,
+                    notice_ids_to_process=notice_ids_to_process,
+                )
+        if chunk:
+            total_upserted += _finalize_chunk_sync(
+                session,
+                adapter,
+                chunk,
+                on_chunk_processed=on_chunk_processed,
+                notice_ids_to_process=notice_ids_to_process,
+            )
+    finally:
+        if isinstance(seen, _RedisSeenSet):
+            seen.close()
+
+    logger.info(
+        "crawl finished college_code=%s total_links=%d upserted=%d",
+        college_code,
+        total_links,
+        total_upserted,
+    )
+    if on_chunk_processed is not None:
+        return (total_upserted, [])
+    return (total_upserted, notice_ids_to_process)
+
+
 def crawl_college_sync(
     session: Session,
     college_code: str,
@@ -555,79 +821,21 @@ def crawl_college_sync(
     if not college:
         raise ValueError(f"College not found: {college_code}")
 
-    module_name = COLLEGE_CODE_TO_MODULE.get(college_code)
-    if not module_name:
-        raise ValueError(f"No crawler module for college: {college_code}")
-
-    config = CRAWLER_CONFIG.get(module_name)
-    if not config or not config.get("url"):
-        raise ValueError(f"No crawler config or url for: {module_name}")
-
-    list_url = config["url"]
+    module_name, list_url = _resolve_module_and_list_url(college_code)
     get_links_fn, scrape_fn = get_crawler(module_name)
-    links_raw = get_links_fn(list_url)
-    if len(links_raw) > MAX_LINKS_PER_RUN:
-        logger.warning(
-            "Links capped for OOM prevention: college_code=%s total=%d cap=%d",
-            college_code,
-            len(links_raw),
-            MAX_LINKS_PER_RUN,
-        )
-    links = links_raw[:MAX_LINKS_PER_RUN]
-    total_links = len(links)
-    if not links:
-        logger.info(
-            "crawl finished college_code=%s total_links=0 upserted=0",
-            college_code,
-        )
-        return (0, [])
-
-    raw_redis = (settings.redis.redis_url or "").strip()
-    crawl_seen_required = settings.redis.redis_crawl_seen_required
-    if run_id and raw_redis:
-        seen: _BoundedSeenSet | _RedisSeenSet = _RedisSeenSet(
-            run_id, raw_redis, CRAWL_SEEN_REDIS_TTL_SECONDS, required=crawl_seen_required
-        )
-    else:
-        seen = _BoundedSeenSet(CRAWL_SEEN_MAX_SIZE)
-    notice_ids_to_process: list[uuid.UUID] = []
-    total_upserted = 0
-    chunk: list[dict] = []
-    for payload in _collect_payloads_sync(
-        links, college.id, scrape_fn, POLITE_DELAY_SECONDS, seen
-    ):
-        chunk.append(payload)
-        if len(chunk) >= UPSERT_CHUNK_SIZE:
-            ids = upsert_notices_bulk_sync(session, chunk)
-            total_upserted += len(ids)
-            if on_chunk_processed is not None:
-                session.commit()
-                session.expunge_all()
-                on_chunk_processed(ids)
-            else:
-                notice_ids_to_process.extend(ids)
-            chunk.clear()
-    if chunk:
-        ids = upsert_notices_bulk_sync(session, chunk)
-        total_upserted += len(ids)
-        if on_chunk_processed is not None:
-            session.commit()
-            session.expunge_all()
-            on_chunk_processed(ids)
-        else:
-            notice_ids_to_process.extend(ids)
-
-    logger.info(
-        "crawl finished college_code=%s total_links=%d upserted=%d",
-        college_code,
-        total_links,
-        total_upserted,
+    cfg = _load_crawl_runtime_config()
+    return _run_crawl_pipeline_sync(
+        session,
+        college_code=college_code,
+        college_id=college.id,
+        list_url=list_url,
+        get_links_fn=get_links_fn,
+        scrape_fn=scrape_fn,
+        run_id=run_id,
+        on_chunk_processed=on_chunk_processed,
+        cfg=cfg,
+        adapter=_DefaultSyncCrawlAdapter(),
     )
-    if isinstance(seen, _RedisSeenSet):
-        seen.close()
-    if on_chunk_processed is not None:
-        return (total_upserted, [])
-    return (total_upserted, notice_ids_to_process)
 
 
 CRAWL_FAILURE_REDIS_KEY_PREFIX = "dicee:crawl_failure:"

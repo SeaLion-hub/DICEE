@@ -124,6 +124,12 @@ class Settings(BaseSettings):
     ai_pipeline_enabled: bool = False
     celery_worker_prefetch_multiplier: int = Field(1, ge=1, le=16)
     polite_delay_seconds: float = Field(1.0, ge=0.1, le=60.0)
+    crawl_page_timeout_seconds: float = Field(30.0, ge=1.0, le=300.0)
+    crawl_upsert_chunk_size: int = Field(50, ge=1, le=1000)
+    crawl_collect_sync_max_workers: int = Field(5, ge=1, le=32)
+    crawl_collect_in_flight_limit: int = Field(500, ge=10, le=50000)
+    crawl_max_links_per_run: int = Field(50_000, ge=100, le=500_000)
+    crawl_collect_async_concurrency: int = Field(10, ge=1, le=200)
     crawl_seen_max_size: int = Field(10_000, ge=1_000, le=1_000_000)
     crawl_run_stale_seconds: float = Field(3600.0, ge=300.0, le=86400.0)
 

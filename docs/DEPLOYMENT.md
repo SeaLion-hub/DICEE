@@ -324,7 +324,13 @@ CORS: `ALLOWED_ORIGINS`에 프론트 도메인 등록. credentials: 프론트가
 | `INTERNAL_CRAWL_STATS_RATE_LIMIT_PER_MINUTE` | 동일 IP 기준 `/internal/crawl-stats` 분당 최대 호출 수. 기본 30. | 3단계 운영 모니터링 (선택) |
 | `TRUSTED_PROXY_IPS` | 역방향 프록시(예: Railway) 직전 피어 IP를 쉼표 구분으로 설정. 비어 있으면 `X-Forwarded-For`를 신뢰하지 않고 `request.client.host`만 사용. **프로덕션에서는 비어 있으면 부팅 실패(Fail-fast)**. Railway 등 배포 시 반드시 설정. | 2단계~ (리버스 프록시 사용 시) |
 | `TRUSTED_PROXY_SKIP_FAST` | `1`이면 프로덕션에서 TRUSTED_PROXY_IPS 비어 있어도 부팅 허용. **프록시 뒤에 두지 않는 프로덕션만** 사용. 기본 0. | 선택 (프록시 미사용 프로덕션만) |
-| `POLITE_DELAY_SECONDS` | 요청/페이지 간 최소 딜레이(초). 대상 서버 부하·IP 차단 완화. 기본 1. 단과대별 오버라이드는 DB 메타데이터 테이블 또는 ConfigMap/리로드 가능 소스로 설계(재시작 없이 변경 가능). | 3단계 (선택) |
+| `POLITE_DELAY_SECONDS` | 요청/페이지 간 최소 딜레이(초). 기본 1. 변경 반영은 env 변경 후 프로세스 재시작 기준. | 3단계 (선택) |
+| `CRAWL_PAGE_TIMEOUT_SECONDS` | 페이지 요청 타임아웃(초). 기본 30.0. 변경 반영은 env 변경 후 프로세스 재시작 기준. | 3단계 (선택) |
+| `CRAWL_UPSERT_CHUNK_SIZE` | upsert flush chunk 크기. 기본 50. 변경 반영은 env 변경 후 프로세스 재시작 기준. | 3단계 (선택) |
+| `CRAWL_COLLECT_SYNC_MAX_WORKERS` | sync 수집 ThreadPool max workers. 기본 5. 변경 반영은 env 변경 후 프로세스 재시작 기준. | 3단계 (선택) |
+| `CRAWL_COLLECT_IN_FLIGHT_LIMIT` | sync 수집 in-flight 상한. 기본 500. 변경 반영은 env 변경 후 프로세스 재시작 기준. | 3단계 (선택) |
+| `CRAWL_MAX_LINKS_PER_RUN` | 1회 실행 링크 cap. 기본 50000. 변경 반영은 env 변경 후 프로세스 재시작 기준. | 3단계 (선택) |
+| `CRAWL_COLLECT_ASYNC_CONCURRENCY` | async 수집 동시성 상한(semaphore). 기본 10. 변경 반영은 env 변경 후 프로세스 재시작 기준. | 3단계 (선택) |
 | `CELERY_WORKER_PREFETCH_MULTIPLIER` | 워커 prefetch 배수. 기본 1. 짧은 태스크 많으면 2~4로 조정. **-O fair**와 함께 사용. | 3단계 (선택) |
 | `JWT_SECRET` | JWT 서명용 비밀키 (강한 랜덤 문자열). RS256 사용 시 불필요. | 2단계 Auth 후 (HS256 시) |
 | `JWT_PRIVATE_KEY_PEM` | JWT RS256 개인키 PEM(한 줄로 `\n` 포함 가능). RS256 사용 시 `JWT_PUBLIC_KEY_PEM`과 쌍으로 필수. | 2단계 Auth (RS256 선택 시) |

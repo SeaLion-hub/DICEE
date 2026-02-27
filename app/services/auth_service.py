@@ -1,4 +1,4 @@
-﻿"""Auth Service. 援ш? OAuth code 寃利? User upsert, JWT 諛쒓툒."""
+"""Auth Service. 구글 OAuth code 검증, User upsert, JWT 발급."""
 
 import logging
 import uuid
@@ -31,13 +31,13 @@ logger = logging.getLogger(__name__)
 
 
 class AuthError(Exception):
-    """?대씪?댁뼵???몄쬆/沅뚰븳 ?ㅻ쪟. Router?먯꽌 400 ?먮뒗 401濡?蹂??"""
+    """사용자 인증/권한 예외. Router에서 400 또는 401로 변환."""
 
     pass
 
 
 class AuthServiceUnavailableError(Exception):
-    """?몃? ?몄쬆 ?쒓났??援ш? ?? ?쇱떆 遺덇?. Router?먯꽌 503 Service Unavailable濡?蹂??"""
+    """외부 인증 장애(구글 등) 시 사용. Router에서 503 Service Unavailable로 변환."""
 
     pass
 
@@ -48,8 +48,8 @@ async def exchange_google_code(
     client: httpx.AsyncClient,
 ) -> GoogleTokenResponse:
     """
-    援ш? OAuth Authorization Code瑜??≪꽭???좏겙?쇰줈 援먰솚.
-    Pydantic ?ㅽ궎留덈줈 寃利? ?ㅽ듃?뚰겕 ?덉쇅(Timeout, Connect) ??AuthServiceUnavailableError(503)濡?蹂??
+    구글 OAuth Authorization Code를 액세스 토큰으로 교환.
+    Pydantic 검증, 네트워크 실패(Timeout, Connect) 시 AuthServiceUnavailableError(503)로 변환.
     """
     client_secret = settings.google_client_secret.get_secret_value()
     try:
@@ -89,7 +89,7 @@ async def exchange_google_code(
 async def decode_google_id_token(
     id_token_str: str, key_fetcher: AsyncKeyFetcher
 ) -> dict[str, Any]:
-    """援ш? ID token ?쒕챸 寃利????붿퐫?? key_fetcher??lifespan ?깃???Depends)."""
+    """구글 ID token 서명 검증(키는 key_fetcher·lifespan 공유·Depends)."""
     try:
         key_entry = await key_fetcher.get_key(id_token_str)
         payload = jwt.decode(
@@ -169,9 +169,9 @@ def _jwt_decode_key_and_algorithm() -> tuple[str | bytes, str]:
 
 def create_jwt_pair(user_id: uuid.UUID, token_version: int = 0) -> tuple[str, str]:
     """
-    Access + Refresh JWT ?앹꽦. Access?먮뒗 jti ?ы븿(Blocklist 臾댄슚?붿슜).
-    token_version: 濡쒓렇?꾩썐/?덉랬 ???쒕쾭?먯꽌 臾댄슚?뷀븯湲??꾪빐 User.refresh_token_version怨??곕룞.
-    RS256 ?ㅺ? ?ㅼ젙?섎㈃ RS256, ?꾨땲硫?HS256 ?ъ슜.
+    Access + Refresh JWT 생성. Access에는 jti 포함(Blocklist 무효화 사용).
+    token_version: 로그아웃/탈퇴 등 서비스에서 무효화하기 위해 User.refresh_token_version과 동기.
+    RS256 키 있으면 RS256, 없으면 HS256 사용.
     """
     key, algorithm = _jwt_encode_key_and_algorithm()
     now = datetime.now(UTC)
@@ -205,9 +205,9 @@ async def verify_access_token(
     fail_closed: bool = True,
 ) -> dict[str, Any]:
     """
-    Access JWT 寃利? iss/aud/type=access ?뺤씤 ??Blocklist 議고쉶.
-    Redis ?μ븷 ?? fail_closed=True硫??몄쬆 嫄곕?, False硫??쒕챸留?誘욧퀬 ?듦낵.
-    RS256 ?ㅺ? ?ㅼ젙?섎㈃ RS256, ?꾨땲硫?HS256?쇰줈 寃利?
+    Access JWT 검증. iss/aud/type=access 확인 후 Blocklist 조회.
+    Redis 설정 시 fail_closed=True면 인증 거부, False면 서명만 검증 후 통과.
+    RS256 키 있으면 RS256, 없으면 HS256으로 검증.
     """
     key, algorithm = _jwt_decode_key_and_algorithm()
     try:
@@ -238,8 +238,8 @@ async def verify_access_token(
 
 def verify_refresh_token(encoded: str) -> dict[str, Any]:
     """
-    Refresh JWT 寃利? type=refresh, token_version, sub, exp ?꾩닔.
-    遺덉씪移?留뚮즺 ??AuthError. 諛섑솚 payload?먮뒗 sub, token_version ?ы븿.
+    Refresh JWT 검증. type=refresh, token_version, sub, exp 필수.
+    만료·폐지 시 AuthError. 반환 payload에는 sub, token_version 포함.
     """
     key, algorithm = _jwt_decode_key_and_algorithm()
     try:
@@ -264,8 +264,8 @@ async def refresh_tokens(
     session: AsyncSession,
 ) -> TokenResponse:
     """
-    Refresh ?좏겙?쇰줈 ??Access/Refresh ??諛쒓툒. 1?뚯꽦: ?먯옄??CAS ?뚯쟾 ????version?쇰줈 諛쒓툒.
-    ?대? ?ъ슜???좏겙 ?먮뒗 踰꾩쟾 遺덉씪移???AuthError(臾댄슚?붾맂 ?좏겙).
+    Refresh 토큰으로 Access/Refresh 쌍 발급. 1회성: 이전 CAS 방식처럼 version으로 발급.
+    동일 사용 중인 토큰은 만료·폐지 시 AuthError(무효화된 토큰).
     """
     payload = verify_refresh_token(refresh_token)
     user_id = uuid.UUID(payload["sub"])
@@ -285,14 +285,14 @@ async def refresh_tokens(
 async def revoke_refresh_tokens_for_user(
     session: AsyncSession, user_id: uuid.UUID
 ) -> None:
-    """?대떦 ?좎???refresh_token_version 利앷? ??湲곗〈 Refresh ?좏겙 ?꾨? 臾댄슚??"""
+    """해당 사용자의 refresh_token_version 증가 시 원본 Refresh 토큰 무효화."""
     await increment_refresh_token_version(session, user_id)
 
 
 def _normalize_redirect_uri(uri: str) -> str:
     """
-    redirect_uri ?뺢퇋?? scheme쨌host ?뚮Ц?? path ??踰덈쭔 unquote, query쨌fragment쨌userinfo 嫄곕?.
-    ?붾툝 ?몄퐫??諛⑹뼱: unquote 1????path??'%'媛 ?⑥븘 ?덉쑝硫?嫄곕?.
+    redirect_uri 정규화: scheme·host 유지, path만 unquote, query·fragment·userinfo 거부.
+    보안 상 유의: unquote 1회만(path에 '%'가 남으면 거부).
     """
     s = (uri or "").strip()
     if not s:
@@ -315,8 +315,8 @@ def _normalize_redirect_uri(uri: str) -> str:
 @lru_cache(maxsize=1)
 def _allowed_redirect_uris() -> set[str]:
     """
-    ?ㅼ젙???덉슜 redirect_uri 紐⑸줉(?쇳몴 援щ텇). ?뺢퇋????set 諛섑솚. 鍮꾩뼱 ?덉쑝硫?鍮?set.
-    P0 fail-closed: ?ㅼ젙媛믪씠 ?덈뒗???좏슚??URI媛 ?섎굹???놁쑝硫?AuthError. ?덉슜 紐⑸줉??鍮꾨㈃ 寃利??앸왂?섏? ?딆쓬.
+    설정·허용 redirect_uri 목록(쉼표 구분). 정규화 후 set 반환. 비어 있으면 빈 set.
+    P0 fail-closed: 설정값이 있는데 유효한 URI가 하나도 없으면 AuthError. 허용 목록이 비면 검증 생략해도 됨.
     """
     raw = (settings.google_redirect_uris or "").strip()
     if not raw:
@@ -347,12 +347,12 @@ async def google_login(
     client_ip: str | None = None,
 ) -> TokenResponse:
     """
-    援ш? OAuth code濡?濡쒓렇?? redirect_uri allowlist쨌sub ?대젅???꾩닔 寃利?Fail-fast).
-    1. redirect_uri ?덉슜 紐⑸줉 寃???ㅼ젙 ??
-    2. code ??援ш? ?좏겙 援먰솚
-    3. id_token JWKS 寃利????꾨줈??異붿텧, sub ?꾩닔(?꾨씫 ??AuthError)
-    4. User upsert, JWT 諛쒓툒
-    ?몃옖??뀡 寃쎄퀎???몄텧???쇱슦??媛 ?뚯쑀. session? Depends(get_db)濡?二쇱엯諛쏆븘 ?ъ슜.
+    구글 OAuth code로 로그인, redirect_uri allowlist·sub 보존 검증(Fail-fast).
+    1. redirect_uri 허용 목록 검증·설정
+    2. code로 구글 토큰 교환
+    3. id_token JWKS 검증·키로 디코딩, sub 필수(없으면 AuthError)
+    4. User upsert, JWT 발급
+    문서·배포 검증·운영 시 참고만 할 것. session은 Depends(get_db)로 주입받아 사용.
     """
     allowed = _allowed_redirect_uris()
     if allowed:
@@ -363,7 +363,7 @@ async def google_login(
         if normalized not in allowed:
             raise AuthError("redirect_uri not allowed")
     else:
-        # ?ㅼ젙 誘몄궗???쒖뿉留?寃???앸왂. (google_redirect_uris 鍮꾩뼱 ?덉쓬. ?꾨줈?뺤뀡?먯꽌???ㅼ젙 沅뚯옣.)
+        # 설정 생략 시에만 검증 생략. (google_redirect_uris 비어 있음. 키로 범위로부터 설정 무효.)
         normalized = redirect_uri or "http://localhost"
     token_data = await exchange_google_code(code, normalized, http_client)
     id_token = token_data.id_token
@@ -404,9 +404,9 @@ async def google_login(
 
 async def logout_user(session: AsyncSession, user_id: uuid.UUID) -> None:
     """
-    濡쒓렇?꾩썐 DB ?④퀎留??섑뻾: Refresh 臾댄슚??refresh_token_version 利앷?).
-    ?몄텧?먭? 諛섎뱶??session.commit() ??Redis Blocklist瑜??쒕룄?댁빞 ??
-    ?쒖꽌: logout_user ??commit ??blocklist. 洹몃옒??Redis ?ㅽ뙣 ?쒖뿉??DB???대? ?뺤젙?섏뼱 ?ъ떆????Blocklist留??щ벑濡?
+    로그아웃 시 DB 선행 수행: Refresh 무효화(refresh_token_version 증가).
+    원자성 보장: session.commit() 후 Redis Blocklist를 등록해야 함.
+    순서: logout_user 내 commit 후 blocklist. 그래서 Redis 실패 시에도 DB는 이미 반영되어 있음. Blocklist만 미등록됨.
     """
     await revoke_refresh_tokens_for_user(session, user_id)
 

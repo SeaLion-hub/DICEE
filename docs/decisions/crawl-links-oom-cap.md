@@ -7,7 +7,7 @@
 
 ## 결정
 
-- **상한**: `MAX_LINKS_PER_RUN = 50_000`. `links`를 이 길이로 자른 뒤 `_collect_payloads_sync`/`_collect_payloads_async`에 전달. 초과 시 로그 경고.
+- **상한**: `settings.crawl_max_links_per_run` 기반 cap (기본값 50,000). `links`를 잘라 `_collect_payloads_sync`/`_collect_payloads_async`에 전달하고, 초과 시 경고 로그를 남긴다.
 - **동기·비동기 공통**: `crawl_college_sync`, `crawl_college` 모두 적용.
 - **Phase 2 (추후)**: 링크를 제너레이터/스트리밍으로 받거나 Redis 큐로 나누어 워커가 청크만 소비하는 방식은 별도 ADR·구현으로 진행. 당분간은 상한·cap으로 OOM 경로만 제거.
 
@@ -15,4 +15,4 @@
 
 ## 참고
 
-- [app/services/crawl_service.py](../../app/services/crawl_service.py): `MAX_LINKS_PER_RUN`, `links_raw[:MAX_LINKS_PER_RUN]`.
+- [app/services/crawl_service.py](../../app/services/crawl_service.py): `_cap_links_for_run`, `settings.crawl_max_links_per_run`.

@@ -1,6 +1,6 @@
-﻿"""
-Celery ?뚯빱媛 ?ㅽ뻾???묒뾽(Task) ?뺤쓽.
-?숆린 DB(psycopg2)쨌crawl_service.run_crawl_job_sync ?ъ슜. "Too many connections" 諛⑹?.
+"""
+Celery 앱은 실행·작업(Task) 정의.
+동기 DB(psycopg2)·crawl_service.run_crawl_job_sync 사용. "Too many connections" 방지.
 """
 
 import logging
@@ -53,7 +53,7 @@ TRIGGER_LOCK_HEARTBEAT_INTERVAL_SECONDS = 60
 
 
 def _set_task_context(task_id: str | None, college_code: str | None = None):
-    """Sentry쨌濡쒓렇??而⑦뀓?ㅽ듃. task_id쨌college_code濡?4?④퀎 ?붾쾭源??⑹씠."""
+    """Sentry·로그인 컨텍스트. task_id·college_code로 4차 분류 등 식별."""
     try:
         import sentry_sdk
 
@@ -70,7 +70,7 @@ def _heartbeat_loop(
     lock_token: str | None,
     stop_event: threading.Event,
 ) -> None:
-    """二쇨린?곸쑝濡???TTL 媛깆떊. stop_event媛 set???뚭퉴吏 TRIGGER_LOCK_HEARTBEAT_INTERVAL_SECONDS留덈떎 ?ㅽ뻾."""
+    """트리거 락 유지로 TTL 연장. stop_event가 set될 때까지 TRIGGER_LOCK_HEARTBEAT_INTERVAL_SECONDS마다 실행."""
     while not stop_event.wait(TRIGGER_LOCK_HEARTBEAT_INTERVAL_SECONDS):
         if renew_trigger_lock_sync(college_code, lock_token):
             logger.debug("Trigger lock heartbeat renewed: college=%s", college_code)
@@ -90,7 +90,7 @@ def crawl_college_task(
     lock_token: str | None = None,
     enqueued_at: float | None = None,
 ):
-    """Celery ?щ· ?쒖뒪?? ?숆린 ?몄뀡쨌crawl_college_sync. finally ???댁젣; heartbeat濡?TTL 媛깆떊."""
+    """Celery 워커 진입점. 동기 세션·crawl_college_sync. finally 락 해제; heartbeat로 TTL 연장."""
     task_id = getattr(self.request, "id", None) or ""
     _set_task_context(str(task_id) if task_id else None, college_code)
     lock_hint = (lock_token[:8] + "...") if lock_token else "none"
@@ -153,7 +153,7 @@ def crawl_college_task(
         raise
     finally:
         set_gauge(CRAWL_DURATION_SECONDS, time.monotonic() - started_at, labels=labels)
-        # heartbeat 以묒? ??join ?????댁젣 ?쒖꽌 ?좎?(寃쏀빀 李?理쒖냼??. Lua ?뚯쑀沅?寃?щ줈 移섎챸???ㅼ옉???놁쓬.
+        # heartbeat 스레드와 join 타임아웃 해제 후 종료(테스트 등 최소화. Lua 원자성 때문에 분산 락은 유지됨).
         stop_heartbeat.set()
         if heartbeat_thread is not None:
             heartbeat_thread.join(timeout=2.0)
@@ -163,8 +163,8 @@ def crawl_college_task(
 @app.task(name="app.services.tasks.close_stale_crawl_runs_task")
 def close_stale_crawl_runs_task():
     """
-    Stale RUNNING ?뺣━: started_at??crawl_run_stale_seconds蹂대떎 ?ㅻ옒??crawl_runs瑜?FAILED濡??レ쓬.
-    Celery Beat?먯꽌 二쇨린 ?몄텧 沅뚯옣(?? 15遺꾨쭏??. CRAWL_RUN_STALE_SECONDS濡??꾧퀎媛??ㅼ젙.
+    Stale RUNNING 정리: started_at이 crawl_run_stale_seconds보다 오래된 crawl_runs를 FAILED로 전환.
+    Celery Beat에서 트리거 실행 무효(미사용 15분 등). CRAWL_RUN_STALE_SECONDS로 기준값 설정.
     """
     older_than = settings.crawl_run_stale_seconds
     with get_sync_session() as session:
@@ -184,9 +184,9 @@ def close_stale_crawl_runs_task():
 )
 def process_notice_ai_task(self, notice_id: str):
     """
-    AI 泥섎━ ?쒖뒪?? FOR UPDATE SKIP LOCKED + ai_status ?좎젏?쇰줈 ?숈떆 ?뚯빱 以묐났 泥섎━ 諛⑹?.
-    AI_PIPELINE_ENABLED=False硫??ㅽ궢(pending ?좎?). True???뚮쭔 Gemini ?몄텧 ??update_ai_result_sync.
-    notice_id: UUID 臾몄옄??(Celery 吏곷젹?붿슜).
+    AI 처리 진입점. FOR UPDATE SKIP LOCKED + ai_status 점으로 동시 작업 병렬 처리 방지.
+    AI_PIPELINE_ENABLED=False면 스킵(pending 유지). True면 Gemini 호출 후 update_ai_result_sync.
+    notice_id: UUID 문자열(Celery 등록 사용).
     """
     from app.core.config import settings
 

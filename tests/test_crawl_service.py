@@ -1,7 +1,7 @@
 """run_crawl_job_sync 등 크롤 서비스 단위 테스트."""
 
 import uuid
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from app.core.constants import CrawlRunStatus
@@ -82,7 +82,7 @@ def test_crawl_college_uses_bounded_seen_set():
 
     seen_captured = []
 
-    async def _capture_seen(client, links, college_id, scrape_fn, delay, seen):
+    async def _capture_seen(client, links, college_id, scrape_fn, delay, *, concurrency, seen):
         seen_captured.append(seen)
         if False:
             yield  # async generator (0 yields)
@@ -106,6 +106,217 @@ def test_crawl_college_uses_bounded_seen_set():
 
     assert len(seen_captured) == 1
     assert isinstance(seen_captured[0], _BoundedSeenSet)
+
+
+def test_crawl_college_sync_and_async_use_same_cap_helper(monkeypatch):
+    import asyncio
+    from unittest.mock import AsyncMock
+
+    from app.services import crawl_service as crawl_module
+
+    calls: list[tuple[str, int]] = []
+
+    def _cap_links_for_run(links_raw, college_code, max_links):
+        calls.append((college_code, max_links))
+        return []
+
+    monkeypatch.setattr(crawl_module, "_cap_links_for_run", _cap_links_for_run)
+
+    async def _get_links_async(_client, _url):
+        return [{"url": "https://example.com/1"}]
+
+    with patch(
+        "app.services.crawl_service.get_college_by_external_id",
+        new=AsyncMock(return_value=MagicMock(id=uuid.uuid4())),
+    ), patch(
+        "app.services.crawl_service.get_crawler_async",
+        return_value=(
+            _get_links_async,
+            AsyncMock(return_value=None),
+        ),
+    ):
+        asyncio.run(crawl_module.crawl_college(MagicMock(), "engineering"))
+
+    with patch(
+        "app.services.crawl_service.get_college_by_external_id_sync",
+        return_value=MagicMock(id=uuid.uuid4()),
+    ), patch(
+        "app.services.crawl_service.get_crawler",
+        return_value=(
+            lambda _url: [{"url": "https://example.com/1"}],
+            lambda _url: None,
+        ),
+    ):
+        crawl_module.crawl_college_sync(MagicMock(), "engineering")
+
+    assert len(calls) == 2
+    assert calls[0][0] == "engineering"
+    assert calls[1][0] == "engineering"
+    assert calls[0][1] == calls[1][1]
+
+
+def test_run_crawl_pipeline_sync_uses_chunk_size_for_flush():
+    from app.services import crawl_service as crawl_module
+
+    class _Adapter:
+        def __init__(self):
+            self.flush_sizes: list[int] = []
+
+        def collect_payloads(self, **kwargs):
+            for i in range(5):
+                yield {"external_id": f"ext-{i}", "url": "https://example.com"}
+
+        def upsert_chunk(self, _session, chunk):
+            self.flush_sizes.append(len(chunk))
+            return [uuid.uuid4() for _ in chunk]
+
+    adapter = _Adapter()
+    cfg = crawl_module.CrawlRuntimeConfig(
+        polite_delay_seconds=1.0,
+        page_timeout_seconds=30.0,
+        upsert_chunk_size=2,
+        collect_sync_max_workers=5,
+        collect_in_flight_limit=500,
+        max_links_per_run=50000,
+        collect_async_concurrency=10,
+        crawl_seen_max_size=10000,
+    )
+    total, ids = crawl_module._run_crawl_pipeline_sync(
+        MagicMock(),
+        college_code="engineering",
+        college_id=uuid.uuid4(),
+        list_url="https://example.com/list",
+        get_links_fn=lambda _url: [{"url": f"https://example.com/{i}"} for i in range(5)],
+        scrape_fn=lambda _url: None,
+        run_id=None,
+        on_chunk_processed=None,
+        cfg=cfg,
+        adapter=adapter,
+    )
+    assert total == 5
+    assert len(ids) == 5
+    assert adapter.flush_sizes == [2, 2, 1]
+
+
+def test_run_crawl_pipeline_async_uses_chunk_size_for_flush():
+    import asyncio
+
+    from app.services import crawl_service as crawl_module
+
+    class _Adapter:
+        def __init__(self):
+            self.flush_sizes: list[int] = []
+
+        async def collect_payloads(self, **kwargs):
+            for i in range(5):
+                yield {"external_id": f"ext-{i}", "url": "https://example.com"}
+
+        async def upsert_chunk(self, _session, chunk):
+            self.flush_sizes.append(len(chunk))
+            return [uuid.uuid4() for _ in chunk]
+
+    async def _get_links_async(_client, _url):
+        return [{"url": f"https://example.com/{i}"} for i in range(5)]
+
+    adapter = _Adapter()
+    cfg = crawl_module.CrawlRuntimeConfig(
+        polite_delay_seconds=1.0,
+        page_timeout_seconds=30.0,
+        upsert_chunk_size=2,
+        collect_sync_max_workers=5,
+        collect_in_flight_limit=500,
+        max_links_per_run=50000,
+        collect_async_concurrency=10,
+        crawl_seen_max_size=10000,
+    )
+    total = asyncio.run(
+        crawl_module._run_crawl_pipeline_async(
+            MagicMock(),
+            college_code="engineering",
+            college_id=uuid.uuid4(),
+            list_url="https://example.com/list",
+            get_links_async_fn=_get_links_async,
+            scrape_async_fn=AsyncMock(return_value=None),
+            cfg=cfg,
+            adapter=adapter,
+        )
+    )
+    assert total == 5
+    assert adapter.flush_sizes == [2, 2, 1]
+
+
+def test_sync_adapter_reflects_worker_and_inflight_config(monkeypatch):
+    from app.services import crawl_service as crawl_module
+
+    captured: dict[str, int] = {}
+
+    def _fake_collect(*args, **kwargs):
+        captured["max_workers"] = kwargs["max_workers"]
+        captured["in_flight_limit"] = kwargs["in_flight_limit"]
+        return iter(())
+
+    monkeypatch.setattr(crawl_module, "_collect_payloads_sync", _fake_collect)
+    cfg = crawl_module.CrawlRuntimeConfig(
+        polite_delay_seconds=1.0,
+        page_timeout_seconds=30.0,
+        upsert_chunk_size=50,
+        collect_sync_max_workers=7,
+        collect_in_flight_limit=321,
+        max_links_per_run=50000,
+        collect_async_concurrency=10,
+        crawl_seen_max_size=10000,
+    )
+    adapter = crawl_module._DefaultSyncCrawlAdapter()
+    list(
+        adapter.collect_payloads(
+            links=[],
+            college_id=uuid.uuid4(),
+            scrape_fn=lambda _url: None,
+            seen=set(),
+            cfg=cfg,
+        )
+    )
+    assert captured == {"max_workers": 7, "in_flight_limit": 321}
+
+
+def test_async_adapter_reflects_concurrency_config(monkeypatch):
+    import asyncio
+
+    from app.services import crawl_service as crawl_module
+
+    captured: dict[str, int] = {}
+
+    async def _fake_collect(*args, **kwargs):
+        captured["concurrency"] = kwargs["concurrency"]
+        if False:
+            yield {}
+
+    monkeypatch.setattr(crawl_module, "_collect_payloads_async", _fake_collect)
+    cfg = crawl_module.CrawlRuntimeConfig(
+        polite_delay_seconds=1.0,
+        page_timeout_seconds=30.0,
+        upsert_chunk_size=50,
+        collect_sync_max_workers=5,
+        collect_in_flight_limit=500,
+        max_links_per_run=50000,
+        collect_async_concurrency=13,
+        crawl_seen_max_size=10000,
+    )
+    adapter = crawl_module._DefaultAsyncCrawlAdapter()
+
+    async def _run():
+        async for _ in adapter.collect_payloads(
+            client=MagicMock(),
+            links=[],
+            college_id=uuid.uuid4(),
+            scrape_async_fn=AsyncMock(return_value=None),
+            seen=set(),
+            cfg=cfg,
+        ):
+            pass
+
+    asyncio.run(_run())
+    assert captured == {"concurrency": 13}
 
 def test_redis_seen_set_uses_shared_sync_client(monkeypatch):
     from app.services import crawl_service as crawl_module

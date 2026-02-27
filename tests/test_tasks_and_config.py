@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+from pydantic import ValidationError
 
 
 def test_crawl_college_task_is_celery_task_has_apply_async():
@@ -260,6 +261,46 @@ def test_config_package_import_smoke():
 
     assert config_module.settings is not None
     assert base_module.Settings is config_module.Settings
+
+
+def test_settings_default_crawl_runtime_knobs():
+    with patch.dict(
+        "os.environ",
+        {
+            "ENVIRONMENT": "development",
+            "APP_ENTRY": "api",
+            "JWT_SIGNING_MODE": "hs256",
+            "JWT_SECRET": "test-secret",
+        },
+        clear=False,
+    ):
+        from app.core.config import Settings
+
+        cfg = Settings()
+        assert cfg.crawl_page_timeout_seconds == 30.0
+        assert cfg.crawl_upsert_chunk_size == 50
+        assert cfg.crawl_collect_sync_max_workers == 5
+        assert cfg.crawl_collect_in_flight_limit == 500
+        assert cfg.crawl_max_links_per_run == 50_000
+        assert cfg.crawl_collect_async_concurrency == 10
+
+
+def test_settings_reject_invalid_crawl_runtime_knobs():
+    with patch.dict(
+        "os.environ",
+        {
+            "ENVIRONMENT": "development",
+            "APP_ENTRY": "api",
+            "JWT_SIGNING_MODE": "hs256",
+            "JWT_SECRET": "test-secret",
+            "CRAWL_COLLECT_IN_FLIGHT_LIMIT": "9",
+        },
+        clear=False,
+    ):
+        from app.core.config import Settings
+
+        with pytest.raises(ValidationError):
+            Settings()
 
 def test_drain_content_spool_updates_retry_metadata_on_upload_failure(tmp_path, monkeypatch):
     from app.core import storage
