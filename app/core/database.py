@@ -289,7 +289,7 @@ async def get_db(request: Request) -> AsyncGenerator[AsyncSession, None]:
 async def get_read_only_db(request: Request) -> AsyncGenerator[AsyncSession, None]:
     """
     FastAPI Depends용 비동기 읽기 전용(Read-Only) DB 세션 생성기.
-    목록 조회 등 트래픽이 많은 SELECT 전용 API에서 사용하여 
+    목록 조회 등 트래픽이 많은 SELECT 전용 API에서 사용하여
     쓰기 잠금(Lock) 오버헤드를 없애고 조회 속도를 극대화합니다.
     """
     maker = getattr(request.app.state, "async_session_maker", None)

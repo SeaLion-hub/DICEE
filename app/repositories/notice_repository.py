@@ -204,7 +204,7 @@ async def upsert_notices_bulk(
     """
     if not notices:
         return []
-    
+
     # [핵심 리팩토링: 데드락 방지]
     # 병렬 Celery 워커들이 무작위 순서로 행(Row) 잠금을 획득하여 데드락이 발생하는 것을 막기 위해,
     # 복합 유니크 키(college_id, external_id)를 기준으로 항상 오름차순 정렬합니다.

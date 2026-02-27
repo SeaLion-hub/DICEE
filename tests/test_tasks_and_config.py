@@ -67,7 +67,7 @@ def test_production_fail_fast_requires_ip_hmac_key():
 
 
 def test_production_fail_fast_requires_trusted_proxy_ips():
-    """environment=production이고 TRUSTED_PROXY_IPS가 비어 있으면(및 TRUSTED_PROXY_SKIP_FAST 미설정) Settings 로드 시 ValidationError."""
+    """prod 환경 + TRUSTED_PROXY_IPS 비어 있고 TRUSTED_PROXY_SKIP_FAST 미설정이면 ValidationError."""
     import app.core.config as config_module
 
     with patch.dict(
@@ -96,7 +96,7 @@ def test_production_fail_fast_requires_trusted_proxy_ips():
 
 def test_api_entry_fail_fast_when_app_entry_celery():
     """APP_ENTRY=celery일 때 app.main 로드 시 RuntimeError (API는 api 전용)."""
-    import sys
+    import sys  # noqa: I001
     import app.core.config as config_module
 
     with patch.dict("os.environ", {"APP_ENTRY": "celery", "ROLE": "celery"}, clear=False):
@@ -116,7 +116,7 @@ def test_api_entry_fail_fast_when_app_entry_celery():
 
 def test_celery_entry_fail_fast_when_app_entry_api():
     """APP_ENTRY=api일 때 celery_app import는 성공(API에서 tasks import 가능). worker_init 시에만 RuntimeError."""
-    import sys
+    import sys  # noqa: I001
     import app.core.config as config_module
 
     celery_app_module = sys.modules.pop("app.core.celery_app", None)

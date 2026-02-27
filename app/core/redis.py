@@ -466,7 +466,6 @@ async def set_cache_with_soft_ttl(
     """
     if client is None:
         return
-    
     payload = {
         "data": data,
         "soft_ttl": time.time() + soft_ttl_seconds
@@ -484,7 +483,7 @@ async def get_cache_with_soft_ttl(
 ) -> tuple[Any | None, bool]:
     """
     Soft TTL 캐시 조회 및 Mutex Lock 획득 (Cache Stampede 방어).
-    
+
     반환값: (캐시된 데이터, DB조회_및_갱신_필요여부)
     - (data, False): 아주 신선한 캐시, 또는 다른 코루틴이 갱신 중이라 바로 반환해야 하는 약간 오래된 캐시
     - (data, True): 캐시가 오래되었고, '내가' DB를 조회해서 갱신해야 함 (Lock 획득 성공)
@@ -513,10 +512,9 @@ async def get_cache_with_soft_ttl(
             if acquired:
                 # 락 획득 성공! 이 요청(코루틴)만 DB에 다녀오도록 True 반환
                 return data, True
-            else:
-                # 락 획득 실패. 다른 누군가가 갱신 중이므로 나는 Stale(오래된) 데이터를 즉시 반환하여 DB 부하를 막음
-                return data, False
-        
+            # 락 획득 실패. 다른 누군가가 갱신 중이므로 나는 Stale(오래된) 데이터를 즉시 반환하여 DB 부하를 막음
+            return data, False
+
         # Soft TTL도 지나지 않은 신선한 데이터
         return data, False
 

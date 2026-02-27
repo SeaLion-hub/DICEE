@@ -60,7 +60,7 @@ def test_get_set_trigger_idempotency_result_roundtrip():
 
 def test_trigger_crawl_unknown_college_then_same_idempotency_key_succeeds(client, monkeypatch):
     """unknown college_code로 400 받은 뒤, 같은 Idempotency-Key로 유효한 college로 재요청 시 200(고착 없음)."""
-    from fastapi import Request
+    from fastapi import Request  # noqa: I001
 
     from app.core.config import settings
     from app.core.deps import get_redis_trigger_lock

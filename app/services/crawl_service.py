@@ -9,19 +9,19 @@ Repository·파서는 이미 열린 세션으로 쿼리만 수행하며, 세션 
 import asyncio
 import json
 import logging
-import time
 import uuid
 from collections import deque
 from collections.abc import Callable, Iterator
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from datetime import UTC, datetime
+from typing import Any
 
 import httpx
 from bs4 import BeautifulSoup
 from requests.exceptions import RequestException
-from tenacity import AsyncRetrying, retry_if_exception_type, stop_after_attempt, wait_exponential_jitter
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
+from tenacity import AsyncRetrying, retry_if_exception_type, stop_after_attempt, wait_exponential_jitter
 
 from app.core.config import settings
 from app.core.constants import CrawlRunStatus
@@ -32,7 +32,6 @@ from app.core.crawl_rate_limit import (
     host_from_url,
 )
 from app.core.crawler_config import COLLEGE_CODE_TO_MODULE, CRAWLER_CONFIG, get_crawler, get_crawler_async
-from app.core.database_sync import get_sync_session
 from app.repositories.college_repository import (
     get_by_external_id as get_college_by_external_id,
 )
@@ -76,7 +75,7 @@ MAX_LINKS_PER_RUN = 50_000
 COLLECT_ASYNC_CONCURRENCY = 10
 
 # Bounded Seen Set: 최대 보유 개수. 초과 시 가장 오래된 항목 evict. OOM 방지.
-CRAWL_SEEN_MAX_SIZE = 10_000
+CRAWL_SEEN_MAX_SIZE = settings.crawl_seen_max_size
 
 # 비동기 재시도: tenacity wait_exponential_jitter 사용. Thundering Herd 방지.
 CRAWL_RETRY_BASE_SEC = 1.0
@@ -123,7 +122,7 @@ class _RedisSeenSet:
     멀티 워커 환경에서 동일 URL 중복 크롤 방지(필수). add/__contains__ 인터페이스.
     """
 
-    __slots__ = ("_key", "_client", "_ttl", "_closed")
+    __slots__ = ("_key", "_client", "_ttl", "_closed", "_required")
 
     def __init__(
         self,
@@ -137,8 +136,10 @@ class _RedisSeenSet:
         self._ttl = ttl_seconds
         self._closed = False
         self._required = required
+        self._client: Any | None = None
         try:
             import redis as redis_sync
+
             self._client = redis_sync.Redis.from_url(
                 redis_url,
                 decode_responses=True,
@@ -151,7 +152,6 @@ class _RedisSeenSet:
                     f"Redis Seen Set required but connection failed (run_id={run_id}): {e}"
                 ) from e
             logger.warning("RedisSeenSet init failed: %s; falling back to in-memory", e)
-            self._client = None
 
     def add(self, x: str) -> None:
         if self._client is None:
@@ -307,7 +307,7 @@ async def _fetch_one_with_retry(
     async for attempt in AsyncRetrying(
         stop=stop_after_attempt(CRAWL_RETRY_MAX_ATTEMPTS),
         wait=_crawl_retry_wait,
-        retry=retry_if_exception_type(*_NETWORK_EXC_TYPES),
+        retry=retry_if_exception_type(_NETWORK_EXC_TYPES),
         reraise=False,
     ):
         with attempt:

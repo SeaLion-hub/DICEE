@@ -172,10 +172,14 @@ class Settings(BaseSettings):
 
     # X-Forwarded-For: 직전 피어가 이 목록에 있을 때만 헤더 신뢰. 비어 있으면 request.client.host만 사용.
     trusted_proxy_ips: str = ""
-    # 프로덕션에서 TRUSTED_PROXY_IPS 비어 있으면 부팅 실패(Fail-fast). True면 해당 검사 생략(프록시 뒤에 두지 않는 프로덕션만).
+    # 프로덕션에서 TRUSTED_PROXY_IPS 비어 있으면 부팅 실패(Fail-fast).
+    # True면 해당 검사 생략(프록시 뒤에 두지 않는 프로덕션만).
     trusted_proxy_skip_fast: bool = Field(
         False,
-        description="If True, skip production Fail-fast for empty TRUSTED_PROXY_IPS. Set only when not behind a reverse proxy.",
+        description=(
+            "If True, skip production Fail-fast for empty TRUSTED_PROXY_IPS. "
+            "Set only when not behind a reverse proxy."
+        ),
     )
 
     # 2단계 Auth (워커·Cron 등은 미설정 가능. production 시 validator에서 필수 검사)
@@ -239,7 +243,10 @@ class Settings(BaseSettings):
     # True면 크롤 분산 Seen Set Redis 연결 실패 시 run 즉시 실패(no silent fallback). 멀티 워커 필수.
     redis_crawl_seen_required: bool = Field(
         False,
-        description="If True, crawl Redis Seen init failure fails the run immediately (no in-memory fallback). Required for multi-worker.",
+        description=(
+            "If True, crawl Redis Seen init failure fails the run immediately "
+            "(no in-memory fallback). Required for multi-worker."
+        ),
     )
     crawl_trigger_secret: SecretStr | None = None
     internal_trigger_crawl_rate_limit_per_minute: int = Field(
@@ -267,6 +274,13 @@ class Settings(BaseSettings):
     )
     # 요청/페이지 간 최소 딜레이(초). 대상 서버 부하·IP 차단 완화용.
     polite_delay_seconds: float = Field(1.0, ge=0.1, le=60.0)
+    # 인메모리 Bounded Seen Set 크기 상한. 프로세스당 external_id 보관 개수.
+    crawl_seen_max_size: int = Field(
+        10_000,
+        ge=1_000,
+        le=1_000_000,
+        description="Max entries per-process for in-memory crawl seen set (BoundedSeenSet).",
+    )
     # Stale RUNNING 정리: started_at이 이 값(초)보다 오래된 RUNNING을 FAILED로 닫음. 크롤 최대 소요의 2~3배 권장.
     crawl_run_stale_seconds: float = Field(3600.0, ge=300.0, le=86400.0)
 
@@ -289,9 +303,17 @@ class Settings(BaseSettings):
     )
     content_spool_backend: str = Field(
         "local",
-        description="Spool backend. Only 'local' is implemented; 's3' is not yet supported (drain will skip if set). Use persistent volume for production.",
+        description=(
+            "Spool backend. Only 'local' is implemented; 's3' is not yet supported "
+            "(drain will skip if set). Use persistent volume for production."
+        ),
     )
-    content_spool_max_retries: int = Field(5, ge=1, le=20, description="Max retries per spool entry before moving to DLQ.")
+    content_spool_max_retries: int = Field(
+        5,
+        ge=1,
+        le=20,
+        description="Max retries per spool entry before moving to DLQ.",
+    )
 
     # 읽기 캐시 (Phase 3). Redis key prefix 및 TTL.
     read_cache_ttl_seconds: int = Field(60, ge=10, le=3600, description="Read-through cache TTL for crawl-stats etc.")
@@ -315,7 +337,8 @@ class Settings(BaseSettings):
     ip_hmac_key: SecretStr = SecretStr("")
     ip_hmac_key_version: str = "v1"
 
-    # 6단계 CORS (내부적으로 list[str] 사용). allowed_origins_list property에서 _parse_allowed_origins 파싱. * 금지, http(s) URL만.
+    # 6단계 CORS (내부적으로 list[str] 사용).
+    # allowed_origins_list property에서 _parse_allowed_origins 파싱. * 금지, http(s) URL만.
     allowed_origins: str = ""
 
     @field_validator("allowed_origins", mode="after")
@@ -403,9 +426,10 @@ class Settings(BaseSettings):
             )
         if not self.trusted_proxy_skip_fast and not (self.trusted_proxy_ips or "").strip():
             raise ValueError(
-                "TRUSTED_PROXY_IPS is empty in production. If the app is behind a reverse proxy (e.g. Railway), "
-                "set it to the proxy IP(s) so X-Forwarded-For is trusted; otherwise all clients may be seen "
-                "as one IP and rate limiting can block everyone. Set TRUSTED_PROXY_SKIP_FAST=1 only when not behind a proxy."
+                "TRUSTED_PROXY_IPS is empty in production. If the app is behind a reverse proxy "
+                "(e.g. Railway), set it to the proxy IP(s) so X-Forwarded-For is trusted; otherwise "
+                "all clients may be seen as one IP and rate limiting can block everyone. "
+                "Set TRUSTED_PROXY_SKIP_FAST=1 only when not behind a proxy."
             )
         # Google OAuth 사용 시 redirect allowlist 필수 (비어 있으면 검증 비활성화되어 보안 취약).
         has_google_client = bool(

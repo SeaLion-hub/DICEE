@@ -6,10 +6,9 @@ Celery 앱 단일 진입점. broker=Redis, result_backend, beat_schedule, includ
 import logging
 import ssl
 
-from kombu import Queue
-
 from celery import Celery
 from celery.signals import worker_init
+from kombu import Queue  # type: ignore[import-untyped]
 
 from app.core.config import settings
 
@@ -30,14 +29,11 @@ _raw_celery_url = (getattr(settings, "redis_celery_url", None) or settings.redis
 broker_url = _raw_celery_url or "redis://localhost:6379/0"
 result_backend = broker_url
 
-app = Celery(
-    "app",
-    broker=broker_url,
-    backend=result_backend,
-    include=["app.services.tasks"],
-)
+app = Celery("app", broker=broker_url, backend=result_backend, include=["app.services.tasks"])
 
-# 라우팅 도입 시 태스크는 명명 큐로만 전달됨. 워커는 소비할 큐를 반드시 명시해야 함: -Q critical,crawl,ai (단일 워커) 또는 큐별 분리.
+# 라우팅 도입 시 태스크는 명명 큐로만 전달됨.
+# 워커는 소비할 큐를 반드시 명시해야 함:
+# -Q critical,crawl,ai (단일 워커) 또는 큐별 분리.
 app.conf.update(
     task_serializer="json",
     accept_content=["json"],

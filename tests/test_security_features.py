@@ -165,7 +165,7 @@ def test_get_client_ip_no_trusted_proxy_uses_client_host(monkeypatch):
 
 def test_get_client_ip_trusted_proxy_invalid_header_raises(monkeypatch):
     """신뢰 프록시 경유 시 X-Forwarded-For에 비IP 문자열이 있으면 InvalidForwardedHeaderError → 400."""
-    from unittest.mock import MagicMock
+    from unittest.mock import MagicMock  # noqa: I001
 
     from starlette.datastructures import Headers
 
@@ -200,7 +200,7 @@ def test_request_id_sanitize_rejects_long_or_invalid_charset():
 
 def test_invalid_forwarded_header_returns_400(client, monkeypatch):
     """InvalidForwardedHeaderError 발생 시 앱이 400 Bad Request + code INVALID_FORWARDED_HEADER를 반환한다."""
-    import asyncio
+    import asyncio  # noqa: I001
     import json
     from unittest.mock import MagicMock
 

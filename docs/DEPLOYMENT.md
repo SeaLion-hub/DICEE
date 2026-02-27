@@ -211,6 +211,23 @@ Celery Sync 풀에는 **대기 시간 상한**(`pool_timeout`)과 **유휴 연�
 
 ---
 
+## Redis·크롤링 관련 운영 설정
+
+- **API Rate Limit (분산 환경)**  
+  - 멀티 인스턴스/멀티 워커 환경에서는 **`REDIS_URL`을 설정**하고, `API_RATE_LIMIT_REQUIRE_REDIS=true`로 운영할 것을 권장합니다.  
+  - 그렇지 않으면 레이트 리밋이 **프로세스 로컬 인메모리 카운터**로만 동작해, 인스턴스 간 합산 트래픽을 제어하지 못합니다.
+
+- **크롤 Redis Seen Set**  
+  - Celery 워커 여러 개에서 크롤을 병렬 실행할 때는 `REDIS_URL`과 `REDIS_CRAWL_SEEN_REQUIRED=true`를 함께 설정해 **분산 Seen Set**을 사용해야 합니다.  
+  - 이 값을 true로 두면 Redis Seen 초기화/연결 실패 시 **Run이 즉시 실패**하며, 인메모리 fallback이 비활성화되어 중복 크롤·IP 차단 리스크를 줄입니다.
+
+- **본문 업로드 스풀(PV 필수)**  
+  - `CONTENT_UPLOAD_FAILURE_POLICY=fail`인 경우 업로드 실패 건은 `CONTENT_SPOOL_DIR`(기본 `storage/content_spool`) 아래에 JSON 스풀 파일로 기록됩니다.  
+  - 프로덕션에서는 이 디렉터리를 **Railway Persistent Volume 등 영속 볼륨에 마운트**해야 하며, 그렇지 않으면 컨테이너 재시작 시 스풀 파일이 유실됩니다.  
+  - `CONTENT_SPOOL_BACKEND=local`만 구현되어 있으므로, 외부 스토리지(S3 등)로 옮기기 전까지는 **PV를 전제로 한 설계**임을 기억해야 합니다.
+
+---
+
 ## 로컬 개발 참고
 
 - **Windows + Celery**: 기본 prefork 풀은 Windows에서 동작하지 않음. 워커 실행 시 **`--pool=solo`** 필수. 예: `celery -A app.core.celery_app:app worker -l info -O fair --pool=solo`. (README 로컬 실행 참고.)

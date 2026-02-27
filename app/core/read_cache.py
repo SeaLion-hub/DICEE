@@ -2,7 +2,7 @@
 
 import json
 import logging
-from typing import Any
+from typing import Any, cast
 
 from redis.asyncio import Redis as RedisAsyncio
 
@@ -32,9 +32,12 @@ async def get_cached(client: RedisAsyncio | None, *key_parts: str) -> dict[str, 
     if raw is None:
         return None
     try:
-        return json.loads(raw)
+        parsed: Any = json.loads(raw)
     except json.JSONDecodeError:
         return None
+    if isinstance(parsed, dict):
+        return cast("dict[str, Any]", parsed)
+    return None
 
 
 async def set_cached(
