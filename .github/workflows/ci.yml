@@ -46,6 +46,18 @@ jobs:
       - name: Mypy
         run: mypy app
 
+      - name: Ensure single Alembic head
+        env:
+          APP_ENTRY: api
+        run: |
+          HEADS=$(alembic heads 2>&1)
+          COUNT=$(echo "$HEADS" | grep -c '(head)' || true)
+          if [ "$COUNT" -ne 1 ]; then
+            echo "::error::Alembic must have exactly one head. Add a merge migration (e.g. 007_merge_heads) or set down_revision to the current head."
+            echo "$HEADS"
+            exit 1
+          fi
+
       - name: Run migrations
         run: alembic upgrade head
 

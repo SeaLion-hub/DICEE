@@ -5,5 +5,5 @@
 cmds = ["pip install --no-cache-dir -r requirements.txt"]
 
 [start]
-# Single head: 007_merge_heads. If build has no merge (multiple heads), target v7 head so deploy succeeds.
-cmd = "(alembic upgrade head || alembic upgrade 006_schema_contract_fix) && uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"
+# Single head required (007_merge_heads). Deploy branch must include alembic/versions/007_merge_heads.py. See DEPLOYMENT.md.
+cmd = "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"

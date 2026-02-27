@@ -400,6 +400,7 @@ Private Key 내용을 `JWT_PRIVATE_KEY_PEM`, Public Key 내용을 `JWT_PUBLIC_KE
 - **Settings → Deploy** → **Start Command**:
   - `nixpacks.toml`에 마이그레이션 자동 실행 + 앱 시작 포함. Start Command를 **비워 두면** 이 설정 사용.
   - 커스텀 Start Command 사용 시: `alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT`
+- **Alembic 단일 head**: 배포에 사용하는 브랜치에는 **반드시** `alembic/versions/007_merge_heads.py`(머지 리비전)가 포함되어야 한다. `alembic upgrade head`가 단일 리비전을 가리켜야 하므로, 머지 커밋이 없는 브랜치로 배포하면 "Multiple head revisions"로 실패한다. 새 마이그레이션 추가 시 `down_revision`을 **현재 유일한 head**(예: `007_merge_heads` 또는 그 이후 최신 리비전)로 설정해 단일 선형 이력 유지. CI에서 head 개수 검사. 상세: [docs/decisions/alembic-single-head.md](decisions/alembic-single-head.md).
 - **Variables**: 웹 서비스에 **APP_ENTRY=api**(또는 ROLE=api) 반드시 설정.
 
 **Playwright Celery 워커 (3단계~, Dockerfile 필수)**
