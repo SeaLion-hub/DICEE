@@ -93,6 +93,7 @@ class Settings(BaseSettings):
 
     auth_google_rate_limit_per_minute: int = Field(10, ge=1, le=1000)
     auth_refresh_rate_limit_per_minute: int = Field(60, ge=1, le=5000)
+    auth_refresh_token_fingerprint_rate_limit_per_minute: int = Field(15, ge=1, le=5000)
 
     # Crawler & Worker
     redis_url: str | None = None

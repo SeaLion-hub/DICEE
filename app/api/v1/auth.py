@@ -1,5 +1,6 @@
 """Auth API. 구글 OAuth + JWT."""
 
+import hashlib
 import logging
 from collections.abc import Callable
 
@@ -73,6 +74,11 @@ def _auth_rate_limit_dep(
         return client_ip
 
     return _dep
+
+
+def _refresh_token_fingerprint(refresh_token: str) -> str:
+    """Rate-limit 식별자용 refresh token 지문(원문 저장/로그 금지)."""
+    return hashlib.sha256(refresh_token.strip().encode("utf-8")).hexdigest()[:16]
 
 
 async def get_current_user_id(
@@ -161,18 +167,44 @@ async def post_google_auth(
 async def post_refresh(
     payload: RefreshTokenPayload,
     session: AsyncSession = Depends(get_db),
-    _client_ip: str = Depends(
+    client_ip: str = Depends(
         _auth_rate_limit_dep(
             "refresh",
             lambda: settings.auth_refresh_rate_limit_per_minute,
             "Too many refresh requests, please try again later.",
         )
     ),
+    redis_rate=Depends(get_redis_blocklist),
 ) -> TokenResponse:
     """
     Refresh 토큰으로 새 Access/Refresh JWT 발급.
     type=refresh, token_version 검증 후 새 쌍 반환. 무효화된 토큰 시 401.
     """
+    token_fp = _refresh_token_fingerprint(payload.refresh_token)
+    identifier = f"auth_refresh_fp:{client_ip}:{token_fp}"
+    try:
+        allowed = await check_rate_limit(
+            redis_rate,
+            identifier=identifier,
+            max_requests=settings.auth_refresh_token_fingerprint_rate_limit_per_minute,
+            window_seconds=60,
+            require_redis=settings.api_rate_limit_require_redis,
+        )
+    except RateLimitUnavailableError:
+        raise HTTPException(
+            status_code=503,
+            detail="Rate limiting is temporarily unavailable. Try again later.",
+        ) from None
+    if not allowed:
+        logger.warning(
+            "auth refresh fingerprint rate limit exceeded",
+            extra={"client_ip": client_ip, "identifier": identifier},
+        )
+        raise HTTPException(
+            status_code=429,
+            detail="Too many refresh requests, please try again later.",
+        )
+
     try:
         tokens = await refresh_tokens(payload.refresh_token, session)
         await session.commit()

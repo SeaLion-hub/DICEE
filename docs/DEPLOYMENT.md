@@ -320,6 +320,7 @@ CORS: `ALLOWED_ORIGINS`에 프론트 도메인 등록. credentials: 프론트가
 | `CRAWL_TRIGGER_SECRET` | Cron이 POST /internal/trigger-crawl 호출 시 검증용 시크릿 (헤더 또는 쿼리로 전달) | 3단계 Cron 연동 시 |
 | `AUTH_GOOGLE_RATE_LIMIT_PER_MINUTE` | 동일 IP 기준 `/v1/auth/google` 분당 최대 호출 수. 기본 10. | 2단계 Auth (선택) |
 | `AUTH_REFRESH_RATE_LIMIT_PER_MINUTE` | 동일 IP 기준 `/v1/auth/refresh` 분당 최대 호출 수. 기본 60. | 2단계 Auth (선택) |
+| `AUTH_REFRESH_TOKEN_FINGERPRINT_RATE_LIMIT_PER_MINUTE` | 동일 IP + refresh token fingerprint 기준 `/v1/auth/refresh` 분당 최대 호출 수(2차 제한). 기본 15. | 2단계 Auth (선택) |
 | `INTERNAL_TRIGGER_CRAWL_RATE_LIMIT_PER_MINUTE` | 동일 IP 기준 `/internal/trigger-crawl` 분당 최대 호출 수. 기본 10. | 3단계 Cron 연동 시 (선택) |
 | `INTERNAL_CRAWL_STATS_RATE_LIMIT_PER_MINUTE` | 동일 IP 기준 `/internal/crawl-stats` 분당 최대 호출 수. 기본 30. | 3단계 운영 모니터링 (선택) |
 | `TRUSTED_PROXY_IPS` | 역방향 프록시(예: Railway) 직전 피어 IP를 쉼표 구분으로 설정. 비어 있으면 `X-Forwarded-For`를 신뢰하지 않고 `request.client.host`만 사용. **프로덕션에서는 비어 있으면 부팅 실패(Fail-fast)**. Railway 등 배포 시 반드시 설정. | 2단계~ (리버스 프록시 사용 시) |

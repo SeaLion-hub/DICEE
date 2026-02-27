@@ -154,6 +154,73 @@ def test_auth_refresh_rate_limit_returns_429(client, monkeypatch):
     assert "Too many" in body["detail"] or "refresh" in body["detail"].lower()
 
 
+def test_auth_refresh_rate_limit_fingerprint_returns_429(client, monkeypatch):
+    """1차 IP 제한 통과 후 2차 token fingerprint 제한 초과 시 429를 반환한다."""
+    from app.api.v1 import auth as auth_module
+
+    async def _mixed_rate_limit(
+        _client,
+        *,
+        identifier: str,
+        max_requests: int,
+        window_seconds: int,
+        require_redis: bool = False,
+        **kwargs: object,
+    ) -> bool:
+        if identifier.startswith("auth_refresh_fp:"):
+            return False
+        return True
+
+    async def _dummy_refresh_tokens(*args, **kwargs):
+        raise AssertionError("refresh_tokens should not be called when fingerprint rate limited")
+
+    monkeypatch.setattr(auth_module, "check_rate_limit", _mixed_rate_limit)
+    monkeypatch.setattr(auth_module, "refresh_tokens", _dummy_refresh_tokens)
+
+    response = client.post(
+        "/v1/auth/refresh",
+        json={"refresh_token": "dummy-refresh-token"},
+    )
+    assert response.status_code == 429
+    body = response.json()
+    assert "Too many" in body["detail"] or "refresh" in body["detail"].lower()
+
+
+@pytest.mark.parametrize("raise_stage", ["ip", "fingerprint"])
+def test_auth_refresh_rate_limit_unavailable_returns_503(client, monkeypatch, raise_stage):
+    """1차 또는 2차 rate-limit 백엔드 장애 시 /v1/auth/refresh는 503을 반환한다."""
+    from app.api.v1 import auth as auth_module
+    from app.core.api_rate_limit import RateLimitUnavailableError
+
+    async def _rate_limit_unavailable(
+        _client,
+        *,
+        identifier: str,
+        max_requests: int,
+        window_seconds: int,
+        require_redis: bool = False,
+        **kwargs: object,
+    ) -> bool:
+        if raise_stage == "ip" and identifier.startswith("auth_refresh:"):
+            raise RateLimitUnavailableError("simulated redis down on ip limiter")
+        if raise_stage == "fingerprint" and identifier.startswith("auth_refresh_fp:"):
+            raise RateLimitUnavailableError("simulated redis down on fingerprint limiter")
+        return True
+
+    async def _dummy_refresh_tokens(*args, **kwargs):
+        raise AssertionError("refresh_tokens should not be called when rate limiter unavailable")
+
+    monkeypatch.setattr(auth_module, "check_rate_limit", _rate_limit_unavailable)
+    monkeypatch.setattr(auth_module, "refresh_tokens", _dummy_refresh_tokens)
+
+    response = client.post(
+        "/v1/auth/refresh",
+        json={"refresh_token": "dummy-refresh-token"},
+    )
+    assert response.status_code == 503
+    assert "Rate limiting" in response.json().get("detail", "")
+
+
 def test_auth_google_client_ip_unresolved_returns_503(client, monkeypatch):
     """/v1/auth/google에서 client IP를 결정할 수 없으면 503을 반환한다."""
     from app.api.v1 import auth as auth_module
