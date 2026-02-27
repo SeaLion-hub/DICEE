@@ -4,6 +4,8 @@ import os
 import time
 # PostgreSQL 클라이언트 인코딩 강제 (서버 응답 UTF-8 디코딩)
 os.environ.setdefault("PGCLIENTENCODING", "UTF8")
+# 마이그레이션 전용: APP_ENTRY 미설정 시 Settings 검증 통과 (배포 파이프라인에서 alembic만 실행할 때)
+os.environ.setdefault("APP_ENTRY", "api")
 
 from logging.config import fileConfig
 from urllib.parse import unquote, urlparse
