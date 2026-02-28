@@ -2,6 +2,29 @@
 
 import importlib
 
+from app.core.config.base import Settings
+
+
+def test_settings_strips_database_url_on_load(monkeypatch):
+    """Settings 로드 시 database_url 앞뒤 공백이 strip 되어 저장된다."""
+    monkeypatch.setenv("APP_ENTRY", "celery")
+    s = Settings(database_url="  postgresql://localhost/mydb  ")
+    assert s.database_url == "postgresql://localhost/mydb"
+
+
+def test_settings_strips_redis_url_on_load(monkeypatch):
+    """Settings 로드 시 redis_url 앞뒤 공백이 strip 되어 저장된다."""
+    monkeypatch.setenv("APP_ENTRY", "celery")
+    s = Settings(redis_url="  redis://localhost:6379/0  ")
+    assert s.redis_url == "redis://localhost:6379/0"
+
+
+def test_settings_strips_jwt_secret_on_load(monkeypatch):
+    """Settings 로드 시 jwt_secret 앞뒤 공백·개행이 strip 되어 저장된다."""
+    monkeypatch.setenv("APP_ENTRY", "celery")
+    s = Settings(jwt_secret="  my-secret\n  ")
+    assert s.jwt_secret.get_secret_value() == "my-secret"
+
 
 def test_sync_database_url_treats_whitespace_as_unset(monkeypatch):
     """DATABASE_URL가 공백 문자열만 있을 때 _sync_database_url이 None을 반환한다."""

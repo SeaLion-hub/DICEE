@@ -185,6 +185,30 @@ class Settings(BaseSettings):
                 )
         return object.__getattribute__(self, name)
 
+    @field_validator(
+        "database_url",
+        "redis_url",
+        "redis_celery_url",
+        "s3_bucket",
+        "content_storage_type",
+        "allowed_origins",
+        "jwt_secret",
+        "google_client_secret",
+        "crawl_trigger_secret",
+        mode="before",
+    )
+    @classmethod
+    def strip_string_settings(cls, v: str | None) -> str | None:
+        """Strip leading/trailing whitespace to avoid REDIS_URL='  url  ', JWT_SECRET='abc\\n' etc."""
+        if v is None:
+            return None
+        if isinstance(v, str):
+            return v.strip()
+        if hasattr(v, "get_secret_value"):
+            raw = v.get_secret_value()
+            return (raw.strip() if raw else "") if isinstance(raw, str) else v
+        return v
+
     @field_validator("jwt_signing_mode", mode="before")
     @classmethod
     def validate_jwt_signing_mode(cls, v: str | None) -> str:

@@ -4,6 +4,7 @@
 
 - [작성 규칙](#작성-규칙)
 - [작성 형식](#작성-형식)
+- [2026-02-28](#2026-02-28)
 - [2026-02-27](#2026-02-27)
 - [2026-02-26](#2026-02-26)
 - [2026-02-25](#2026-02-25)
@@ -26,6 +27,11 @@
 ## 작성 형식
 
 - `- [단계 또는 영역] 무엇을 했는지 (어떤 파일/기능). 왜 또는 결과 한 줄.`
+
+---
+## 2026-02-28
+
+- [인프라·연동 안정성 보완] **(1) Config strip** — app/core/config/base.py: database_url, redis_url, redis_celery_url, s3_bucket, content_storage_type, allowed_origins, jwt_secret, google_client_secret, crawl_trigger_secret에 field_validator(mode=before)로 strip 적용. tests/test_env_and_config_whitespace.py에 Settings 로드 시 strip 검증 테스트 3건 추가. **(2) S3 싱글톤** — app/core/storage.py: _s3_client 모듈 변수·_build_s3_client lazy singleton으로 변경. **(3) Redis** — app/core/redis.py: release_cache_lock(client, key) 추가, set_cache_with_soft_ttl/get_cache_with_soft_ttl docstring에 조기 해제 패턴 명시. BlocklistCircuitBreaker._record_failure에서 half_open에서 실패 시 redis_blocklist_circuit_half_open_interval_seconds 사용하도록 수정. **(4) 문서화** — docs/decisions/redis-celery-separation.md: 운영·장애 시 동작(broker/result_backend, visibility_timeout, acks_late, reject_on_worker_lost), Redis 클라이언트 용도 정책(read_cache·trigger_lock, sync 싱글톤) 보강. pytest 122 passed, 3 skipped.
 
 ---
 ## 2026-02-27

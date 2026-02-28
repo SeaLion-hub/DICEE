@@ -1,4 +1,4 @@
-﻿"""Notice content storage and failed-upload spool backends."""
+"""Notice content storage and failed-upload spool backends."""
 
 from __future__ import annotations
 
@@ -316,13 +316,21 @@ def spool_move_to_dlq_local(path: Path, entry: dict[str, Any], *, reason: str) -
         return False
 
 
+_s3_client: Any = None
+
+
 def _build_s3_client():
+    """Lazy singleton S3 client. Reused across spool/upload calls to avoid connection churn."""
+    global _s3_client
+    if _s3_client is not None:
+        return _s3_client
     try:
         import boto3
     except ImportError:
         logger.warning("boto3 not installed; S3 spool backend unavailable")
         return None
-    return boto3.client("s3", region_name=settings.s3_region)
+    _s3_client = boto3.client("s3", region_name=settings.s3_region)
+    return _s3_client
 
 
 def spool_list_s3() -> list[str]:

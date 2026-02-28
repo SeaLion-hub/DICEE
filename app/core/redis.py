@@ -163,10 +163,15 @@ class BlocklistCircuitBreaker:
 
     async def _record_failure(self) -> None:
         async with self._lock:
+            was_half_open = self._state == "half_open"
             self._failures += 1
             if self._failures >= settings.redis.redis_blocklist_circuit_failure_threshold:
                 self._state = "open"
-                self._open_until = time.monotonic() + settings.redis.redis_blocklist_circuit_open_seconds
+                # half_open에서 실패한 뒤에는 더 짧은 대기(half_open_interval)로 재시도 허용
+                if was_half_open:
+                    self._open_until = time.monotonic() + settings.redis.redis_blocklist_circuit_half_open_interval_seconds
+                else:
+                    self._open_until = time.monotonic() + settings.redis.redis_blocklist_circuit_open_seconds
 
     async def _maybe_try_half_open(self) -> bool:
         async with self._lock:
@@ -544,6 +549,7 @@ async def set_cache_with_soft_ttl(
     Soft TTL이 포함된 캐시를 저장합니다.
     실제 데이터와 논리적 만료 시간(soft_ttl)을 함께 JSON으로 묶어 저장합니다.
     hard_ttl_seconds는 메모리 누수를 막기 위한 최후의 물리적 만료 시간입니다 (soft_ttl보다 넉넉해야 함).
+    갱신에 성공한 호출자는 release_cache_lock(client, key)를 호출해 락을 조기 해제할 수 있습니다.
     """
     if client is None:
         return
@@ -557,6 +563,22 @@ async def set_cache_with_soft_ttl(
         logger.warning("Cache set_with_soft_ttl failed (key=%s): %s", key, e)
 
 
+async def release_cache_lock(client: RedisAsyncio | None, key: str) -> None:
+    """
+    Soft TTL 캐시 갱신 후 보유 중인 락을 조기 삭제합니다.
+    get_cache_with_soft_ttl로 락을 획득한 뒤 set_cache_with_soft_ttl로 갱신한 경우,
+    TTL 만료를 기다리지 않고 호출하면 다음 요청이 더 빨리 재갱신할 수 있습니다.
+    client가 None이면 no-op.
+    """
+    if client is None:
+        return
+    lock_key = f"{CACHE_LOCK_KEY_PREFIX}{key}"
+    try:
+        await client.delete(lock_key)
+    except Exception as e:
+        logger.warning("Cache lock release failed (key=%s): %s", key, e)
+
+
 async def get_cache_with_soft_ttl(
     client: RedisAsyncio | None,
     key: str,
@@ -564,6 +586,7 @@ async def get_cache_with_soft_ttl(
 ) -> tuple[Any | None, bool]:
     """
     Soft TTL 캐시 조회 및 Mutex Lock 획득 (Cache Stampede 방어).
+    갱신에 성공한 호출자는 set_cache_with_soft_ttl 후 release_cache_lock(client, key)를 호출해 락을 조기 해제할 수 있습니다.
 
     반환값: (캐시된 데이터, DB조회_및_갱신_필요여부)
     - (data, False): 아주 신선한 캐시, 또는 다른 코루틴이 갱신 중이라 바로 반환해야 하는 약간 오래된 캐시
