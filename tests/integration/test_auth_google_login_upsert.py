@@ -24,19 +24,21 @@ def _ensure_db():
 async def test_upsert_by_provider_uid_runs_deleted_at_query_path(_ensure_db):
     """upsert_by_provider_uid 호출 시 User.deleted_at이 포함된 ON CONFLICT 쿼리가 실행됨."""
     from app.core.database import get_async_session_maker
+    from app.domain.contracts.user_contracts import UserUpsertCmd
     from app.repositories.user_repository import get_by_provider_uid, upsert_by_provider_uid
-    from app.schemas.user import UserBase
 
     maker = get_async_session_maker()
     if not maker:
         pytest.skip("Async session maker not initialized")
+    cmd = UserUpsertCmd(
+        provider="google",
+        provider_user_id="integration-test-provider-uid",
+        email="integration@test.com",
+        name="Integration Test",
+        profile_json=None,
+    )
     async with maker() as session:
-        user = await upsert_by_provider_uid(
-            session,
-            "google",
-            "integration-test-provider-uid",
-            UserBase(email="integration@test.com", name="Integration Test"),
-        )
+        user = await upsert_by_provider_uid(session, cmd)
         assert user is not None
         assert user.id is not None
         found = await get_by_provider_uid(session, "google", "integration-test-provider-uid")

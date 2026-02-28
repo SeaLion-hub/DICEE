@@ -18,6 +18,7 @@ from app.core.config import settings
 from app.core.config.jwt import resolve_jwt_signing_algorithm
 from app.core.ip_hmac import compute_ip_hmac
 from app.core.redis import is_access_blocked
+from app.domain.contracts.user_contracts import UserUpsertCmd
 from app.repositories.login_audit_repository import create_login_audit
 from app.repositories.user_repository import (
     increment_refresh_token_version,
@@ -25,7 +26,6 @@ from app.repositories.user_repository import (
     upsert_by_provider_uid,
 )
 from app.schemas.auth import GoogleTokenResponse, TokenResponse
-from app.schemas.user import UserBase
 
 logger = logging.getLogger(__name__)
 
@@ -388,11 +388,14 @@ async def google_login(
     email = claims.get("email")
     name = claims.get("name")
 
-    user_base = UserBase(email=email, name=name, profile_json=None)
-
-    user = await upsert_by_provider_uid(
-        session, "google", provider_user_id, user_base
+    cmd = UserUpsertCmd(
+        provider="google",
+        provider_user_id=provider_user_id,
+        email=email,
+        name=name,
+        profile_json=None,
     )
+    user = await upsert_by_provider_uid(session, cmd)
 
     if client_ip:
         try:

@@ -22,6 +22,7 @@ def _ensure_sync_db():
 def test_upsert_notices_bulk_sync_runs_deleted_at_query_path(_ensure_sync_db):
     """upsert_notices_bulk_sync 호출 시 Notice.deleted_at이 포함된 ON CONFLICT 쿼리가 실행됨."""
     from app.core.database_sync import get_sync_session
+    from app.domain.contracts.crawl_contracts import NoticeDraft
     from app.models.college import College
     from app.repositories.notice_repository import upsert_notices_bulk_sync
 
@@ -36,12 +37,13 @@ def test_upsert_notices_bulk_sync_runs_deleted_at_query_path(_ensure_sync_db):
             session.add(college)
             session.flush()
         notice_payload = [
-            {
-                "college_id": college.id,
-                "external_id": "integration-test-notice-1",
-                "title": "Integration Test Notice",
-                "url": "https://example.com/integration-test",
-            }
+            NoticeDraft(
+                college_id=college.id,
+                external_id="integration-test-notice-1",
+                title="Integration Test Notice",
+                url="https://example.com/integration-test",
+                content_url=None,
+            )
         ]
         ids = upsert_notices_bulk_sync(session, notice_payload)
         assert isinstance(ids, list)

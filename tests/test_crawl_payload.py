@@ -129,7 +129,7 @@ def test_build_notice_payload_skips_html_too_large(mock_upload):
 
 @patch("app.services.crawl_payload.upload_notice_html")
 def test_build_notice_payload_returns_payload(mock_upload):
-    """정상 입력 시 payload dict 반환 및 upload_notice_html 호출."""
+    """정상 입력 시 NoticeDraft 반환 및 upload_notice_html 호출."""
     mock_upload.return_value = "https://storage/content-url"
     college_id = uuid.uuid4()
     payload = build_notice_payload(
@@ -145,12 +145,12 @@ def test_build_notice_payload_returns_payload(mock_upload):
         external_id=None,
     )
     assert payload is not None
-    assert payload["college_id"] == college_id
-    assert payload["external_id"] == "ext-1"
-    assert payload["title"] == "공지 제목"
-    assert payload["url"] == "https://example.com/view?articleNo=1"
-    assert payload["content_url"] == "https://storage/content-url"
-    assert payload["content_hash"]
-    assert payload["published_at"] is not None
-    assert payload["published_at"].year == 2024
+    assert payload.college_id == college_id
+    assert payload.external_id == "ext-1"
+    assert payload.title == "공지 제목"
+    assert payload.url == "https://example.com/view?articleNo=1"
+    assert payload.content_url == "https://storage/content-url"
+    assert payload.content_hash
+    assert payload.published_at is not None
+    assert payload.published_at.year == 2024
     mock_upload.assert_called_once()

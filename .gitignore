@@ -47,4 +47,6 @@ htmlcov/
 
 # Misc
 .DS_Store
-.env 
+.env
+tmp_*.txt
+storage/

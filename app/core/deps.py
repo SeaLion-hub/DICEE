@@ -1,9 +1,15 @@
 """FastAPI 의존성. HTTP 클라이언트·Google Key Fetcher·Redis Blocklist 등 앱 생명주기 객체 주입."""
 
-from typing import cast
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, cast
 
 import httpx
-from fastapi import Request
+
+if TYPE_CHECKING:
+    from app.services.internal_crawl_service import InternalCrawlService
+    from app.services.crawl_stats_service import CrawlStatsService
+from fastapi import Depends, Request
 from pyjwt_key_fetcher import AsyncKeyFetcher
 from redis.asyncio import Redis as RedisAsyncio
 
@@ -31,3 +37,21 @@ def get_redis_blocklist(request: Request) -> RedisAsyncio | None:
 def get_redis_trigger_lock(request: Request) -> RedisAsyncio | None:
     """앱 lifespan에서 생성한 Trigger 락 전용 Redis 비동기 클라이언트. 미설정 시 None."""
     return cast(AppState, request.app.state).redis_trigger_lock_client
+
+
+def get_internal_crawl_service(
+    redis_client: RedisAsyncio | None = Depends(get_redis_trigger_lock),
+) -> InternalCrawlService:
+    """요청 스코프 InternalCrawlService. Redis는 Depends(get_redis_trigger_lock)로 주입해 테스트 override 적용."""
+    from app.adapters.celery_crawl_dispatcher import CeleryCrawlDispatcher
+    from app.services.internal_crawl_service import InternalCrawlService
+
+    return InternalCrawlService(redis_client=redis_client, dispatcher=CeleryCrawlDispatcher())
+
+
+def get_crawl_stats_service() -> CrawlStatsService:
+    """요청 스코프 CrawlStatsService. CrawlStatsQueryPort는 내부에서 어댑터로 주입."""
+    from app.repositories.crawl_run_repository import CrawlRunRepositoryAdapter
+    from app.services.crawl_stats_service import CrawlStatsService
+
+    return CrawlStatsService(query_port=CrawlRunRepositoryAdapter())

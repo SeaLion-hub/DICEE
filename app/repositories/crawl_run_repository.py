@@ -8,7 +8,6 @@ crawl_runs 계약: 모델은 복합 PK (id, started_at). 애플리케이션은 i
 
 import uuid
 from datetime import UTC, datetime, timedelta
-from typing import Any
 
 from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert
@@ -16,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from app.core.constants import CrawlRunStatus
+from app.domain.contracts.crawl_contracts import CrawlRunRow, CrawlStatsQueryPort
 from app.models.college import College
 from app.models.crawl_run import CrawlRun
 from app.models.crawl_run_task import CrawlRunTask
@@ -157,8 +157,8 @@ def close_stale_running_runs_sync(
 async def get_recent_crawl_runs(
     session: AsyncSession,
     limit: int = 50,
-) -> list[dict[str, Any]]:
-    """최근 크롤 실행 이력 (단과대 코드 포함). GET /internal/crawl-stats용."""
+) -> list[CrawlRunRow]:
+    """최근 크롤 실행 이력 (단과대 코드 포함). 프레젠테이션(isoformat)은 서비스/API에서 수행."""
     stmt = (
         select(CrawlRun, College.external_id)
         .join(College, CrawlRun.college_id == College.id)
@@ -168,13 +168,22 @@ async def get_recent_crawl_runs(
     result = await session.execute(stmt)
     rows = result.all()
     return [
-        {
-            "college_code": ext_id,
-            "started_at": run.started_at.isoformat() if run.started_at else None,
-            "finished_at": run.finished_at.isoformat() if run.finished_at else None,
-            "status": run.status,
-            "notices_upserted": run.notices_upserted,
-            "error_message": run.error_message,
-        }
+        CrawlRunRow(
+            college_code=ext_id,
+            started_at=run.started_at,
+            finished_at=run.finished_at,
+            status=run.status,
+            notices_upserted=run.notices_upserted,
+            error_message=run.error_message,
+        )
         for run, ext_id in rows
     ]
+
+
+class CrawlRunRepositoryAdapter:
+    """CrawlStatsQueryPort 구현. get_recent_crawl_runs를 래핑하여 서비스에서 주입받을 수 있게 함."""
+
+    async def fetch_recent(
+        self, session: AsyncSession, limit: int
+    ) -> list[CrawlRunRow]:
+        return await get_recent_crawl_runs(session, limit=limit)

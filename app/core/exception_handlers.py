@@ -9,7 +9,18 @@ from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.exceptions import HTTPException, RequestValidationError
 from fastapi.responses import JSONResponse
 
+from app.core.exceptions import (
+    CollegeNotFoundError,
+    InternalCrawlError,
+)
+from app.core.redis import (
+    RedisIdempotencyUnavailableError,
+    RedisLockUnavailableError,
+)
+
 logger = logging.getLogger(__name__)
+
+INTERNAL_CRAWL_503_DETAIL = "Service temporarily unavailable. Try again later."
 
 
 async def validation_exception_handler(request: Request, exc: Exception) -> JSONResponse:
@@ -35,6 +46,35 @@ async def httpx_error_handler(request: Request, exc: Exception) -> JSONResponse:
             "detail": "Service temporarily unavailable",
             "code": "UPSTREAM_UNAVAILABLE",
         },
+    )
+
+
+async def college_not_found_handler(request: Request, exc: Exception) -> JSONResponse:
+    """미등록 college_code. 400 Bad Request."""
+    return JSONResponse(
+        status_code=400,
+        content={"detail": str(cast(CollegeNotFoundError, exc)), "code": "COLLEGE_NOT_FOUND"},
+    )
+
+
+async def internal_crawl_error_handler(request: Request, exc: Exception) -> JSONResponse:
+    """내부 크롤 API 인프라/비즈니스 오류. 503 Service Unavailable."""
+    if isinstance(exc, RedisLockUnavailableError):
+        code = "REDIS_LOCK_UNAVAILABLE"
+    elif isinstance(exc, RedisIdempotencyUnavailableError):
+        code = "REDIS_IDEMPOTENCY_UNAVAILABLE"
+    else:
+        code = "INTERNAL_CRAWL_UNAVAILABLE"
+    request_id = getattr(request.state, "request_id", None)
+    logger.warning(
+        "Internal crawl error: code=%s exc_type=%s",
+        code,
+        type(exc).__name__,
+        extra={"code": code, "request_id": request_id},
+    )
+    return JSONResponse(
+        status_code=503,
+        content={"detail": INTERNAL_CRAWL_503_DETAIL, "code": code},
     )
 
 

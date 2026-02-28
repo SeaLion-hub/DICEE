@@ -8,8 +8,8 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql import func
 
+from app.domain.contracts.user_contracts import UserUpsertCmd
 from app.models.user import User
-from app.schemas.user import UserBase
 
 
 async def get_by_id(session: AsyncSession, user_id: uuid.UUID) -> User | None:
@@ -60,18 +60,18 @@ async def get_by_provider_uid(
     return result.scalars().one_or_none()
 
 
-async def upsert_by_provider_uid(session: AsyncSession, provider: str, provider_user_id: str, data: UserBase) -> User:
+async def upsert_by_provider_uid(session: AsyncSession, cmd: UserUpsertCmd) -> User:
     """
     INSERT ... ON CONFLICT (provider, provider_user_id) DO UPDATE.
     동시 로그인 시 레이스 컨디션 없이 단일 쿼리로 처리.
     """
     now = datetime.now(UTC)
     base = pg_insert(User).values(
-        provider=provider,
-        provider_user_id=provider_user_id,
-        email=data.email,
-        name=data.name,
-        profile_json=data.profile_json,
+        provider=cmd.provider,
+        provider_user_id=cmd.provider_user_id,
+        email=cmd.email,
+        name=cmd.name,
+        profile_json=cmd.profile_json,
         refresh_token_version=0,
         created_at=now,
         updated_at=now,

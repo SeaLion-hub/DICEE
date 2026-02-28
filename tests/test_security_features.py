@@ -1,10 +1,13 @@
 """보안 관련 기능 테스트: Rate Limit·내부 인증·오류 메시지 마스킹."""
 
 import asyncio
+from datetime import datetime, timezone
 import uuid
 
 import pytest
 from pydantic import SecretStr
+
+from app.domain.contracts.crawl_contracts import CrawlRunRow
 
 
 def test_crawl_stats_masks_error_message(client, monkeypatch):
@@ -19,20 +22,23 @@ def test_crawl_stats_masks_error_message(client, monkeypatch):
 
     monkeypatch.setattr(internal_module, "_authorize_internal_trigger", _noop_authorize)
 
-    # Repository 결과를 고정된 페이로드로 대체
+    # 서비스가 호출하는 Repository 결과를 고정된 CrawlRunRow로 대체
     async def _fake_get_recent_crawl_runs(session, limit=50):
         return [
-            {
-                "college_code": "engineering",
-                "started_at": "2024-01-01T00:00:00+00:00",
-                "finished_at": None,
-                "status": "FAILED",
-                "notices_upserted": 0,
-                "error_message": "simulated internal error detail",
-            }
+            CrawlRunRow(
+                college_code="engineering",
+                started_at=datetime(2024, 1, 1, 0, 0, 0, tzinfo=timezone.utc),
+                finished_at=None,
+                status="FAILED",
+                notices_upserted=0,
+                error_message="simulated internal error detail",
+            )
         ]
 
-    monkeypatch.setattr("app.api.internal.get_recent_crawl_runs", _fake_get_recent_crawl_runs)
+    monkeypatch.setattr(
+        "app.repositories.crawl_run_repository.get_recent_crawl_runs",
+        _fake_get_recent_crawl_runs,
+    )
 
     # DB 의존성은 더미 세션으로 대체해, DATABASE_URL 없이도 테스트 가능하게 한다. (crawl-stats는 get_read_only_db 사용)
     async def _fake_get_read_only_db():
@@ -449,12 +455,14 @@ def test_trigger_crawl_all_enqueues_fail_returns_503(client, monkeypatch):
         raise RuntimeError("simulated broker failure")
 
     monkeypatch.setattr("app.services.tasks.crawl_college_task.apply_async", _apply_async_raise)
-    # internal._enqueue_crawls 내부에서 acquire_trigger_lock 사용; Redis mock으로 통과
+    # InternalCrawlService가 사용하는 락 함수 패치
     monkeypatch.setattr(
-        internal_module, "acquire_trigger_lock", AsyncMock(return_value=(True, "test-token"))
+        "app.services.internal_crawl_service.acquire_trigger_lock",
+        AsyncMock(return_value=(True, "test-token")),
     )
     monkeypatch.setattr(
-        internal_module, "release_trigger_lock", AsyncMock(return_value=None)
+        "app.services.internal_crawl_service.release_trigger_lock",
+        AsyncMock(return_value=None),
     )
 
     try:
@@ -512,11 +520,13 @@ def test_trigger_crawl_skipped_then_retry_with_same_idempotency_key_not_stuck(cl
     monkeypatch.setattr(internal_module, "check_rate_limit", _allow_rate_limit)
     monkeypatch.setattr(internal_module, "get_client_ip", lambda request: "127.0.0.1")
     monkeypatch.setattr(
-        internal_module,
-        "acquire_trigger_lock",
+        "app.services.internal_crawl_service.acquire_trigger_lock",
         AsyncMock(side_effect=[(False, None), (True, "token-1")]),
     )
-    monkeypatch.setattr(internal_module, "release_trigger_lock", AsyncMock(return_value=True))
+    monkeypatch.setattr(
+        "app.services.internal_crawl_service.release_trigger_lock",
+        AsyncMock(return_value=True),
+    )
 
     task_result = MagicMock()
     task_result.id = "task-1"

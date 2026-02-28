@@ -53,6 +53,7 @@ from app.repositories.crawl_run_repository import (
     ensure_crawl_run_task_sync,
     update_crawl_run_sync,
 )
+from app.domain.contracts.crawl_contracts import NoticeDraft
 from app.repositories.notice_repository import (
     upsert_notices_bulk,
     upsert_notices_bulk_sync,
@@ -271,9 +272,9 @@ class _SyncCrawlAdapter(Protocol):
         scrape_fn: Callable,
         seen: _SeenSet,
         cfg: CrawlRuntimeConfig,
-    ) -> Iterator[dict]: ...
+    ) -> Iterator[NoticeDraft]: ...
 
-    def upsert_chunk(self, session: Session, chunk: list[dict]) -> list[uuid.UUID]: ...
+    def upsert_chunk(self, session: Session, chunk: list[NoticeDraft]) -> list[uuid.UUID]: ...
 
 
 class _AsyncCrawlAdapter(Protocol):
@@ -286,12 +287,12 @@ class _AsyncCrawlAdapter(Protocol):
         scrape_async_fn: Callable,
         seen: _SeenSet,
         cfg: CrawlRuntimeConfig,
-    ) -> AsyncIterator[dict]: ...
+    ) -> AsyncIterator[NoticeDraft]: ...
 
     async def upsert_chunk(
         self,
         session: AsyncSession,
-        chunk: list[dict],
+        chunk: list[NoticeDraft],
     ) -> list[uuid.UUID]: ...
 
 
@@ -304,7 +305,7 @@ class _DefaultSyncCrawlAdapter:
         scrape_fn: Callable,
         seen: _SeenSet,
         cfg: CrawlRuntimeConfig,
-    ) -> Iterator[dict]:
+    ) -> Iterator[NoticeDraft]:
         return _collect_payloads_sync(
             links,
             college_id,
@@ -315,7 +316,7 @@ class _DefaultSyncCrawlAdapter:
             in_flight_limit=cfg.collect_in_flight_limit,
         )
 
-    def upsert_chunk(self, session: Session, chunk: list[dict]) -> list[uuid.UUID]:
+    def upsert_chunk(self, session: Session, chunk: list[NoticeDraft]) -> list[uuid.UUID]:
         return upsert_notices_bulk_sync(session, chunk)
 
 
@@ -329,7 +330,7 @@ class _DefaultAsyncCrawlAdapter:
         scrape_async_fn: Callable,
         seen: _SeenSet,
         cfg: CrawlRuntimeConfig,
-    ) -> AsyncIterator[dict]:
+    ) -> AsyncIterator[NoticeDraft]:
         async for payload in _collect_payloads_async(
             client,
             links,
@@ -344,7 +345,7 @@ class _DefaultAsyncCrawlAdapter:
     async def upsert_chunk(
         self,
         session: AsyncSession,
-        chunk: list[dict],
+        chunk: list[NoticeDraft],
     ) -> list[uuid.UUID]:
         return await upsert_notices_bulk(session, chunk)
 
@@ -352,7 +353,7 @@ class _DefaultAsyncCrawlAdapter:
 async def _finalize_chunk_async(
     session: AsyncSession,
     adapter: _AsyncCrawlAdapter,
-    chunk: list[dict],
+    chunk: list[NoticeDraft],
 ) -> int:
     ids = await adapter.upsert_chunk(session, chunk)
     chunk.clear()
@@ -387,7 +388,7 @@ async def _run_crawl_pipeline_async(
             )
             return 0
         total_count = 0
-        chunk: list[dict] = []
+        chunk: list[NoticeDraft] = []
         async for payload in adapter.collect_payloads(
             client=client,
             links=links,
@@ -508,10 +509,10 @@ def _process_scrape_result(
     college_id: uuid.UUID,
     seen: set[str] | _BoundedSeenSet | _RedisSeenSet,
     tracker: CrawlErrorTracker,
-) -> tuple[dict | None, CrawlThresholdExceeded | Exception | None]:
+) -> tuple[NoticeDraft | None, CrawlThresholdExceeded | Exception | None]:
     """
     한 건 스크랩 결과 처리. CrawlErrorTracker로 상태 캡슐화. sync/async 공통.
-    반환: (payload 또는 None, raise할 예외 또는 None).
+    반환: (NoticeDraft 또는 None, raise할 예외 또는 None).
     """
     tracker.record_attempt()
     if exc is not None:
@@ -616,7 +617,7 @@ def _collect_payloads_sync(
     max_workers: int,
     in_flight_limit: int,
     seen: set[str] | _BoundedSeenSet | _RedisSeenSet | None = None,
-) -> Iterator[dict]:
+) -> Iterator[NoticeDraft]:
     """
     동기: Bounded in-flight(K)로 링크 처리. Semaphore + as_completed로 제어 단순화.
     O(K) 메모리. 파서/구조 예외는 임계치 초과 시 CrawlThresholdExceeded raise.
@@ -679,7 +680,7 @@ async def _collect_payloads_async(
     *,
     concurrency: int,
     seen: set[str] | _BoundedSeenSet | _RedisSeenSet | None = None,
-):
+) -> AsyncIterator[NoticeDraft]:
     """
     비동기: Semaphore(W) + 호스트별 delay로 제한된 병렬 수집. 1 req/s 직렬 완화.
     파서/구조 예외는 임계치 초과 시 CrawlThresholdExceeded raise.
@@ -754,7 +755,7 @@ async def _collect_payloads_async(
 def _finalize_chunk_sync(
     session: Session,
     adapter: _SyncCrawlAdapter,
-    chunk: list[dict],
+    chunk: list[NoticeDraft],
     *,
     on_chunk_processed: Callable[[list[uuid.UUID]], None] | None,
     notice_ids_to_process: list[uuid.UUID],
@@ -803,7 +804,7 @@ def _run_crawl_pipeline_sync(
     )
     notice_ids_to_process: list[uuid.UUID] = []
     total_upserted = 0
-    chunk: list[dict] = []
+    chunk: list[NoticeDraft] = []
     try:
         for payload in adapter.collect_payloads(
             links=links,

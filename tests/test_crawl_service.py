@@ -4,7 +4,9 @@ import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+
 from app.core.constants import CrawlRunStatus
+from app.domain.contracts.crawl_contracts import NoticeDraft
 
 
 def test_run_crawl_job_sync_rollback_then_failed_on_commit_failure():
@@ -155,6 +157,21 @@ def test_crawl_college_sync_and_async_use_same_cap_helper(monkeypatch):
     assert calls[0][1] == calls[1][1]
 
 
+def _make_draft(college_id: uuid.UUID, i: int) -> NoticeDraft:
+    """테스트용 최소 NoticeDraft."""
+    return NoticeDraft(
+        college_id=college_id,
+        external_id=f"ext-{i}",
+        title="",
+        url="https://example.com",
+        content_url=None,
+        images=None,
+        attachments=[],
+        content_hash="",
+        published_at=None,
+    )
+
+
 def test_run_crawl_pipeline_sync_uses_chunk_size_for_flush():
     from app.services import crawl_service as crawl_module
 
@@ -163,8 +180,9 @@ def test_run_crawl_pipeline_sync_uses_chunk_size_for_flush():
             self.flush_sizes: list[int] = []
 
         def collect_payloads(self, **kwargs):
+            college_id = kwargs["college_id"]
             for i in range(5):
-                yield {"external_id": f"ext-{i}", "url": "https://example.com"}
+                yield _make_draft(college_id, i)
 
         def upsert_chunk(self, _session, chunk):
             self.flush_sizes.append(len(chunk))
@@ -208,8 +226,9 @@ def test_run_crawl_pipeline_async_uses_chunk_size_for_flush():
             self.flush_sizes: list[int] = []
 
         async def collect_payloads(self, **kwargs):
+            college_id = kwargs["college_id"]
             for i in range(5):
-                yield {"external_id": f"ext-{i}", "url": "https://example.com"}
+                yield _make_draft(college_id, i)
 
         async def upsert_chunk(self, _session, chunk):
             self.flush_sizes.append(len(chunk))
@@ -289,7 +308,7 @@ def test_async_adapter_reflects_concurrency_config(monkeypatch):
     async def _fake_collect(*args, **kwargs):
         captured["concurrency"] = kwargs["concurrency"]
         if False:
-            yield {}
+            yield _make_draft(uuid.uuid4(), 0)
 
     monkeypatch.setattr(crawl_module, "_collect_payloads_async", _fake_collect)
     cfg = crawl_module.CrawlRuntimeConfig(

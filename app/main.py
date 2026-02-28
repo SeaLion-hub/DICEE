@@ -21,11 +21,14 @@ if settings.app_entry != "api":
     )
 
 from app.core.exception_handlers import (
+    college_not_found_handler,
     global_exception_handler,
     httpx_error_handler,
+    internal_crawl_error_handler,
     invalid_forwarded_header_handler,
     validation_exception_handler,
 )
+from app.core.exceptions import CollegeNotFoundError, InternalCrawlError
 from app.core.lifespan import (
     check_startup_crawler_contract,
     check_startup_pool_budget,
@@ -88,4 +91,6 @@ app.add_middleware(
 app.add_exception_handler(RequestValidationError, validation_exception_handler)
 app.add_exception_handler(InvalidForwardedHeaderError, invalid_forwarded_header_handler)
 app.add_exception_handler(httpx.HTTPError, httpx_error_handler)
+app.add_exception_handler(CollegeNotFoundError, college_not_found_handler)
+app.add_exception_handler(InternalCrawlError, internal_crawl_error_handler)
 app.add_exception_handler(Exception, global_exception_handler)

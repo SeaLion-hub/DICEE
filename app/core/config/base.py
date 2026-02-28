@@ -119,6 +119,12 @@ class Settings(BaseSettings):
     internal_auth_fail_rate_limit_per_minute: int = Field(10, ge=1, le=10000)
     internal_trigger_crawl_rate_limit_per_minute: int = Field(10, ge=1, le=1000)
     internal_crawl_stats_rate_limit_per_minute: int = Field(30, ge=1, le=1000)
+    crawl_trigger_stagger_seconds: int = Field(
+        300,
+        ge=0,
+        le=3600,
+        description="단과대별 크롤 시작 시간 분산(초). Thundering Herd 방지. 0이면 동시 시작.",
+    )
     client_ip_resolution_log_sample_rate: float = Field(0.0, ge=0.0, le=1.0)
 
     metrics_allowed_ips: str = Field(

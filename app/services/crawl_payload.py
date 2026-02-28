@@ -13,6 +13,7 @@ from urllib.parse import parse_qs, urlparse, urlunparse
 from bs4 import BeautifulSoup
 
 from app.core.storage import upload_notice_html
+from app.domain.contracts.crawl_contracts import NoticeDraft
 
 logger = logging.getLogger(__name__)
 
@@ -149,9 +150,9 @@ def build_notice_payload(
     attachments: list | None,
     body_text_for_hash: str | None = None,
     external_id: str | None = None,
-) -> dict | None:
+) -> NoticeDraft | None:
     """
-    한 건 공지 스크랩 결과 → upsert용 payload dict. 스킵 시 None(로깅 후 반환).
+    한 건 공지 스크랩 결과 → upsert용 NoticeDraft. 스킵 시 None(로깅 후 반환).
     순수 함수: HTTP/DB 미의존. crawl_college / crawl_college_sync 공통.
     body_text_for_hash가 있으면 해시 계산 시 HTML 재파싱 생략.
     """
@@ -190,14 +191,14 @@ def build_notice_payload(
         external_id=external_id_value,
         content_hash=content_hash,
     )
-    return {
-        "college_id": college_id,
-        "external_id": external_id_value,
-        "title": title,
-        "url": detail_url or None,
-        "content_url": content_url,
-        "images": images,
-        "attachments": att_dicts,
-        "content_hash": content_hash,
-        "published_at": published_at,
-    }
+    return NoticeDraft(
+        college_id=college_id,
+        external_id=external_id_value,
+        title=title,
+        url=detail_url or None,
+        content_url=content_url,
+        images=images,
+        attachments=att_dicts,
+        content_hash=content_hash,
+        published_at=published_at,
+    )

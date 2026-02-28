@@ -6,13 +6,14 @@
 
 import uuid
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Sequence
 
 from sqlalchemy import select, tuple_, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session, defer, selectinload
 
+from app.domain.contracts.crawl_contracts import NoticeDraft
 from app.models.notice import Notice
 from app.models.notice_content import NoticeContent
 
@@ -155,6 +156,21 @@ def update_notice_content_url_sync(
     return True
 
 
+def _draft_to_notice_dict(draft: NoticeDraft) -> dict[str, Any]:
+    """NoticeDraft → DB/내부용 dict. SQLAlchemy가 기대하는 형식(datetime, UUID 그대로) 유지."""
+    return {
+        "college_id": draft.college_id,
+        "external_id": draft.external_id,
+        "title": draft.title,
+        "url": draft.url,
+        "content_url": draft.content_url,
+        "images": draft.images,
+        "attachments": draft.attachments,
+        "content_hash": draft.content_hash,
+        "published_at": draft.published_at,
+    }
+
+
 def _notice_values_no_content(payload: dict[str, Any]) -> dict[str, Any]:
     """Notice 테이블용 dict (raw_html·content_url 제외)."""
     out = {k: v for k, v in payload.items() if k not in ("raw_html", "content_url")}
@@ -285,7 +301,7 @@ def _fill_key_to_id_from_notices_sync(
 
 async def upsert_notices_bulk(
     session: AsyncSession,
-    notices: list[dict[str, Any]],
+    notices: Sequence[NoticeDraft],
 ) -> list[uuid.UUID]:
     """
     여러 공지를 한 트랜잭션으로 bulk upsert.
@@ -294,7 +310,8 @@ async def upsert_notices_bulk(
     """
     if not notices:
         return []
-    stmt, sorted_notices = _build_bulk_upsert_stmt(notices)
+    notices_dicts = [_draft_to_notice_dict(d) for d in notices]
+    stmt, sorted_notices = _build_bulk_upsert_stmt(notices_dicts)
     result = await session.execute(stmt)
     rows = result.all()
     await session.flush()
@@ -312,7 +329,7 @@ async def upsert_notices_bulk(
 
 def upsert_notices_bulk_sync(
     session: Session,
-    notices: list[dict[str, Any]],
+    notices: Sequence[NoticeDraft],
 ) -> list[uuid.UUID]:
     """
     동기 bulk upsert (Celery 워커용).
@@ -321,7 +338,8 @@ def upsert_notices_bulk_sync(
     """
     if not notices:
         return []
-    stmt, sorted_notices = _build_bulk_upsert_stmt(notices)
+    notices_dicts = [_draft_to_notice_dict(d) for d in notices]
+    stmt, sorted_notices = _build_bulk_upsert_stmt(notices_dicts)
     result = session.execute(stmt)
     rows = result.all()
     session.flush()

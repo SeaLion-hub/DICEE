@@ -13,6 +13,7 @@ from typing import Any, cast
 from redis.asyncio import Redis as RedisAsyncio
 
 from app.core.config import settings
+from app.core.exceptions import RedisInfraError
 from app.core.metrics import (
     LOCK_ACQUIRE_TOTAL,
     LOCK_CONFLICT_TOTAL,
@@ -54,14 +55,14 @@ end
 """
 
 
-class RedisLockUnavailableError(Exception):
-    """Redis 인프라 오류로 락 획득/해제 불가. Router에서 503 + code REDIS_LOCK_UNAVAILABLE으로 변환."""
+class RedisLockUnavailableError(RedisInfraError):
+    """Redis 인프라 오류로 락 획득/해제 불가. 전역 핸들러에서 503 + code REDIS_LOCK_UNAVAILABLE으로 변환."""
 
     pass
 
 
-class RedisIdempotencyUnavailableError(Exception):
-    """Redis 인프라 오류로 idempotency 클레임 불가. Router에서 503 + code REDIS_IDEMPOTENCY_UNAVAILABLE으로 변환."""
+class RedisIdempotencyUnavailableError(RedisInfraError):
+    """Redis 인프라 오류로 idempotency 클레임 불가. 전역 핸들러에서 503 + code REDIS_IDEMPOTENCY_UNAVAILABLE으로 변환."""
 
     pass
 
@@ -295,11 +296,10 @@ async def try_claim_trigger_idempotency(
     except Exception as e:
         if fail_closed:
             raise RedisIdempotencyUnavailableError(
-                f"Trigger idempotency claim failed (key={idempotency_key[:32]}...): {e}"
+                "Trigger idempotency claim failed."
             ) from e
         logger.warning(
-            "Trigger idempotency claim failed (key=%s); proceeding without idempotency: %s",
-            idempotency_key[:32],
+            "Trigger idempotency claim failed; proceeding without idempotency: %s",
             e,
         )
         return True
@@ -322,7 +322,7 @@ async def get_trigger_idempotency_result(
             return {"status": "in_progress", "detail": "in_progress", "code": "IDEMPOTENCY_IN_PROGRESS"}
         return cast(dict[str, Any], json.loads(raw))
     except (json.JSONDecodeError, Exception) as e:
-        logger.warning("Trigger idempotency get failed (key=%s): %s", idempotency_key[:32], e)
+        logger.warning("Trigger idempotency get failed: %s", e)
         return None
 
 
@@ -339,7 +339,7 @@ async def set_trigger_idempotency_result(
             key, json.dumps(payload), ex=TRIGGER_IDEMPOTENCY_TTL_SECONDS
         )
     except Exception as e:
-        logger.warning("Trigger idempotency set failed (key=%s): %s", idempotency_key[:32], e)
+        logger.warning("Trigger idempotency set failed: %s", e)
 
 
 async def clear_trigger_idempotency_in_progress(
@@ -362,11 +362,7 @@ async def clear_trigger_idempotency_in_progress(
         )
         return bool(raw == 1)
     except Exception as e:
-        logger.warning(
-            "Trigger idempotency clear failed (key=%s): %s",
-            idempotency_key[:32],
-            e,
-        )
+        logger.warning("Trigger idempotency clear failed: %s", e)
         return False
 
 

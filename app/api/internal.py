@@ -3,9 +3,7 @@
 Query 파라미터 시크릿 미지원(Access Log 유출 방지). college별 분산락으로 중복 enqueue 방지.
 """
 
-import asyncio
 import logging
-import time
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, Response
@@ -18,9 +16,12 @@ from app.core.api_rate_limit import (
     check_rate_limit,
 )
 from app.core.config import settings
-from app.core.crawler_config import COLLEGE_CODE_TO_MODULE
 from app.core.database import get_read_only_db
-from app.core.deps import get_redis_trigger_lock
+from app.core.deps import (
+    get_crawl_stats_service,
+    get_internal_crawl_service,
+    get_redis_trigger_lock,
+)
 from app.core.internal_auth import (
     CrawlTriggerNotConfiguredError,
     InvalidCrawlTriggerSecretError,
@@ -28,24 +29,28 @@ from app.core.internal_auth import (
 )
 from app.core.ip_hmac import compute_ip_hmac
 from app.core.network import get_client_ip
-from app.core.redis import (
-    RedisIdempotencyUnavailableError,
-    RedisLockUnavailableError,
-    acquire_trigger_lock,
-    clear_trigger_idempotency_in_progress,
-    get_trigger_idempotency_result,
-    release_trigger_lock,
-    set_trigger_idempotency_result,
-    try_claim_trigger_idempotency,
+from app.core.read_cache import get_cached, set_cached
+from app.domain.contracts.internal_contracts import (
+    TriggerCrawlCmd,
+    TriggerCrawlResult,
+    TriggerCrawlResultKind,
 )
-from app.repositories.crawl_run_repository import get_recent_crawl_runs
+from app.schemas.internal import CrawlStatsResponse
+from app.services.crawl_stats_service import CrawlStatsService
 
 router = APIRouter(prefix="/internal", tags=["internal"])
 logger = logging.getLogger(__name__)
 
-# 단과대별 크롤 시작 시간 분산(Thundering Herd 방지). 초 단위. 예: 300 = 5분 간격.
-CRAWL_STAGGER_SECONDS = 300
 RATE_LIMIT_RETRY_AFTER_SECONDS = 60
+
+
+def _map_result_to_status(result: TriggerCrawlResult) -> int:
+    """TriggerCrawlResult.result_kind에 따라 HTTP status code 반환. Router 전용."""
+    if result.result_kind == TriggerCrawlResultKind.cached:
+        return 202
+    if result.result_kind == TriggerCrawlResultKind.success:
+        return 200
+    return 503  # partial_failure, infra_unavailable
 
 
 def _rate_limit_headers() -> dict[str, str]:
@@ -136,17 +141,6 @@ def _authorize_internal_trigger(
         ) from None
 
 
-def _resolve_college_codes(college_code: str | None) -> list[str]:
-    """college_code 정규화·검증 후 코드 목록 반환. 단일 코드 미등록 시 HTTPException(400)."""
-    normalized = college_code.strip() if college_code and college_code.strip() else None
-    if normalized and normalized not in COLLEGE_CODE_TO_MODULE:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Unknown college_code: {normalized}. Valid: {list(COLLEGE_CODE_TO_MODULE.keys())}",
-        )
-    return [normalized] if normalized else list(COLLEGE_CODE_TO_MODULE.keys())
-
-
 def _require_client_ip(request: Request, *, endpoint: str) -> str:
     """Fail-closed: if client IP cannot be resolved, return 503."""
     client_ip = get_client_ip(request)
@@ -211,99 +205,6 @@ async def _authorize_with_fail_limit(
         raise
 
 
-async def _claim_idempotency(
-    redis_client: RedisAsyncio | None,
-    idempotency_key: str | None,
-    scope: str,
-    *,
-    fail_closed: bool = False,
-) -> tuple[bool, dict | None]:
-    """
-    Idempotency 슬롯 점유 시도. 반환 (claimed, cached_or_none).
-    claimed=True면 이번 요청이 처리 담당. claimed=False면 cached에 202 응답용 payload(캐시 결과 또는 in_progress).
-    fail_closed=True이면 Redis 예외 시 RedisIdempotencyUnavailableError 발생.
-    """
-    if not idempotency_key or redis_client is None:
-        return (True, None)
-    claimed = await try_claim_trigger_idempotency(
-        redis_client, idempotency_key, scope, fail_closed=fail_closed
-    )
-    if claimed:
-        return (True, None)
-    cached = await get_trigger_idempotency_result(redis_client, idempotency_key, scope)
-    if cached is not None:
-        return (False, cached)
-    return (False, {"detail": "in_progress", "code": "IDEMPOTENCY_IN_PROGRESS"})
-
-
-async def _enqueue_crawls(
-    request: Request,
-    redis_client: RedisAsyncio | None,
-    codes: list[str],
-) -> tuple[dict, int]:
-    """크롤 태스크 enqueue. 반환 (응답 body, status_code)."""
-    from app.services.tasks import crawl_college_task
-
-    status_code = 200
-    out: dict = {}
-    task_ids: list[dict] = []
-    skipped: list[str] = []
-    failed: list[str] = []
-    for i, code in enumerate(codes):
-        lock_token: str | None = None
-        if redis_client is not None:
-            try:
-                acquired, lock_token = await acquire_trigger_lock(redis_client, code)
-            except RedisLockUnavailableError:
-                logger.exception("Trigger lock unavailable (Redis error) for college=%s", code)
-                status_code = 503
-                out = {
-                    "detail": "Service temporarily unavailable",
-                    "code": "REDIS_LOCK_UNAVAILABLE",
-                }
-                break
-            if not acquired:
-                skipped.append(code)
-                continue
-        countdown = i * CRAWL_STAGGER_SECONDS if len(codes) > 1 else 0
-        enqueued_at = time.time()
-        try:
-            result = await asyncio.to_thread(
-                crawl_college_task.apply_async,
-                args=[code, lock_token],
-                kwargs={"enqueued_at": enqueued_at},
-                countdown=countdown,
-            )
-        except Exception:
-            logger.exception("trigger-crawl apply_async failed: code=%s", code)
-            if redis_client is not None and lock_token:
-                await release_trigger_lock(redis_client, code, lock_token)
-            failed.append(code)
-            continue
-        task_ids.append({"college_code": code, "task_id": result.id, "countdown_sec": countdown})
-        request_id = getattr(request.state, "request_id", None) if request else None
-        logger.info(
-            "trigger-crawl enqueued: college_code=%s task_id=%s countdown=%s request_id=%s",
-            code, result.id, countdown, request_id,
-        )
-    if status_code == 200:
-        out = {"enqueued": len(task_ids), "tasks": task_ids}
-        if skipped:
-            out["skipped"] = skipped
-        if failed:
-            out["failed"] = failed
-        # failed가 하나라도 있으면 503으로 스케줄러/모니터가 실패로 인지하도록 함.
-        if failed:
-            status_code = 503
-            out["code"] = "ALL_ENQUEUES_FAILED" if len(task_ids) == 0 else "PARTIAL_ENQUEUE_FAILURE"
-            out["detail"] = (
-                "All crawl enqueues failed; check broker and worker logs."
-                if len(task_ids) == 0
-                else "One or more colleges failed to enqueue; retry recommended."
-            )
-    return (out, status_code)
-
-
 @router.post("/trigger-crawl")
 async def post_trigger_crawl(
     request: Request,
@@ -321,6 +222,7 @@ async def post_trigger_crawl(
         pattern=r"^[A-Za-z0-9._:-]+$",
     ),
     redis_client: RedisAsyncio | None = Depends(get_redis_trigger_lock),
+    internal_crawl_service=Depends(get_internal_crawl_service),
 ):
     """
     크롤 태스크 enqueue. 보안 키는 Header만 필수. college별 Redis 분산락(SET NX EX)으로 중복 enqueue 방지.
@@ -355,67 +257,15 @@ async def post_trigger_crawl(
             headers=_rate_limit_headers(),
         )
 
-    codes = _resolve_college_codes(college_code)
-    idempotency_scope = codes[0] if len(codes) == 1 else "all"
     key_stripped = idempotency_key.strip() if idempotency_key and idempotency_key.strip() else None
-
-    try:
-        claimed, cached = await _claim_idempotency(
-            redis_client,
-            key_stripped,
-            idempotency_scope,
-            fail_closed=settings.redis.redis_trigger_idempotency_required,
-        )
-    except RedisIdempotencyUnavailableError:
-        return JSONResponse(
-            status_code=503,
-            content={
-                "detail": "Service temporarily unavailable",
-                "code": "REDIS_IDEMPOTENCY_UNAVAILABLE",
-            },
-        )
-    if not claimed:
-        return JSONResponse(status_code=202, content=cached or {})
-
-    if redis_client is None and settings.redis.redis_trigger_lock_required:
-        return JSONResponse(
-            status_code=503,
-            content={
-                "detail": "Service temporarily unavailable",
-                "code": "REDIS_LOCK_UNAVAILABLE",
-            },
-        )
-
-    out: dict = {}
-    status_code = 500
-    try:
-        out, status_code = await _enqueue_crawls(request, redis_client, codes)
-    finally:
-        # 부분 실패/스킵이 있으면 캐시하지 않음(재요청 시 복구 가능하도록).
-        has_failed_or_skipped = bool(out.get("failed")) or bool(out.get("skipped"))
-        should_cache = (
-            claimed
-            and redis_client is not None
-            and key_stripped is not None
-            and status_code == 200
-            and bool(out)
-            and not has_failed_or_skipped
-        )
-        if should_cache and key_stripped is not None:
-            await set_trigger_idempotency_result(
-                redis_client, key_stripped, idempotency_scope, out
-            )
-        should_clear_claim = (
-            claimed
-            and redis_client is not None
-            and key_stripped is not None
-            and (status_code != 200 or has_failed_or_skipped)
-        )
-        if should_clear_claim and key_stripped is not None:
-            await clear_trigger_idempotency_in_progress(
-                redis_client, key_stripped, idempotency_scope
-            )
-    return JSONResponse(status_code=status_code, content=out)
+    cmd = TriggerCrawlCmd(
+        college_code=college_code,
+        idempotency_key=key_stripped,
+        client_ip=client_ip,
+    )
+    result = await internal_crawl_service.trigger(cmd)
+    status_code = _map_result_to_status(result)
+    return JSONResponse(status_code=status_code, content=result.payload)
 
 
 @router.get("/crawl-stats")
@@ -426,7 +276,8 @@ async def get_crawl_stats(
     authorization: str | None = Header(None),
     session: AsyncSession = Depends(get_read_only_db),
     redis_client: RedisAsyncio | None = Depends(get_redis_trigger_lock),
-) -> dict:
+    crawl_stats_service: CrawlStatsService = Depends(get_crawl_stats_service),
+) -> CrawlStatsResponse:
     """
     최근 크롤 실행 이력. 단과대별 last_run_at, status, notices_upserted, has_error.
     보안 키 필수. Header만 사용 (X-Crawl-Trigger-Secret 또는 Authorization: Bearer).
@@ -460,29 +311,20 @@ async def get_crawl_stats(
             detail="Too many internal stats requests, please try again later.",
             headers=_rate_limit_headers(),
         )
-    from app.core.read_cache import get_cached, set_cached
-
     state = getattr(request.app.state, "operational_mode", "NORMAL")
     ttl = getattr(settings, "read_cache_ttl_seconds", 60)
     cached = await get_cached(redis_client, "crawl_stats", str(limit))
     if cached is not None:
-        return cached
+        return CrawlStatsResponse.model_validate(cached)
     if state == "DEGRADED":
         raise HTTPException(
             status_code=503,
             detail="Service degraded; cached data unavailable. Try again later.",
             headers={"Retry-After": "60"},
         )
-    runs = await get_recent_crawl_runs(session, limit=limit)
-    sanitized: list[dict] = []
-    for run in runs:
-        # 원본 error_message는 응답에서 제거하고, has_error로만 실패 여부를 노출.
-        item = {k: v for k, v in run.items() if k != "error_message"}
-        item["has_error"] = bool(run.get("error_message"))
-        sanitized.append(item)
-    out = {"runs": sanitized, "limit": limit}
-    await set_cached(redis_client, ttl, "crawl_stats", str(limit), value=out)
-    return out
+    response = await crawl_stats_service.get_crawl_stats(session, limit=limit)
+    await set_cached(redis_client, ttl, "crawl_stats", str(limit), value=response.model_dump())
+    return response
 
 
 def _metrics_allowed_client_ip(request: Request) -> bool:

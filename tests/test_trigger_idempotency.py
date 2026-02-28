@@ -134,8 +134,14 @@ def test_trigger_crawl_failed_enqueue_clears_idempotency_claim(client, monkeypat
     monkeypatch.setattr(internal_module, "_authorize_internal_trigger", lambda *args, **kwargs: None)
     monkeypatch.setattr(internal_module, "check_rate_limit", _allow_rate_limit)
     monkeypatch.setattr(internal_module, "get_client_ip", lambda request: "127.0.0.1")
-    monkeypatch.setattr(internal_module, "acquire_trigger_lock", AsyncMock(return_value=(True, "lock-token")))
-    monkeypatch.setattr(internal_module, "release_trigger_lock", AsyncMock(return_value=True))
+    monkeypatch.setattr(
+        "app.services.internal_crawl_service.acquire_trigger_lock",
+        AsyncMock(return_value=(True, "lock-token")),
+    )
+    monkeypatch.setattr(
+        "app.services.internal_crawl_service.release_trigger_lock",
+        AsyncMock(return_value=True),
+    )
     app.dependency_overrides[get_redis_trigger_lock] = _override_redis
 
     call_count = {"n": 0}
