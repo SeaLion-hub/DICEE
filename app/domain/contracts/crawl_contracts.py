@@ -6,10 +6,17 @@ import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Protocol
+from typing import Any, NotRequired, Protocol, TypedDict
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
+
+
+class LinkItem(TypedDict):
+    """크롤 링크 1건. 리스트 목록/스크랩 입력. url 필수, no는 선택."""
+
+    url: str
+    no: NotRequired[str]
 
 
 @dataclass(frozen=True)
@@ -37,6 +44,26 @@ class CrawlRunRow:
     status: str
     notices_upserted: int
     error_message: str | None
+
+
+@dataclass(frozen=True)
+class CrawlRunItem:
+    """크롤 통계 1건(서비스 반환용). started_at/finished_at는 이미 문자열(isoformat)."""
+
+    college_code: str
+    started_at: str | None
+    finished_at: str | None
+    status: str
+    notices_upserted: int
+    has_error: bool
+
+
+@dataclass(frozen=True)
+class CrawlStatsResult:
+    """크롤 통계 조회 결과. 라우터에서 CrawlStatsResponse로 변환."""
+
+    runs: list[CrawlRunItem]
+    limit: int
 
 
 class CrawlStatsQueryPort(Protocol):

@@ -12,12 +12,12 @@ import logging
 import threading
 import uuid
 from collections import deque
-from functools import lru_cache
 from collections.abc import AsyncIterator, Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any, Protocol
+from functools import lru_cache
+from typing import Any, Protocol, cast
 
 import httpx
 from bs4 import BeautifulSoup
@@ -43,7 +43,7 @@ from app.core.crawl_rate_limit import (
 )
 from app.core.crawler_config import COLLEGE_CODE_TO_MODULE, CRAWLER_CONFIG, get_crawler, get_crawler_async
 from app.core.redis import get_shared_sync_redis_client
-from app.domain.contracts.crawl_contracts import NoticeDraft
+from app.domain.contracts.crawl_contracts import LinkItem, NoticeDraft
 from app.repositories.college_repository import (
     get_by_external_id as get_college_by_external_id,
 )
@@ -73,7 +73,7 @@ logger = logging.getLogger(__name__)
 class ScrapeAttemptResult:
     """한 건 스크랩 시도 결과. (post, detail_url, data, exc) 튜플 대신 이름으로 접근."""
 
-    post: dict
+    post: LinkItem
     detail_url: str
     data: ScrapeResult | None
     exc: Exception | None
@@ -93,7 +93,9 @@ class CrawlRuntimeConfig:
 
 @lru_cache(maxsize=1)
 def _load_crawl_runtime_config() -> CrawlRuntimeConfig:
-    """크롤 런타임 설정을 프로세스당 1회만 로드하고 캐시. 재시작 없이 변경할 일이 없으므로 기동 시 1회 로드로 성능 유리."""
+    """Load crawl runtime config once per process and reuse via cache.
+    Safe because these values are static during process lifetime.
+    """
     return CrawlRuntimeConfig(
         polite_delay_seconds=settings.polite_delay_seconds,
         page_timeout_seconds=settings.crawl_page_timeout_seconds,
@@ -246,7 +248,7 @@ def _resolve_module_and_list_url(college_code: str) -> tuple[str, str]:
     return module_name, config["url"]
 
 
-def _cap_links_for_run(links_raw: list[dict], college_code: str, max_links: int) -> list[dict]:
+def _cap_links_for_run(links_raw: list[LinkItem], college_code: str, max_links: int) -> list[LinkItem]:
     if len(links_raw) > max_links:
         logger.warning(
             "Links capped for OOM prevention: college_code=%s total=%d cap=%d",
@@ -284,7 +286,7 @@ class _SyncCrawlAdapter(Protocol):
     def collect_payloads(
         self,
         *,
-        links: list[dict],
+        links: list[LinkItem],
         college_id: uuid.UUID,
         scrape_fn: Callable,
         seen: _SeenSet,
@@ -299,7 +301,7 @@ class _AsyncCrawlAdapter(Protocol):
         self,
         *,
         client: httpx.AsyncClient,
-        links: list[dict],
+        links: list[LinkItem],
         college_id: uuid.UUID,
         scrape_async_fn: Callable,
         seen: _BoundedSeenSet,
@@ -317,7 +319,7 @@ class _DefaultSyncCrawlAdapter:
     def collect_payloads(
         self,
         *,
-        links: list[dict],
+        links: list[LinkItem],
         college_id: uuid.UUID,
         scrape_fn: Callable,
         seen: _SeenSet,
@@ -342,7 +344,7 @@ class _DefaultAsyncCrawlAdapter:
         self,
         *,
         client: httpx.AsyncClient,
-        links: list[dict],
+        links: list[LinkItem],
         college_id: uuid.UUID,
         scrape_async_fn: Callable,
         seen: _BoundedSeenSet,
@@ -391,7 +393,7 @@ async def _run_crawl_pipeline_async(
     seen = _init_seen_set_async(cfg.crawl_seen_max_size)
     async with httpx.AsyncClient(timeout=cfg.page_timeout_seconds) as client:
         links_raw = await get_links_async_fn(client, list_url)
-        links = _cap_links_for_run(links_raw, college_code, cfg.max_links_per_run)
+        links = _cap_links_for_run(cast(list[LinkItem], links_raw), college_code, cfg.max_links_per_run)
         total_links = len(links)
         if not links:
             logger.info(
@@ -446,7 +448,7 @@ async def crawl_college(session: AsyncSession, college_code: str) -> int:
     )
 
 
-def _scrape_one_sync(post: dict, scrape_fn: Callable) -> ScrapeAttemptResult:
+def _scrape_one_sync(post: LinkItem, scrape_fn: Callable) -> ScrapeAttemptResult:
     """워커용: scrape_fn(detail_url) 호출. data는 ScrapeResult 또는 None."""
     detail_url = post.get("url") or ""
     try:
@@ -469,7 +471,7 @@ _NETWORK_EXC_TYPES = (
 
 async def _fetch_one_async(
     client: httpx.AsyncClient,
-    post: dict,
+    post: LinkItem,
     scrape_async_fn,
     rate_limiter,
     sem: asyncio.Semaphore,
@@ -487,7 +489,7 @@ async def _fetch_one_async(
 
 async def _fetch_one_with_retry(
     client: httpx.AsyncClient,
-    post: dict,
+    post: LinkItem,
     scrape_async_fn,
     rate_limiter,
     sem: asyncio.Semaphore,
@@ -511,7 +513,7 @@ async def _fetch_one_with_retry(
 
 
 def _process_scrape_result(
-    post: dict,
+    post: LinkItem,
     detail_url: str,
     data: ScrapeResult | None,
     exc: Exception | None,
@@ -583,7 +585,7 @@ def _process_scrape_result(
 
 
 def _scrape_one_sync_with_sem(
-    post: dict,
+    post: LinkItem,
     scrape_fn: Callable,
     rate_limiter,
     sem: threading.BoundedSemaphore,
@@ -617,7 +619,7 @@ def _scrape_one_sync_with_sem(
 
 
 def _collect_payloads_sync(
-    links: list[dict],
+    links: list[LinkItem],
     college_id: uuid.UUID,
     scrape_fn: Callable,
     delay_sec: float,
@@ -687,7 +689,7 @@ def _collect_payloads_sync(
 
 async def _collect_payloads_async(
     client: httpx.AsyncClient,
-    links: list[dict],
+    links: list[LinkItem],
     college_id: uuid.UUID,
     scrape_async_fn,
     delay_sec: float,
@@ -706,14 +708,14 @@ async def _collect_payloads_async(
     tracker = CrawlErrorTracker()
     remaining = deque(links)
 
-    def _task(post: dict) -> asyncio.Task:
+    def _task(post: LinkItem) -> asyncio.Task[ScrapeAttemptResult]:
         return asyncio.create_task(_fetch_one_with_retry(client, post, scrape_async_fn, rate_limiter, sem))
 
     def _refill_pending() -> None:
         while len(pending) < concurrency and remaining:
             pending.add(_task(remaining.popleft()))
 
-    pending: set[asyncio.Task] = set()
+    pending: set[asyncio.Task[ScrapeAttemptResult]] = set()
     for _ in range(min(concurrency, len(remaining))):
         if not remaining:
             break
@@ -801,7 +803,7 @@ def _run_crawl_pipeline_sync(
     adapter: _SyncCrawlAdapter,
 ) -> tuple[int, list[uuid.UUID]]:
     links_raw = get_links_fn(list_url)
-    links = _cap_links_for_run(links_raw, college_code, cfg.max_links_per_run)
+    links = _cap_links_for_run(cast(list[LinkItem], links_raw), college_code, cfg.max_links_per_run)
     total_links = len(links)
     if not links:
         logger.info(

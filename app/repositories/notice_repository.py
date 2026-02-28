@@ -170,7 +170,7 @@ def _notice_values_no_content(payload: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def _notice_upsert_set_excluded(stmt: Any) -> dict:
+def _notice_upsert_set_excluded(stmt: Any) -> dict[str, Any]:
     """Bulk upsert set_ dict using excluded. content 변경 시 AI 재처리를 위해 ai_status='pending'."""
     return {
         "title": stmt.excluded.title,
@@ -204,7 +204,7 @@ def _keys_with_content_but_missing(
 
 def _build_missing_notice_stmt(
     missing: list[tuple[uuid.UUID, str]],
-):
+) -> Any:
     """missing 기준 Notice id/college_id/external_id 조회용 select statement. len(missing) >= 1 전제."""
     if len(missing) == 1:
         (cid, eid) = missing[0]

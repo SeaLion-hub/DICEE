@@ -62,7 +62,10 @@ class RedisLockUnavailableError(RedisInfraError):
 
 
 class RedisIdempotencyUnavailableError(RedisInfraError):
-    """Redis 인프라 오류로 idempotency 클레임 불가. 전역 핸들러에서 503 + code REDIS_IDEMPOTENCY_UNAVAILABLE으로 변환."""
+    """Redis infra error: idempotency claim unavailable.
+
+    Mapped to HTTP 503 with code REDIS_IDEMPOTENCY_UNAVAILABLE.
+    """
 
     pass
 
@@ -554,7 +557,8 @@ async def get_cache_with_soft_ttl(
 ) -> tuple[Any | None, bool]:
     """
     Soft TTL 캐시 조회 및 Mutex Lock 획득 (Cache Stampede 방어).
-    갱신에 성공한 호출자는 set_cache_with_soft_ttl 후 release_cache_lock(client, key)를 호출해 락을 조기 해제할 수 있습니다.
+    갱신에 성공한 호출자는 set_cache_with_soft_ttl 후
+    release_cache_lock(client, key)를 호출해 락을 조기 해제할 수 있습니다.
 
     반환값: (캐시된 데이터, DB조회_및_갱신_필요여부)
     - (data, False): 아주 신선한 캐시, 또는 다른 코루틴이 갱신 중이라 바로 반환해야 하는 약간 오래된 캐시

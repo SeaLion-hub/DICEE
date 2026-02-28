@@ -233,7 +233,7 @@ def test_auth_refresh_rate_limit_unavailable_returns_503(client, monkeypatch, ra
     assert "Rate limiting" in response.json().get("detail", "")
 
 
-def test_auth_google_client_ip_unresolved_returns_503(client, monkeypatch):
+def test_auth_google_client_ip_unresolved_returns_400(client, monkeypatch):
     """/v1/auth/google에서 client IP를 결정할 수 없으면 503을 반환한다."""
     from app.api.v1 import auth as auth_module
 
@@ -243,11 +243,11 @@ def test_auth_google_client_ip_unresolved_returns_503(client, monkeypatch):
         "/v1/auth/google",
         json={"code": "dummy-code", "redirect_uri": "https://example.com/callback"},
     )
-    assert response.status_code == 503
+    assert response.status_code == 400
     assert "Client IP" in response.json().get("detail", "")
 
 
-def test_auth_refresh_client_ip_unresolved_returns_503(client, monkeypatch):
+def test_auth_refresh_client_ip_unresolved_returns_400(client, monkeypatch):
     """/v1/auth/refresh에서 client IP를 결정할 수 없으면 503을 반환한다."""
     from app.api.v1 import auth as auth_module
 
@@ -257,7 +257,7 @@ def test_auth_refresh_client_ip_unresolved_returns_503(client, monkeypatch):
         "/v1/auth/refresh",
         json={"refresh_token": "dummy-refresh-token"},
     )
-    assert response.status_code == 503
+    assert response.status_code == 400
     assert "Client IP" in response.json().get("detail", "")
 
 

@@ -13,7 +13,7 @@ from urllib.parse import parse_qs, urlparse, urlunparse
 from bs4 import BeautifulSoup
 
 from app.core.storage import upload_notice_html
-from app.domain.contracts.crawl_contracts import NoticeDraft
+from app.domain.contracts.crawl_contracts import LinkItem, NoticeDraft
 
 logger = logging.getLogger(__name__)
 
@@ -138,7 +138,7 @@ def _attachments_to_dicts(attachments: list) -> list[dict]:
 
 def build_notice_payload(
     college_id: uuid.UUID,
-    post: dict,
+    post: LinkItem,
     detail_url: str,
     title: str,
     date_str: str | None,

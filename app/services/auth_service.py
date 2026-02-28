@@ -9,7 +9,6 @@ from urllib.parse import unquote, urlparse
 
 import httpx
 import jwt
-from pydantic import ValidationError
 from pyjwt_key_fetcher import AsyncKeyFetcher
 from redis.asyncio import Redis as RedisAsyncio
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -18,6 +17,7 @@ from app.core.config import settings
 from app.core.config.jwt import resolve_jwt_signing_algorithm
 from app.core.ip_hmac import compute_ip_hmac
 from app.core.redis import is_access_blocked
+from app.domain.contracts.auth_contracts import GoogleTokenResult, TokenResult
 from app.domain.contracts.user_contracts import UserUpsertCmd
 from app.repositories.login_audit_repository import create_login_audit
 from app.repositories.user_repository import (
@@ -25,7 +25,6 @@ from app.repositories.user_repository import (
     rotate_refresh_token_version,
     upsert_by_provider_uid,
 )
-from app.schemas.auth import GoogleTokenResponse, TokenResponse
 
 logger = logging.getLogger(__name__)
 
@@ -46,10 +45,10 @@ async def exchange_google_code(
     code: str,
     redirect_uri: str | None,
     client: httpx.AsyncClient,
-) -> GoogleTokenResponse:
+) -> GoogleTokenResult:
     """
     구글 OAuth Authorization Code를 액세스 토큰으로 교환.
-    Pydantic 검증, 네트워크 실패(Timeout, Connect) 시 AuthServiceUnavailableError(503)로 변환.
+    네트워크 실패(Timeout, Connect) 시 AuthServiceUnavailableError(503)로 변환.
     """
     client_secret = settings.google_client_secret.get_secret_value()
     try:
@@ -79,11 +78,25 @@ async def exchange_google_code(
         )
         raise AuthError("Invalid or expired authorization code")
 
-    data = resp.json()
     try:
-        return GoogleTokenResponse.model_validate(data)
-    except ValidationError as e:
+        data = resp.json()
+    except ValueError as e:
         raise AuthError("Invalid Google token response") from e
+    if not isinstance(data, dict) or not data.get("id_token"):
+        raise AuthError("Invalid Google token response")
+    expires_in_raw = data.get("expires_in")
+    try:
+        expires_in = int(expires_in_raw) if expires_in_raw is not None else None
+    except (TypeError, ValueError) as e:
+        raise AuthError("Invalid Google token response") from e
+    return GoogleTokenResult(
+        id_token=str(data["id_token"]),
+        access_token=str(data.get("access_token", "")),
+        token_type=str(data.get("token_type", "Bearer")),
+        expires_in=expires_in,
+        scope=str(data["scope"]) if data.get("scope") is not None else None,
+        refresh_token=str(data["refresh_token"]) if data.get("refresh_token") is not None else None,
+    )
 
 
 async def decode_google_id_token(id_token_str: str, key_fetcher: AsyncKeyFetcher) -> dict[str, Any]:
@@ -244,7 +257,7 @@ def verify_refresh_token(encoded: str) -> dict[str, Any]:
 async def refresh_tokens(
     refresh_token: str,
     session: AsyncSession,
-) -> TokenResponse:
+) -> TokenResult:
     """
     Refresh 토큰으로 Access/Refresh 쌍 발급. 1회성: 이전 CAS 방식처럼 version으로 발급.
     동일 사용 중인 토큰은 만료·폐지 시 AuthError(무효화된 토큰).
@@ -264,7 +277,7 @@ async def refresh_tokens(
     if new_version is None:
         raise AuthError("Refresh token revoked or invalid")
     access_token, new_refresh_token = create_jwt_pair(user_id, token_version=new_version)
-    return TokenResponse(
+    return TokenResult(
         access_token=access_token,
         refresh_token=new_refresh_token,
         token_type="bearer",
@@ -333,7 +346,7 @@ async def google_login(
     http_client: httpx.AsyncClient,
     key_fetcher: AsyncKeyFetcher,
     client_ip: str | None = None,
-) -> TokenResponse:
+) -> TokenResult:
     """
     구글 OAuth code로 로그인, redirect_uri allowlist·sub 보존 검증(Fail-fast).
     1. redirect_uri 허용 목록 검증·설정
@@ -353,8 +366,8 @@ async def google_login(
     else:
         # 설정 생략 시에만 검증 생략. (google_redirect_uris 비어 있음. 키로 범위로부터 설정 무효.)
         normalized = redirect_uri or "http://localhost"
-    token_data = await exchange_google_code(code, normalized, http_client)
-    id_token = token_data.id_token
+    token_result = await exchange_google_code(code, normalized, http_client)
+    id_token = token_result.id_token
 
     claims = await decode_google_id_token(id_token, key_fetcher)
     provider_user_id = claims.get("sub")
@@ -393,7 +406,7 @@ async def google_login(
 
     version = getattr(user, "refresh_token_version", 0)
     access_token, refresh_token = create_jwt_pair(user.id, token_version=version)
-    return TokenResponse(
+    return TokenResult(
         access_token=access_token,
         refresh_token=refresh_token,
         token_type="bearer",

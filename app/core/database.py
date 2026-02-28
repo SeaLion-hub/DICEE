@@ -346,7 +346,7 @@ class ReadOnlySessionWrapper:
         return getattr(self._session, name)
 
 
-async def get_read_only_db(request: Request) -> AsyncGenerator[AsyncSession, None]:
+async def get_read_only_db(request: Request) -> AsyncGenerator[ReadOnlySessionWrapper, None]:
     """
     FastAPI Depends용 비동기 읽기 전용(Read-Only) DB 세션 생성기.
     목록 조회 등 트래픽이 많은 SELECT 전용 API에서 사용하여

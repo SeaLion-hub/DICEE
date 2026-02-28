@@ -56,7 +56,7 @@ def _auth_rate_limit_dep(
         client_ip = get_client_ip(request)
         if client_ip is None:
             raise HTTPException(
-                status_code=503,
+                status_code=400,
                 detail="Client IP could not be determined; rate limiting requires a valid client identity.",
             )
         identifier = f"auth_{action}:{client_ip}"
@@ -163,7 +163,12 @@ async def post_google_auth(
             client_ip=client_ip,
         )
         await session.commit()
-        return result
+        return TokenResponse(
+            access_token=result.access_token,
+            refresh_token=result.refresh_token,
+            token_type=result.token_type,
+            expires_in=result.expires_in,
+        )
     except AuthServiceUnavailableError as e:
         logger.warning("Google auth unavailable: %s", e)
         raise HTTPException(
@@ -223,9 +228,14 @@ async def post_refresh(
         )
 
     try:
-        tokens = await refresh_tokens(payload.refresh_token, session)
+        result = await refresh_tokens(payload.refresh_token, session)
         await session.commit()
-        return tokens
+        return TokenResponse(
+            access_token=result.access_token,
+            refresh_token=result.refresh_token,
+            token_type=result.token_type,
+            expires_in=result.expires_in,
+        )
     except AuthError as e:
         await session.rollback()
         logger.warning("Refresh token error: %s", e)

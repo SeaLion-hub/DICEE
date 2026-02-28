@@ -25,4 +25,4 @@ class CeleryCrawlDispatcher:
             kwargs={"enqueued_at": enqueued_at},
             countdown=countdown,
         )
-        return result.id
+        return str(result.id)

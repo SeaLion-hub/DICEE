@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Protocol
+from typing import Any, Protocol
 
 
 class TriggerCrawlResultKind(str, Enum):
@@ -28,7 +28,7 @@ class TriggerCrawlResult:
     """트리거 크롤 결과. status_code 없음. Router가 result_kind로 변환."""
 
     result_kind: TriggerCrawlResultKind
-    payload: dict
+    payload: dict[str, Any]
 
 
 class CrawlDispatcherPort(Protocol):

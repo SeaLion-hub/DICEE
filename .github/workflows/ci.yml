@@ -47,6 +47,9 @@ jobs:
       - name: Mypy
         run: mypy app
 
+      - name: Architecture guard
+        run: pytest -q tests/test_architecture_imports.py
+
       - name: Ensure single Alembic head
         env:
           APP_ENTRY: api
@@ -64,3 +67,9 @@ jobs:
 
       - name: Pytest
         run: pytest tests -v
+
+      - name: Baseline summary (optional)
+        run: |
+          pytest tests -q --tb=no 2>&1 | tee pytest_baseline.txt || true
+          echo "Pytest baseline:" >> $GITHUB_STEP_SUMMARY
+          cat pytest_baseline.txt >> $GITHUB_STEP_SUMMARY || true

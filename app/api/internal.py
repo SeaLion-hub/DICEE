@@ -35,7 +35,7 @@ from app.domain.contracts.internal_contracts import (
     TriggerCrawlResult,
     TriggerCrawlResultKind,
 )
-from app.schemas.internal import CrawlStatsResponse
+from app.schemas.internal import CrawlRunStatsItem, CrawlStatsResponse
 from app.services.crawl_stats_service import CrawlStatsService
 
 router = APIRouter(prefix="/internal", tags=["internal"])
@@ -322,7 +322,21 @@ async def get_crawl_stats(
             detail="Service degraded; cached data unavailable. Try again later.",
             headers={"Retry-After": "60"},
         )
-    response = await crawl_stats_service.get_crawl_stats(session, limit=limit)
+    result = await crawl_stats_service.get_crawl_stats(session, limit=limit)
+    response = CrawlStatsResponse(
+        runs=[
+            CrawlRunStatsItem(
+                college_code=r.college_code,
+                started_at=r.started_at,
+                finished_at=r.finished_at,
+                status=r.status,
+                notices_upserted=r.notices_upserted,
+                has_error=r.has_error,
+            )
+            for r in result.runs
+        ],
+        limit=result.limit,
+    )
     await set_cached(redis_client, ttl, "crawl_stats", str(limit), value=response.model_dump())
     return response
 

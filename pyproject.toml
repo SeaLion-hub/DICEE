@@ -1,7 +1,7 @@
 [project]
 name = "dicee"
 version = "0.1.0"
-description = "연세대 공지 매칭 백엔드"
+description = "DICEE backend"
 requires-python = ">=3.11"
 
 [tool.pytest.ini_options]
@@ -37,5 +37,6 @@ disallow_untyped_defs = false
 module = ["celery", "celery.*"]
 ignore_missing_imports = true
 
-# App overrides 제거: Phase 2 타입 수정·헬퍼(ensure_str_attr)·boto3(types-boto3) 적용 후 mypy 0 목표.
-# 필요 시 특정 모듈만 최소 범위로 재추가.
+# NOTE:
+# Keep `mypy app` baseline green first. Add strictness later with per-module flags
+# (e.g. disallow_untyped_defs) instead of `strict = true` in overrides.
