@@ -19,7 +19,7 @@ from app.core.api_rate_limit import (
 )
 from app.core.config import settings
 from app.core.crawler_config import COLLEGE_CODE_TO_MODULE
-from app.core.database import get_db
+from app.core.database import get_db, get_read_only_db
 from app.core.deps import get_redis_trigger_lock
 from app.core.internal_auth import (
     CrawlTriggerNotConfiguredError,
@@ -325,7 +325,7 @@ async def get_crawl_stats(
     limit: int = Query(50, ge=1, le=200, description="최근 N건"),
     x_crawl_trigger_secret: str | None = Header(None, alias="X-Crawl-Trigger-Secret"),
     authorization: str | None = Header(None),
-    session: AsyncSession = Depends(get_db),
+    session: AsyncSession = Depends(get_read_only_db),
     redis_client: RedisAsyncio | None = Depends(get_redis_trigger_lock),
 ) -> dict:
     """

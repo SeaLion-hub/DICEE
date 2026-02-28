@@ -11,7 +11,7 @@ from typing import Any
 from sqlalchemy import select, tuple_, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import Session, defer
+from sqlalchemy.orm import Session, defer, selectinload
 
 from app.models.notice import Notice
 from app.models.notice_content import NoticeContent
@@ -21,6 +21,54 @@ NOTICE_LIST_DEFER_OPTIONS = (
     defer(Notice.images),
     defer(Notice.attachments),
 )
+
+
+async def list_notices_paginated(
+    session: AsyncSession,
+    *,
+    limit: int = 20,
+    offset: int = 0,
+    college_id: uuid.UUID | None = None,
+    load_college: bool = True,
+) -> list[Notice]:
+    """
+    공지 목록 페이지네이션 조회. N+1 방지: NOTICE_LIST_DEFER_OPTIONS + 필요 시 selectinload(Notice.college).
+    5단계 목록 API에서 사용. deleted_at IS NULL만 반환.
+    """
+    stmt = (
+        select(Notice)
+        .where(Notice.deleted_at.is_(None))
+        .options(*NOTICE_LIST_DEFER_OPTIONS)
+        .order_by(Notice.published_at.desc().nulls_last(), Notice.created_at.desc())
+        .limit(limit)
+        .offset(offset)
+    )
+    if load_college:
+        stmt = stmt.options(selectinload(Notice.college))
+    if college_id is not None:
+        stmt = stmt.where(Notice.college_id == college_id)
+    result = await session.execute(stmt)
+    return list(result.scalars().unique().all())
+
+
+async def get_notice_by_id_with_relations(
+    session: AsyncSession,
+    notice_id: uuid.UUID,
+) -> Notice | None:
+    """
+    공지 1건 상세 조회. college, notice_content 관계를 selectinload로 한 번에 로딩하여 N+1 방지.
+    5단계 상세 API에서 사용.
+    """
+    stmt = (
+        select(Notice)
+        .where(Notice.id == notice_id, Notice.deleted_at.is_(None))
+        .options(
+            selectinload(Notice.college),
+            selectinload(Notice.notice_content),
+        )
+    )
+    result = await session.execute(stmt)
+    return result.scalars().unique().one_or_none()
 
 
 def get_by_id_sync(session: Session, notice_id: uuid.UUID) -> Notice | None:

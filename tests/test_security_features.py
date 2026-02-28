@@ -10,7 +10,7 @@ from pydantic import SecretStr
 def test_crawl_stats_masks_error_message(client, monkeypatch):
     """GET /internal/crawl-stats 응답에서 error_message는 제거되고 has_error만 노출된다."""
     from app.api import internal as internal_module
-    from app.core.database import get_db
+    from app.core.database import get_read_only_db
     from app.main import app
 
     # 인증 우회: 이 테스트는 응답 마스킹만 검증
@@ -34,18 +34,18 @@ def test_crawl_stats_masks_error_message(client, monkeypatch):
 
     monkeypatch.setattr("app.api.internal.get_recent_crawl_runs", _fake_get_recent_crawl_runs)
 
-    # DB 의존성은 더미 세션으로 대체해, DATABASE_URL 없이도 테스트 가능하게 한다.
-    async def _fake_get_db():
+    # DB 의존성은 더미 세션으로 대체해, DATABASE_URL 없이도 테스트 가능하게 한다. (crawl-stats는 get_read_only_db 사용)
+    async def _fake_get_read_only_db():
         class _DummySession:
             ...
 
         yield _DummySession()
 
-    app.dependency_overrides[get_db] = _fake_get_db
+    app.dependency_overrides[get_read_only_db] = _fake_get_read_only_db
     try:
         response = client.get("/internal/crawl-stats")
     finally:
-        app.dependency_overrides.pop(get_db, None)
+        app.dependency_overrides.pop(get_read_only_db, None)
     assert response.status_code == 200
     data = response.json()
     assert "runs" in data
@@ -59,7 +59,7 @@ def test_crawl_stats_invalid_secret_logs_auth_failure(client, monkeypatch):
     """GET /internal/crawl-stats에 잘못된 시크릿으로 요청 시 _log_internal_auth_failure가 호출된다."""
     from app.api import internal as internal_module
     from app.core.config import settings
-    from app.core.database import get_db
+    from app.core.database import get_read_only_db
     from app.main import app
 
     monkeypatch.setattr(settings, "crawl_trigger_secret", SecretStr("correct-secret"))
@@ -74,20 +74,20 @@ def test_crawl_stats_invalid_secret_logs_auth_failure(client, monkeypatch):
         _spy_log_internal_auth_failure,
     )
 
-    async def _fake_get_db():
+    async def _fake_get_read_only_db():
         class _DummySession:
             ...
 
         yield _DummySession()
 
-    app.dependency_overrides[get_db] = _fake_get_db
+    app.dependency_overrides[get_read_only_db] = _fake_get_read_only_db
     try:
         response = client.get(
             "/internal/crawl-stats",
             headers={"X-Crawl-Trigger-Secret": "wrong-secret"},
         )
     finally:
-        app.dependency_overrides.pop(get_db, None)
+        app.dependency_overrides.pop(get_read_only_db, None)
     assert response.status_code == 401
     assert len(log_calls) == 1
     assert log_calls[0]["reason"] == "invalid_or_missing_secret"
@@ -580,7 +580,7 @@ def test_check_crawl_trigger_secret_valid_and_invalid(monkeypatch):
 
 def test_crawl_stats_returns_503_when_client_ip_unresolved(client, monkeypatch):
     from app.api import internal as internal_module
-    from app.core.database import get_db
+    from app.core.database import get_read_only_db
     from app.core.deps import get_redis_trigger_lock
     from app.main import app
 
@@ -590,7 +590,7 @@ def test_crawl_stats_returns_503_when_client_ip_unresolved(client, monkeypatch):
     async def _allow_rate_limit(*args, **kwargs):
         return True
 
-    async def _fake_get_db():
+    async def _fake_get_read_only_db():
         class _DummySession:
             pass
 
@@ -602,12 +602,12 @@ def test_crawl_stats_returns_503_when_client_ip_unresolved(client, monkeypatch):
     monkeypatch.setattr(internal_module, "_authorize_internal_trigger", _noop_authorize)
     monkeypatch.setattr(internal_module, "get_client_ip", lambda request: None)
     monkeypatch.setattr(internal_module, "check_rate_limit", _allow_rate_limit)
-    app.dependency_overrides[get_db] = _fake_get_db
+    app.dependency_overrides[get_read_only_db] = _fake_get_read_only_db
     app.dependency_overrides[get_redis_trigger_lock] = _fake_redis
     try:
         response = client.get("/internal/crawl-stats")
     finally:
-        app.dependency_overrides.pop(get_db, None)
+        app.dependency_overrides.pop(get_read_only_db, None)
         app.dependency_overrides.pop(get_redis_trigger_lock, None)
 
     assert response.status_code == 503

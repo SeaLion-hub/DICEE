@@ -31,6 +31,8 @@
 ---
 ## 2026-02-28
 
+- [배포·보안 가정 확인 정리] **(1) API_RATE_LIMIT_REQUIRE_REDIS** — 사용자가 운영(메인 앱) Variables에 `true`로 설정 완료. Redis 장애 시 503 반환·in-memory 우회 방지. **(2) /internal/* 노출** — 외부에서 `POST /internal/trigger-crawl` (잘못된 시크릿) 호출 시 401 응답 확인됨. 경로는 공개되어 있으며 WAF/사설망 제한 없음; 시크릿·rate limit으로만 보호. **(3) X-Forwarded-For** — 프록시가 헤더를 overwrite/정규화하는지는 배포 환경별로 상이하므로, 필요 시 `get_client_ip` 진입부에 `x_forwarded_for`/`client_host` 로그를 임시 추가해 확인 후 제거. (확인용 로그는 추가 후 제거 완료.)
+
 - [인프라·연동 안정성 보완] **(1) Config strip** — app/core/config/base.py: database_url, redis_url, redis_celery_url, s3_bucket, content_storage_type, allowed_origins, jwt_secret, google_client_secret, crawl_trigger_secret에 field_validator(mode=before)로 strip 적용. tests/test_env_and_config_whitespace.py에 Settings 로드 시 strip 검증 테스트 3건 추가. **(2) S3 싱글톤** — app/core/storage.py: _s3_client 모듈 변수·_build_s3_client lazy singleton으로 변경. **(3) Redis** — app/core/redis.py: release_cache_lock(client, key) 추가, set_cache_with_soft_ttl/get_cache_with_soft_ttl docstring에 조기 해제 패턴 명시. BlocklistCircuitBreaker._record_failure에서 half_open에서 실패 시 redis_blocklist_circuit_half_open_interval_seconds 사용하도록 수정. **(4) 문서화** — docs/decisions/redis-celery-separation.md: 운영·장애 시 동작(broker/result_backend, visibility_timeout, acks_late, reject_on_worker_lost), Redis 클라이언트 용도 정책(read_cache·trigger_lock, sync 싱글톤) 보강. pytest 122 passed, 3 skipped.
 
 ---
