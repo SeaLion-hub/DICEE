@@ -137,9 +137,7 @@ def create_trigger_lock_client() -> RedisAsyncio | None:
     return redis.Redis(connection_pool=pool)
 
 
-async def _add_access_to_blocklist_raw(
-    client: RedisAsyncio | None, jti: str, ttl_seconds: int
-) -> None:
+async def _add_access_to_blocklist_raw(client: RedisAsyncio | None, jti: str, ttl_seconds: int) -> None:
     """Blocklist 추가(원시). Circuit Breaker에서 호출."""
     if client is None or ttl_seconds <= 0:
         return
@@ -170,7 +168,9 @@ class BlocklistCircuitBreaker:
                 self._state = "open"
                 # half_open에서 실패한 뒤에는 더 짧은 대기(half_open_interval)로 재시도 허용
                 if was_half_open:
-                    self._open_until = time.monotonic() + settings.redis.redis_blocklist_circuit_half_open_interval_seconds
+                    self._open_until = (
+                        time.monotonic() + settings.redis.redis_blocklist_circuit_half_open_interval_seconds
+                    )
                 else:
                     self._open_until = time.monotonic() + settings.redis.redis_blocklist_circuit_open_seconds
 
@@ -188,9 +188,7 @@ class BlocklistCircuitBreaker:
 _blocklist_circuit = BlocklistCircuitBreaker()
 
 
-async def add_access_to_blocklist(
-    client: RedisAsyncio | None, jti: str, ttl_seconds: int
-) -> None:
+async def add_access_to_blocklist(client: RedisAsyncio | None, jti: str, ttl_seconds: int) -> None:
     """Access Token jti를 Blocklist에 추가. Circuit Breaker 적용. 열림 시 BlocklistUnavailableError."""
     if client is None or ttl_seconds <= 0:
         return
@@ -205,9 +203,7 @@ async def add_access_to_blocklist(
         raise BlocklistUnavailableError("Blocklist temporarily unavailable") from e
 
 
-async def acquire_trigger_lock(
-    client: RedisAsyncio | None, college_code: str
-) -> tuple[bool, str | None]:
+async def acquire_trigger_lock(client: RedisAsyncio | None, college_code: str) -> tuple[bool, str | None]:
     """
     college별 크롤 트리거 락 획득. SET key <uuid> NX EX.
     성공 시 (True, token), 이미 잠김 시 (False, None).
@@ -229,15 +225,11 @@ async def acquire_trigger_lock(
             increment(LOCK_CONFLICT_TOTAL)
         return (bool(ok), token if ok else None)
     except Exception as e:
-        logger.warning(
-            "Trigger lock acquire failed (college=%s): %s", college_code, e, exc_info=True
-        )
+        logger.warning("Trigger lock acquire failed (college=%s): %s", college_code, e, exc_info=True)
         raise RedisLockUnavailableError("Redis unavailable") from e
 
 
-async def release_trigger_lock(
-    client: RedisAsyncio | None, college_code: str, token: str
-) -> bool:
+async def release_trigger_lock(client: RedisAsyncio | None, college_code: str, token: str) -> bool:
     """
     락 해제(소유자만). Lua compare-and-del. client는 redis.asyncio.Redis.
     반환: True=삭제됨, False=소유자 아님 또는 이미 없음.
@@ -249,9 +241,7 @@ async def release_trigger_lock(
         raw = await cast(Awaitable[Any], client.eval(LUA_RELEASE_IF_OWNER, 1, key, token))
         return bool(raw == 1)
     except Exception as e:
-        logger.warning(
-            "Trigger lock release failed (college=%s): %s", college_code, e, exc_info=True
-        )
+        logger.warning("Trigger lock release failed (college=%s): %s", college_code, e, exc_info=True)
         return False
 
 
@@ -295,9 +285,7 @@ async def try_claim_trigger_idempotency(
         return bool(ok)
     except Exception as e:
         if fail_closed:
-            raise RedisIdempotencyUnavailableError(
-                "Trigger idempotency claim failed."
-            ) from e
+            raise RedisIdempotencyUnavailableError("Trigger idempotency claim failed.") from e
         logger.warning(
             "Trigger idempotency claim failed; proceeding without idempotency: %s",
             e,
@@ -305,9 +293,7 @@ async def try_claim_trigger_idempotency(
         return True
 
 
-async def get_trigger_idempotency_result(
-    client: RedisAsyncio | None, idempotency_key: str, scope: str
-) -> dict | None:
+async def get_trigger_idempotency_result(client: RedisAsyncio | None, idempotency_key: str, scope: str) -> dict | None:
     """동일 Idempotency-Key+scope로 이미 처리된 결과가 있으면 반환. 없으면 None.
     in_progress 값은 완료가 아니므로 별도 처리."""
     if client is None or not idempotency_key:
@@ -335,9 +321,7 @@ async def set_trigger_idempotency_result(
     scope_hash = _idempotency_scope_hash(scope)
     key = f"{TRIGGER_IDEMPOTENCY_KEY_PREFIX}{_idempotency_key_hash(idempotency_key)}:{scope_hash}"
     try:
-        await client.set(
-            key, json.dumps(payload), ex=TRIGGER_IDEMPOTENCY_TTL_SECONDS
-        )
+        await client.set(key, json.dumps(payload), ex=TRIGGER_IDEMPOTENCY_TTL_SECONDS)
     except Exception as e:
         logger.warning("Trigger idempotency set failed: %s", e)
 
@@ -421,9 +405,7 @@ def renew_trigger_lock_sync(college_code: str, lock_token: str | None) -> bool:
         n = client.eval(LUA_RENEW_IF_OWNER, 1, key, lock_token, ttl)
         return bool(n == 1)
     except Exception as e:
-        logger.warning(
-            "Trigger lock renew failed (college=%s): %s", college_code, e, exc_info=True
-        )
+        logger.warning("Trigger lock renew failed (college=%s): %s", college_code, e, exc_info=True)
         return False
 
 
@@ -446,9 +428,7 @@ def release_trigger_lock_sync(college_code: str, lock_token: str | None) -> None
         key = f"{TRIGGER_LOCK_KEY_PREFIX}{college_code}"
         client.eval(LUA_RELEASE_IF_OWNER, 1, key, lock_token)
     except Exception as e:
-        logger.warning(
-            "Trigger lock release failed (college=%s): %s", college_code, e, exc_info=True
-        )
+        logger.warning("Trigger lock release failed (college=%s): %s", college_code, e, exc_info=True)
 
 
 def claim_crawl_task_execution(task_id: str) -> bool:
@@ -497,9 +477,7 @@ def release_crawl_task_execution(task_id: str) -> None:
         logger.warning("Task execution release failed (task_id=%s): %s", task_id, e, exc_info=True)
 
 
-async def _is_access_blocked_raw(
-    client: RedisAsyncio | None, jti: str
-) -> bool:
+async def _is_access_blocked_raw(client: RedisAsyncio | None, jti: str) -> bool:
     """Blocklist 조회(원시). Circuit Breaker에서 호출."""
     if client is None:
         return False
@@ -508,9 +486,7 @@ async def _is_access_blocked_raw(
     return bool(exists)
 
 
-async def is_access_blocked(
-    client: RedisAsyncio | None, jti: str, *, fail_closed: bool
-) -> bool:
+async def is_access_blocked(client: RedisAsyncio | None, jti: str, *, fail_closed: bool) -> bool:
     """
     jti가 Blocklist에 있으면 True(무효). Circuit Breaker 적용.
     열림(open) 시 fail_closed=True면 True(인증 거부), False면 False.
@@ -534,6 +510,7 @@ async def is_access_blocked(
 # Cache Stampede 방어막: Soft TTL + Mutex Lock 로직
 # ==============================================================================
 
+
 async def set_cache_with_soft_ttl(
     client: RedisAsyncio | None,
     key: str,
@@ -549,10 +526,7 @@ async def set_cache_with_soft_ttl(
     """
     if client is None:
         return
-    payload = {
-        "data": data,
-        "soft_ttl": time.time() + soft_ttl_seconds
-    }
+    payload = {"data": data, "soft_ttl": time.time() + soft_ttl_seconds}
     try:
         await client.set(key, json.dumps(payload), ex=hard_ttl_seconds)
     except Exception as e:
@@ -576,9 +550,7 @@ async def release_cache_lock(client: RedisAsyncio | None, key: str) -> None:
 
 
 async def get_cache_with_soft_ttl(
-    client: RedisAsyncio | None,
-    key: str,
-    lock_ttl_seconds: int = 10
+    client: RedisAsyncio | None, key: str, lock_ttl_seconds: int = 10
 ) -> tuple[Any | None, bool]:
     """
     Soft TTL 캐시 조회 및 Mutex Lock 획득 (Cache Stampede 방어).

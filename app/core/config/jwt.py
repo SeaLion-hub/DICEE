@@ -1,4 +1,4 @@
-﻿from typing import Literal
+from typing import Literal
 
 JwtSigningMode = Literal["auto", "hs256", "rs256"]
 JwtAlgorithm = Literal["HS256", "RS256"]

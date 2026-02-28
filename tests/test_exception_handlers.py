@@ -27,10 +27,9 @@ async def test_global_exception_handler_never_leaks_stack_or_message():
 
 
 async def test_sanitize_5xx_replaces_body_without_forwarding_unsafe_headers():
+    from app.middleware.sanitize_5xx import Sanitize5xxMiddleware
     from starlette.requests import Request
     from starlette.responses import PlainTextResponse
-
-    from app.middleware.sanitize_5xx import Sanitize5xxMiddleware
 
     async def _noop_app(scope, receive, send):
         return None

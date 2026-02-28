@@ -119,7 +119,7 @@ def scrape_science_detail(url):
 
         attachments = []
         attachment_names_sync: set[str] = set()
-        file_divs = soup.find_all('div', class_='file-name-area')
+        file_divs = soup.find_all("div", class_="file-name-area")
         for fdiv in file_divs:
             if not isinstance(fdiv, Tag):
                 continue

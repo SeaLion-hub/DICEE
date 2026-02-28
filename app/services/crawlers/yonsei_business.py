@@ -113,11 +113,13 @@ def get_business_notice_links(list_url):
                 # 중복 방지 (set 기반 O(1))
                 if full_url not in seen_urls:
                     seen_urls.add(full_url)
-                    links.append({
-                        "no": no_text,
-                        "url": full_url,
-                        "title_hint": title_text # 디버깅용
-                    })
+                    links.append(
+                        {
+                            "no": no_text,
+                            "url": full_url,
+                            "title_hint": title_text,  # 디버깅용
+                        }
+                    )
 
         return links
 
@@ -206,7 +208,7 @@ def scrape_business_detail(url):
 
                         if full_url_str not in image_urls:
                             image_urls.add(full_url_str)
-                            images.append({"type":"url", "data":full_url_str, "name":fname})
+                            images.append({"type": "url", "data": full_url_str, "name": fname})
 
         # 5. 첨부파일 (downloadfile.asp)
         attachments: list[str] = []
@@ -236,9 +238,7 @@ def scrape_business_detail(url):
 
 async def get_business_notice_links_async(client: httpx.AsyncClient, list_url: str):
     try:
-        text = await fetch_html_async(
-            client, list_url, timeout=10.0, encoding="cp949"
-        )
+        text = await fetch_html_async(client, list_url, timeout=10.0, encoding="cp949")
         soup = BeautifulSoup(text, "html.parser")
         links: list[dict[str, Any]] = []
         seen_urls: set[str] = set()

@@ -159,9 +159,9 @@ def scrape_yonsei_engineering_precise(url):
                     if full_url in seen_image_urls:
                         continue
                     seen_image_urls.add(full_url)
-                    fn_raw = img.get('data-file_name')
-                    file_name = fn_raw if isinstance(fn_raw, str) and fn_raw else os.path.basename(src.split('?')[0])
-                    if not file_name or '.' not in file_name:
+                    fn_raw = img.get("data-file_name")
+                    file_name = fn_raw if isinstance(fn_raw, str) and fn_raw else os.path.basename(src.split("?")[0])
+                    if not file_name or "." not in file_name:
                         file_name = f"image_{idx+1}.jpg"
                     images_data.append(
                         {
@@ -367,8 +367,11 @@ async def scrape_yonsei_engineering_precise_async(client: httpx.AsyncClient, url
                     file_name = link.get_text(strip=True)
                     href = ensure_str_attr(link.get("href", ""))
                     if (
-                        href and not href.startswith("#") and "javascript" not in href
-                        and file_name and file_name not in attachment_names_set
+                        href
+                        and not href.startswith("#")
+                        and "javascript" not in href
+                        and file_name
+                        and file_name not in attachment_names_set
                     ):
                         attachment_names_set.add(file_name)
                         attachment_names.append(file_name)

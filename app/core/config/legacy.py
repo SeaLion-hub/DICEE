@@ -1,4 +1,4 @@
-﻿import os
+import os
 import threading
 
 _legacy_guard_allow = threading.local()

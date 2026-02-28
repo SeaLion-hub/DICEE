@@ -5,8 +5,9 @@
 """
 
 import uuid
+from collections.abc import Sequence
 from datetime import UTC, datetime
-from typing import Any, Sequence
+from typing import Any
 
 from sqlalchemy import select, tuple_, update
 from sqlalchemy.dialects.postgresql import insert
@@ -83,11 +84,7 @@ def get_notice_for_ai_sync(session: Session, notice_id: uuid.UUID) -> Notice | N
     AI 처리 대상 1건 선점. ai_status='pending'인 행만 FOR UPDATE SKIP LOCKED로 잡고
     ai_status='processing'으로 갱신 후 반환. 동시 워커 중복 처리 방지.
     """
-    stmt = (
-        select(Notice)
-        .where(Notice.id == notice_id, Notice.ai_status == "pending")
-        .with_for_update(skip_locked=True)
-    )
+    stmt = select(Notice).where(Notice.id == notice_id, Notice.ai_status == "pending").with_for_update(skip_locked=True)
     result = session.execute(stmt)
     notice = result.scalar_one_or_none()
     if notice is None:
@@ -103,11 +100,7 @@ def update_ai_result_sync(
     ai_extracted_json: dict[str, Any],
 ) -> None:
     """AI 처리 완료 시 ai_status='done', ai_extracted_json 저장 (동기, 워커용)."""
-    stmt = (
-        update(Notice)
-        .where(Notice.id == notice_id)
-        .values(ai_status="done", ai_extracted_json=ai_extracted_json)
-    )
+    stmt = update(Notice).where(Notice.id == notice_id).values(ai_status="done", ai_extracted_json=ai_extracted_json)
     session.execute(stmt)
     session.flush()
 

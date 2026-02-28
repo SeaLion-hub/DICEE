@@ -121,9 +121,7 @@ def get_crawler_async(
     get_links_async_fn = getattr(mod, get_links_async_name, None)
     scrape_async_fn = getattr(mod, scrape_async_name, None)
     if not get_links_async_fn or not scrape_async_fn:
-        raise ValueError(
-            f"Module {module_name} missing {get_links_async_name} or {scrape_async_name}"
-        )
+        raise ValueError(f"Module {module_name} missing {get_links_async_name} or {scrape_async_name}")
     return (get_links_async_fn, scrape_async_fn)
 
 
@@ -143,6 +141,4 @@ def validate_crawler_contract() -> None:
         missing = [name for name in required if not callable(getattr(mod, name, None))]
         if missing:
             missing_str = ", ".join(missing)
-            raise ValueError(
-                f"Crawler module {module_name} missing required callables: {missing_str}"
-            )
+            raise ValueError(f"Crawler module {module_name} missing required callables: {missing_str}")

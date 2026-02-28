@@ -156,7 +156,7 @@ def scrape_glc_detail(url):
         # 5. 첨부파일 추출
         attachments = []
         attachment_names_glc: set[str] = set()
-        buttons = soup.find_all('button', class_=lambda c: c and 'kboard-button-download' in c)
+        buttons = soup.find_all("button", class_=lambda c: c and "kboard-button-download" in c)
         for btn in buttons:
             if not isinstance(btn, Tag):
                 continue

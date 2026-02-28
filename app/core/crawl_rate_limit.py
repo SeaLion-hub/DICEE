@@ -93,9 +93,8 @@ class RedisHostRateLimiterSync:
         if redis_url and (redis_url or "").strip():
             try:
                 import redis
-                self._client = redis.Redis.from_url(
-                    redis_url.strip(), decode_responses=True
-                )
+
+                self._client = redis.Redis.from_url(redis_url.strip(), decode_responses=True)
             except Exception as e:
                 logger.warning(
                     "Redis rate limit client init failed; using in-memory fallback: %s",
@@ -123,9 +122,7 @@ class RedisHostRateLimiterSync:
             if wait_sec > 0:
                 time.sleep(wait_sec)
         except Exception as e:
-            logger.debug(
-                "Redis rate limit failed (host=%s); using fallback: %s", host, e
-            )
+            logger.debug("Redis rate limit failed (host=%s); using fallback: %s", host, e)
             self._fallback.wait_sync(host)
 
     def close(self) -> None:
@@ -143,6 +140,7 @@ def get_host_rate_limiter_sync(min_interval_sec: float):
     """동기 크롤용 limiter. Redis URL 있으면 RedisHostRateLimiterSync, 없으면 HostRateLimiter."""
     try:
         from app.core.config import settings
+
         redis_url = (settings.redis.redis_url or "").strip() or ""
         if (redis_url or "").strip():
             return RedisHostRateLimiterSync(min_interval_sec, redis_url.strip())

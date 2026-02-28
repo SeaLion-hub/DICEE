@@ -218,15 +218,15 @@ def scrape_medicine_detail(url):
                         full_url = urljoin(url, src)
                         if full_url not in image_urls_med:
                             image_urls_med.add(full_url)
-                            fname = os.path.basename(full_url.split('?')[0])
-                            if not fname or '.' not in fname:
+                            fname = os.path.basename(full_url.split("?")[0])
+                            if not fname or "." not in fname:
                                 fname = "image.jpg"
-                            images.append({"type":"url", "data":full_url, "name":fname})
+                            images.append({"type": "url", "data": full_url, "name": fname})
 
         # 5. 첨부파일
         attachments = []
         attachment_names_med: set[str] = set()
-        attach_div = soup.find('div', class_='attach-files')
+        attach_div = soup.find("div", class_="attach-files")
         if attach_div and isinstance(attach_div, Tag):
             for a in attach_div.find_all("a"):
                 if not isinstance(a, Tag):

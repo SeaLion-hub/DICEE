@@ -12,7 +12,6 @@ from app.core.config import settings
 from app.core.crawler_config import COLLEGE_CODE_TO_MODULE
 from app.core.exceptions import CollegeNotFoundError
 from app.core.redis import (
-    RedisIdempotencyUnavailableError,
     RedisLockUnavailableError,
     acquire_trigger_lock,
     clear_trigger_idempotency_in_progress,
@@ -35,9 +34,7 @@ def _resolve_college_codes(college_code: str | None) -> list[str]:
     """college_code 정규화·검증 후 코드 목록. 미등록 단일 코드 시 CollegeNotFoundError."""
     normalized = college_code.strip() if college_code and college_code.strip() else None
     if normalized and normalized not in COLLEGE_CODE_TO_MODULE:
-        raise CollegeNotFoundError(
-            f"Unknown college_code: {normalized}. Valid: {list(COLLEGE_CODE_TO_MODULE.keys())}"
-        )
+        raise CollegeNotFoundError(f"Unknown college_code: {normalized}. Valid: {list(COLLEGE_CODE_TO_MODULE.keys())}")
     return [normalized] if normalized else list(COLLEGE_CODE_TO_MODULE.keys())
 
 
@@ -59,11 +56,7 @@ class InternalCrawlService:
         """
         codes = _resolve_college_codes(cmd.college_code)
         idempotency_scope = codes[0] if len(codes) == 1 else "all"
-        key_stripped = (
-            cmd.idempotency_key.strip()
-            if cmd.idempotency_key and cmd.idempotency_key.strip()
-            else None
-        )
+        key_stripped = cmd.idempotency_key.strip() if cmd.idempotency_key and cmd.idempotency_key.strip() else None
 
         claimed = False
         should_clear_claim = False
@@ -78,13 +71,15 @@ class InternalCrawlService:
                     fail_closed=fail_closed,
                 )
                 if not claimed:
-                    cached = await get_trigger_idempotency_result(
-                        self._redis, key_stripped, idempotency_scope
+                    cached = await get_trigger_idempotency_result(self._redis, key_stripped, idempotency_scope)
+                    payload = (
+                        cached
+                        if cached is not None
+                        else {
+                            "detail": "in_progress",
+                            "code": "IDEMPOTENCY_IN_PROGRESS",
+                        }
                     )
-                    payload = cached if cached is not None else {
-                        "detail": "in_progress",
-                        "code": "IDEMPOTENCY_IN_PROGRESS",
-                    }
                     return TriggerCrawlResult(
                         result_kind=TriggerCrawlResultKind.cached,
                         payload=payload,
@@ -95,9 +90,7 @@ class InternalCrawlService:
             should_clear_claim = True
 
             if self._redis is None and settings.redis.redis_trigger_lock_required:
-                raise RedisLockUnavailableError(
-                    "Redis trigger lock required but client not configured"
-                )
+                raise RedisLockUnavailableError("Redis trigger lock required but client not configured")
 
             stagger = settings.crawl_trigger_stagger_seconds
             task_ids: list[dict] = []
@@ -108,9 +101,7 @@ class InternalCrawlService:
                 lock_token: str | None = None
                 if self._redis is not None:
                     try:
-                        acquired, lock_token = await acquire_trigger_lock(
-                            self._redis, code
-                        )
+                        acquired, lock_token = await acquire_trigger_lock(self._redis, code)
                     except RedisLockUnavailableError:
                         logger.exception(
                             "Trigger lock unavailable (Redis error) for college_code=%s",
@@ -125,22 +116,22 @@ class InternalCrawlService:
                 countdown = i * stagger if len(codes) > 1 else 0
                 enqueued_at = time.time()
                 try:
-                    task_id = await self._dispatcher.enqueue(
-                        code, lock_token, countdown, enqueued_at
+                    task_id = await self._dispatcher.enqueue(code, lock_token, countdown, enqueued_at)
+                    task_ids.append(
+                        {
+                            "college_code": code,
+                            "task_id": task_id,
+                            "countdown_sec": countdown,
+                        }
                     )
-                    task_ids.append({
-                        "college_code": code,
-                        "task_id": task_id,
-                        "countdown_sec": countdown,
-                    })
                     logger.info(
                         "trigger-crawl enqueued: college_code=%s task_id=%s countdown=%s",
-                        code, task_id, countdown,
+                        code,
+                        task_id,
+                        countdown,
                     )
                 except Exception:
-                    logger.exception(
-                        "trigger-crawl apply_async failed: code=%s", code
-                    )
+                    logger.exception("trigger-crawl apply_async failed: code=%s", code)
                     if self._redis is not None and lock_token:
                         await release_trigger_lock(self._redis, code, lock_token)
                     failed.append(code)
@@ -150,11 +141,7 @@ class InternalCrawlService:
                 out["skipped"] = skipped
             if failed:
                 out["failed"] = failed
-                out["code"] = (
-                    "ALL_ENQUEUES_FAILED"
-                    if len(task_ids) == 0
-                    else "PARTIAL_ENQUEUE_FAILURE"
-                )
+                out["code"] = "ALL_ENQUEUES_FAILED" if len(task_ids) == 0 else "PARTIAL_ENQUEUE_FAILURE"
                 out["detail"] = (
                     "All crawl enqueues failed; check broker and worker logs."
                     if len(task_ids) == 0
@@ -174,20 +161,11 @@ class InternalCrawlService:
                     and not has_failed_or_skipped
                     and out
                 ):
-                    await set_trigger_idempotency_result(
-                        self._redis, key_stripped, idempotency_scope, out
-                    )
+                    await set_trigger_idempotency_result(self._redis, key_stripped, idempotency_scope, out)
                     should_clear_claim = False
 
             return TriggerCrawlResult(result_kind=result_kind, payload=out)
 
         finally:
-            if (
-                should_clear_claim
-                and claimed
-                and self._redis is not None
-                and key_stripped is not None
-            ):
-                await clear_trigger_idempotency_in_progress(
-                    self._redis, key_stripped, idempotency_scope
-                )
+            if should_clear_claim and claimed and self._redis is not None and key_stripped is not None:
+                await clear_trigger_idempotency_in_progress(self._redis, key_stripped, idempotency_scope)

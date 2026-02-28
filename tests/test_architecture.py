@@ -1,6 +1,5 @@
 """아키텍처 규칙 검사. 명세: 메인 엔티티 PK는 UUID v7. CI에서 빌드 실패 강제."""
 
-
 import pytest
 from app.models.college import College
 from app.models.notice import Notice
@@ -23,6 +22,5 @@ def _pk_type_is_uuid(model: type) -> bool:
 def test_main_entity_pk_is_uuid(model: type) -> None:
     """명세: Notice, College, User의 PK는 UUID v7. Integer PK 사용 시 CI 실패."""
     assert _pk_type_is_uuid(model), (
-        f"{model.__name__}.id must be UUID (PG UUID as_uuid=True). "
-        "See docs/decisions/database-spec.md."
+        f"{model.__name__}.id must be UUID (PG UUID as_uuid=True). " "See docs/decisions/database-spec.md."
     )

@@ -50,13 +50,7 @@ class User(Base):
         default=lambda: datetime.now(UTC),
         onupdate=lambda: datetime.now(UTC),
     )
-    deleted_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
-    user_calendar_events: Mapped[list["UserCalendarEvent"]] = relationship(
-        "UserCalendarEvent", back_populates="user"
-    )
-    login_audits: Mapped[list["LoginAudit"]] = relationship(
-        "LoginAudit", back_populates="user"
-    )
+    user_calendar_events: Mapped[list["UserCalendarEvent"]] = relationship("UserCalendarEvent", back_populates="user")
+    login_audits: Mapped[list["LoginAudit"]] = relationship("LoginAudit", back_populates="user")

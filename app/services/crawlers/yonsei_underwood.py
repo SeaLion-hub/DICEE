@@ -160,8 +160,8 @@ def scrape_uic_detail(url):
                     continue
                 img = a.find("img")
                 if img:
-                    fname = a.get_text(separator=' ', strip=True).strip('"').strip()
-                    fname = re.sub(r'\([\d.,]+\s*(KB|MB|GB|Bytes?)\)', '', fname, flags=re.IGNORECASE).strip()
+                    fname = a.get_text(separator=" ", strip=True).strip('"').strip()
+                    fname = re.sub(r"\([\d.,]+\s*(KB|MB|GB|Bytes?)\)", "", fname, flags=re.IGNORECASE).strip()
                     if fname and fname not in attachment_names_uic:
                         attachment_names_uic.add(fname)
                         attachments.append(fname)

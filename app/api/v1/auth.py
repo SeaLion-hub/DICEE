@@ -34,9 +34,7 @@ logger = logging.getLogger(__name__)
 security = HTTPBearer(auto_error=False)
 
 # 캠퍼스·기숙사 등 동일 IP 다수 사용자 환경 안내 (429 시)
-RATE_LIMIT_429_DETAIL_SUFFIX = (
-    " 같은 네트워크(캠퍼스·기숙사 등)를 쓰는 경우일 수 있습니다. 잠시 후 다시 시도해 주세요."
-)
+RATE_LIMIT_429_DETAIL_SUFFIX = " 같은 네트워크(캠퍼스·기숙사 등)를 쓰는 경우일 수 있습니다. 잠시 후 다시 시도해 주세요."
 RATE_LIMIT_RETRY_AFTER_SECONDS = 60
 
 
@@ -102,6 +100,7 @@ async def get_current_user_id(
 ):
     """Authorization Bearer에서 Access JWT 검증 후 user_id(UUID) 반환. Blocklist·Redis 장애 정책 적용."""
     import uuid as uuid_mod
+
     if not credentials:
         raise HTTPException(status_code=401, detail="Missing or invalid Authorization")
     try:
@@ -121,6 +120,7 @@ async def get_current_user_id_and_jti(
 ):
     """Access JWT 검증 후 (user_id UUID, jti) 반환. 로그아웃 시 Blocklist 등록용."""
     import uuid as uuid_mod
+
     if not credentials:
         raise HTTPException(status_code=401, detail="Missing or invalid Authorization")
     try:
@@ -218,8 +218,7 @@ async def post_refresh(
         )
         raise HTTPException(
             status_code=429,
-            detail="Too many refresh requests, please try again later."
-            + RATE_LIMIT_429_DETAIL_SUFFIX,
+            detail="Too many refresh requests, please try again later." + RATE_LIMIT_429_DETAIL_SUFFIX,
             headers=_rate_limit_headers(),
         )
 
@@ -251,9 +250,7 @@ async def post_logout(
     await session.commit()
     if redis_blocklist and jti and settings.jwt_access_expire_seconds > 0:
         try:
-            await add_access_to_blocklist(
-                redis_blocklist, jti, settings.jwt_access_expire_seconds
-            )
+            await add_access_to_blocklist(redis_blocklist, jti, settings.jwt_access_expire_seconds)
         except BlocklistUnavailableError:
             raise HTTPException(
                 status_code=503,

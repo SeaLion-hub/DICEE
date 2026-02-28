@@ -30,6 +30,7 @@ class RequestIDMiddleware(BaseHTTPMiddleware):
         request.state.request_id = request_id
         try:
             import sentry_sdk
+
             sentry_sdk.set_tag("request_id", request_id)
         except ImportError:
             pass

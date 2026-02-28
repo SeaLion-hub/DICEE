@@ -27,8 +27,7 @@ def test_try_claim_trigger_idempotency_atomic():
     ok1 = asyncio.run(try_claim_trigger_idempotency(client, "idem-key-1", "all"))
     assert ok1 is True
     assert any(
-        k.startswith("dicee:trigger_idempotency:") and stored[k] == IDEMPOTENCY_VALUE_IN_PROGRESS
-        for k in stored
+        k.startswith("dicee:trigger_idempotency:") and stored[k] == IDEMPOTENCY_VALUE_IN_PROGRESS for k in stored
     )
     assert len(stored) == 1
     key = next(iter(stored))

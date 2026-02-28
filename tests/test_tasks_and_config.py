@@ -14,9 +14,7 @@ def test_crawl_college_task_is_celery_task_has_apply_async():
     """crawl_college_task가 Celery에 등록되어 apply_async를 갖는지 검증."""
     from app.services.tasks import crawl_college_task
 
-    assert hasattr(crawl_college_task, "apply_async"), (
-        "crawl_college_task must be a Celery task with apply_async"
-    )
+    assert hasattr(crawl_college_task, "apply_async"), "crawl_college_task must be a Celery task with apply_async"
     assert callable(getattr(crawl_college_task, "apply_async", None))
 
 
@@ -50,13 +48,12 @@ def test_crawl_college_task_duplicate_delivery_skips_execution():
     from app.services import tasks as tasks_module
     from app.services.tasks import crawl_college_task
 
-    with patch.object(tasks_module, "claim_crawl_task_execution", return_value=False) as mock_claim, patch.object(
-        tasks_module, "run_crawl_job_sync"
-    ) as mock_run, patch.object(
-        tasks_module, "release_crawl_task_execution"
-    ) as mock_release_exec, patch.object(
-        tasks_module, "release_trigger_lock_sync"
-    ) as mock_release_lock:
+    with (
+        patch.object(tasks_module, "claim_crawl_task_execution", return_value=False) as mock_claim,
+        patch.object(tasks_module, "run_crawl_job_sync") as mock_run,
+        patch.object(tasks_module, "release_crawl_task_execution") as mock_release_exec,
+        patch.object(tasks_module, "release_trigger_lock_sync") as mock_release_lock,
+    ):
         result = crawl_college_task.apply(args=("engineering", "lock-token"), throw=True).result
 
     assert result == {"skipped": True, "reason": "duplicate_delivery"}
@@ -70,15 +67,13 @@ def test_crawl_college_task_releases_execution_claim_in_finally():
     from app.services import tasks as tasks_module
     from app.services.tasks import crawl_college_task
 
-    with patch.object(tasks_module, "claim_crawl_task_execution", return_value=True), patch.object(
-        tasks_module, "release_crawl_task_execution"
-    ) as mock_release_exec, patch.object(
-        tasks_module, "release_trigger_lock_sync"
-    ), patch.object(
-        tasks_module, "get_sync_session"
-    ) as mock_session, patch.object(
-        tasks_module, "run_crawl_job_sync"
-    ) as mock_run:
+    with (
+        patch.object(tasks_module, "claim_crawl_task_execution", return_value=True),
+        patch.object(tasks_module, "release_crawl_task_execution") as mock_release_exec,
+        patch.object(tasks_module, "release_trigger_lock_sync"),
+        patch.object(tasks_module, "get_sync_session") as mock_session,
+        patch.object(tasks_module, "run_crawl_job_sync") as mock_run,
+    ):
         mock_run.side_effect = RuntimeError("simulated crawl failure")
         ctx = MagicMock()
         ctx.__enter__ = MagicMock(return_value=ctx)
@@ -109,7 +104,6 @@ def test_production_fail_fast_requires_ip_hmac_key():
         },
         clear=False,
     ):
-
         from app.core.config import Settings
 
         with pytest.raises(ValueError) as exc_info:
@@ -175,6 +169,7 @@ def test_celery_entry_fail_fast_when_app_entry_api():
         with patch.dict("os.environ", {"APP_ENTRY": "api", "ROLE": "api"}, clear=False):
             importlib.reload(config_module)
             import app.core.celery_app as celery_app_mod
+
             # Import 시점에는 검사하지 않음 (API 프로세스에서 trigger-crawl enqueue 가능)
             assert celery_app_mod.app is not None
             # worker_init에서 호출되는 _ensure_celery_entry는 APP_ENTRY=api면 RuntimeError
@@ -381,6 +376,7 @@ def test_settings_reject_invalid_crawl_runtime_knobs():
 
         with pytest.raises(ValidationError):
             Settings()
+
 
 def test_drain_content_spool_updates_retry_metadata_on_upload_failure(tmp_path, monkeypatch):
     from app.core import storage

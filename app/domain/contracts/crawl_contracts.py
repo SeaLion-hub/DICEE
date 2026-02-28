@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Protocol, Sequence
+from typing import Any, Protocol
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
@@ -41,22 +42,16 @@ class CrawlRunRow:
 class CrawlStatsQueryPort(Protocol):
     """크롤 통계 조회 포트. Session은 호출자(서비스)가 전달(실용적 포트)."""
 
-    async def fetch_recent(
-        self, session: AsyncSession, limit: int
-    ) -> list[CrawlRunRow]: ...
+    async def fetch_recent(self, session: AsyncSession, limit: int) -> list[CrawlRunRow]: ...
 
 
 class AsyncNoticeRepositoryPort(Protocol):
     """Notice bulk upsert 비동기 포트. Session은 호출자가 전달."""
 
-    async def upsert_bulk(
-        self, session: AsyncSession, drafts: Sequence[NoticeDraft]
-    ) -> list[uuid.UUID]: ...
+    async def upsert_bulk(self, session: AsyncSession, drafts: Sequence[NoticeDraft]) -> list[uuid.UUID]: ...
 
 
 class SyncNoticeRepositoryPort(Protocol):
     """Notice bulk upsert 동기 포트. Session은 호출자가 전달."""
 
-    def upsert_bulk_sync(
-        self, session: Session, drafts: Sequence[NoticeDraft]
-    ) -> list[uuid.UUID]: ...
+    def upsert_bulk_sync(self, session: Session, drafts: Sequence[NoticeDraft]) -> list[uuid.UUID]: ...

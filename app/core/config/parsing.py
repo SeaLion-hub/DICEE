@@ -1,4 +1,4 @@
-﻿import json
+import json
 
 
 def _parse_allowed_origins(value: str) -> list[str]:

@@ -54,9 +54,7 @@ def fetch_html(
         try:
             if int(cl) > max_bytes:
                 resp.close()
-                raise HtmlTooLargeError(
-                    f"Content-Length {cl} > max_bytes {max_bytes}; url={url[:200]}"
-                )
+                raise HtmlTooLargeError(f"Content-Length {cl} > max_bytes {max_bytes}; url={url[:200]}")
         except ValueError:
             pass
 
@@ -68,9 +66,7 @@ def fetch_html(
                 accumulated += len(chunk)
                 if accumulated > max_bytes:
                     resp.close()
-                    raise HtmlTooLargeError(
-                        f"Accumulated {accumulated} > max_bytes {max_bytes}; url={url[:200]}"
-                    )
+                    raise HtmlTooLargeError(f"Accumulated {accumulated} > max_bytes {max_bytes}; url={url[:200]}")
                 chunks.append(chunk)
     finally:
         resp.close()
@@ -100,9 +96,7 @@ async def fetch_html_async(
         if cl:
             try:
                 if int(cl) > max_bytes:
-                    raise HtmlTooLargeError(
-                        f"Content-Length {cl} > max_bytes {max_bytes}; url={url[:200]}"
-                    )
+                    raise HtmlTooLargeError(f"Content-Length {cl} > max_bytes {max_bytes}; url={url[:200]}")
             except ValueError:
                 pass
         accumulated = 0
@@ -111,8 +105,6 @@ async def fetch_html_async(
             if chunk:
                 accumulated += len(chunk)
                 if accumulated > max_bytes:
-                    raise HtmlTooLargeError(
-                        f"Accumulated {accumulated} > max_bytes {max_bytes}; url={url[:200]}"
-                    )
+                    raise HtmlTooLargeError(f"Accumulated {accumulated} > max_bytes {max_bytes}; url={url[:200]}")
                 chunks.append(chunk)
     return b"".join(chunks).decode(encoding, errors="replace")

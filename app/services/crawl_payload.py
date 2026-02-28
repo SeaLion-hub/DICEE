@@ -50,6 +50,7 @@ def _external_id_from_url(url: str) -> str:
         )
         try:
             import sentry_sdk
+
             sentry_sdk.capture_exception(e)
         except (OSError, Exception) as sentry_err:
             logger.warning("Sentry capture_exception failed: %s", sentry_err)
@@ -75,16 +76,10 @@ def _content_hash_from_title_and_html(
             text_for_hash = soup.get_text(separator="\n", strip=True)
     parts = [title or "", text_for_hash]
     if attachments:
-        names = sorted(
-            str(a.get("name", a) if isinstance(a, dict) else a) for a in attachments
-        )
+        names = sorted(str(a.get("name", a) if isinstance(a, dict) else a) for a in attachments)
         parts.append("\n".join(names))
     if images:
-        urls = sorted(
-            str(img.get("url", img.get("src", "")))
-            for img in images
-            if isinstance(img, dict)
-        )
+        urls = sorted(str(img.get("url", img.get("src", ""))) for img in images if isinstance(img, dict))
         parts.append("\n".join(urls))
     raw = "\n".join(parts)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
@@ -105,6 +100,7 @@ def _parse_published_at(date_str: str | None) -> datetime | None:
         )
         try:
             import sentry_sdk
+
             sentry_sdk.capture_message(
                 f"_parse_published_at no match (format change?): date_str={date_str[:100]!r}",
                 level="warning",
@@ -120,6 +116,7 @@ def _parse_published_at(date_str: str | None) -> datetime | None:
         )
         try:
             import sentry_sdk
+
             sentry_sdk.capture_exception(e)
         except (OSError, Exception) as sentry_err:
             logger.warning("Sentry capture_exception failed: %s", sentry_err)

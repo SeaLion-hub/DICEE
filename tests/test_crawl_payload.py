@@ -75,12 +75,8 @@ def test_build_notice_payload_skips_empty_title(mock_upload):
     """title 없음/빈 문자열이면 None."""
     mock_upload.return_value = "https://storage/url"
     college_id = uuid.uuid4()
-    assert build_notice_payload(
-        college_id, {}, "https://u", "", None, "<p>x</p>", [], [], None, None
-    ) is None
-    assert build_notice_payload(
-        college_id, {}, "https://u", "   ", None, "<p>x</p>", [], [], None, None
-    ) is None
+    assert build_notice_payload(college_id, {}, "https://u", "", None, "<p>x</p>", [], [], None, None) is None
+    assert build_notice_payload(college_id, {}, "https://u", "   ", None, "<p>x</p>", [], [], None, None) is None
 
 
 @patch("app.services.crawl_payload.upload_notice_html")
@@ -88,30 +84,36 @@ def test_build_notice_payload_skips_placeholder_title(mock_upload):
     """placeholder 제목이면 None."""
     mock_upload.return_value = "https://storage/url"
     college_id = uuid.uuid4()
-    assert build_notice_payload(
-        college_id,
-        {},
-        "https://u",
-        "제목 없음",
-        None,
-        "<p>x</p>",
-        [],
-        [],
-        None,
-        None,
-    ) is None
-    assert build_notice_payload(
-        college_id,
-        {},
-        "https://u",
-        "(본문 영역을 찾을 수 없습니다)",
-        None,
-        "<p>x</p>",
-        [],
-        [],
-        None,
-        None,
-    ) is None
+    assert (
+        build_notice_payload(
+            college_id,
+            {},
+            "https://u",
+            "제목 없음",
+            None,
+            "<p>x</p>",
+            [],
+            [],
+            None,
+            None,
+        )
+        is None
+    )
+    assert (
+        build_notice_payload(
+            college_id,
+            {},
+            "https://u",
+            "(본문 영역을 찾을 수 없습니다)",
+            None,
+            "<p>x</p>",
+            [],
+            [],
+            None,
+            None,
+        )
+        is None
+    )
 
 
 @patch("app.services.crawl_payload.upload_notice_html")
@@ -121,9 +123,7 @@ def test_build_notice_payload_skips_html_too_large(mock_upload):
 
     college_id = uuid.uuid4()
     large = "x" * (MAX_HTML_BYTES + 1)
-    assert build_notice_payload(
-        college_id, {}, "https://u", "Title", None, large, [], [], None, None
-    ) is None
+    assert build_notice_payload(college_id, {}, "https://u", "Title", None, large, [], [], None, None) is None
     mock_upload.assert_not_called()
 
 

@@ -11,7 +11,6 @@ from fastapi.responses import JSONResponse
 
 from app.core.exceptions import (
     CollegeNotFoundError,
-    InternalCrawlError,
 )
 from app.core.redis import (
     RedisIdempotencyUnavailableError,

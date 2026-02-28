@@ -38,4 +38,3 @@ class LoginAudit(Base):
     )
 
     user: Mapped["User | None"] = relationship("User", back_populates="login_audits")
-

@@ -101,7 +101,9 @@ def crawl_college_task(
     lock_hint = (lock_token[:8] + "...") if lock_token else "none"
     logger.info(
         "Task Started: task_id=%s college_code=%s lock_token=%s",
-        task_id, college_code, lock_hint,
+        task_id,
+        college_code,
+        lock_hint,
     )
     execution_claimed = False
     if task_id:
@@ -131,6 +133,7 @@ def crawl_college_task(
         )
         heartbeat_thread.start()
     try:
+
         def on_chunk(ids: list) -> None:
             nonlocal enqueued_ai, failed_enqueues
             for nid in ids:
@@ -149,9 +152,7 @@ def crawl_college_task(
                     )
 
         with get_sync_session() as session:
-            count, _ = run_crawl_job_sync(
-                session, college_code, task_id, on_chunk
-            )
+            count, _ = run_crawl_job_sync(session, college_code, task_id, on_chunk)
         increment(CRAWL_SUCCESS_TOTAL, 1, labels=labels)
         msg = (
             f"Crawling {college_code} completed. Upserted {count} notices, "

@@ -52,6 +52,7 @@ async def lifespan(app: FastAPI):
     # 프로덕션: 예외 traceback 로그 누출 원천 차단(프레임워크 레벨)
     if (settings.environment or "").strip().lower() == "production":
         from app.core.logging_safety import ProductionExceptionFilter
+
         logging.getLogger().addFilter(ProductionExceptionFilter())
     await init_database()
     check_startup_pool_budget()

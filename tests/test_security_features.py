@@ -1,13 +1,12 @@
 """보안 관련 기능 테스트: Rate Limit·내부 인증·오류 메시지 마스킹."""
 
 import asyncio
-from datetime import datetime, timezone
 import uuid
+from datetime import datetime, timezone
 
 import pytest
-from pydantic import SecretStr
-
 from app.domain.contracts.crawl_contracts import CrawlRunRow
+from pydantic import SecretStr
 
 
 def test_crawl_stats_masks_error_message(client, monkeypatch):
@@ -27,7 +26,7 @@ def test_crawl_stats_masks_error_message(client, monkeypatch):
         return [
             CrawlRunRow(
                 college_code="engineering",
-                started_at=datetime(2024, 1, 1, 0, 0, 0, tzinfo=timezone.utc),
+                started_at=datetime(2024, 1, 1, 0, 0, 0, tzinfo=timezone.utc),  # noqa: UP017
                 finished_at=None,
                 status="FAILED",
                 notices_upserted=0,
@@ -42,8 +41,7 @@ def test_crawl_stats_masks_error_message(client, monkeypatch):
 
     # DB 의존성은 더미 세션으로 대체해, DATABASE_URL 없이도 테스트 가능하게 한다. (crawl-stats는 get_read_only_db 사용)
     async def _fake_get_read_only_db():
-        class _DummySession:
-            ...
+        class _DummySession: ...
 
         yield _DummySession()
 
@@ -81,8 +79,7 @@ def test_crawl_stats_invalid_secret_logs_auth_failure(client, monkeypatch):
     )
 
     async def _fake_get_read_only_db():
-        class _DummySession:
-            ...
+        class _DummySession: ...
 
         yield _DummySession()
 
@@ -165,6 +162,7 @@ def test_auth_refresh_rate_limit_returns_429(client, monkeypatch):
 def test_auth_refresh_rate_limit_fingerprint_returns_429(client, monkeypatch):
     """1차 IP 제한 통과 후 2차 token fingerprint 제한 초과 시 429를 반환한다."""
     from app.api.v1 import auth as auth_module
+
     seen_identifiers: list[str] = []
 
     async def _mixed_rate_limit(
@@ -294,6 +292,7 @@ def test_get_client_ip_no_trusted_proxy_uses_client_host(monkeypatch):
     from app.core.network import get_client_ip
 
     monkeypatch.setattr(settings, "trusted_proxy_ips", "")
+
     # client.host가 trusted에 없으면 항상 fallback
     class _Req:
         client = type("_C", (), {"host": "1.2.3.4"})()
@@ -305,11 +304,10 @@ def test_get_client_ip_no_trusted_proxy_uses_client_host(monkeypatch):
 def test_get_client_ip_records_resolution_metrics(monkeypatch):
     from unittest.mock import MagicMock
 
-    from starlette.datastructures import Headers
-
     from app.core import metrics as metrics_module
     from app.core import network as network_module
     from app.core.network import get_client_ip
+    from starlette.datastructures import Headers
 
     mock_settings = MagicMock()
     mock_settings.trusted_proxy_ips_set = frozenset({"10.0.0.1"})
@@ -408,9 +406,7 @@ def test_invalid_forwarded_header_returns_400(client, monkeypatch):
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     try:
-        resp = loop.run_until_complete(
-            invalid_forwarded_header_handler(req, InvalidForwardedHeaderError("test"))
-        )
+        resp = loop.run_until_complete(invalid_forwarded_header_handler(req, InvalidForwardedHeaderError("test")))
     finally:
         loop.close()
     assert resp.status_code == 400
@@ -437,6 +433,7 @@ def test_trigger_crawl_all_enqueues_fail_returns_503(client, monkeypatch):
     async def _fake_get_db():
         class _DummySession:
             pass
+
         yield _DummySession()
 
     # Redis 락 단계 통과용 mock (None이면 REDIS_LOCK_UNAVAILABLE 반환됨)
@@ -475,9 +472,11 @@ def test_trigger_crawl_all_enqueues_fail_returns_503(client, monkeypatch):
         app.dependency_overrides.pop(get_redis_trigger_lock, None)
     assert response.status_code == 503
     data = response.json()
-    assert data.get("code") == "ALL_ENQUEUES_FAILED" or "enqueue" in (
-        data.get("detail") or ""
-    ).lower() or "crawl" in (data.get("detail") or "").lower()
+    assert (
+        data.get("code") == "ALL_ENQUEUES_FAILED"
+        or "enqueue" in (data.get("detail") or "").lower()
+        or "crawl" in (data.get("detail") or "").lower()
+    )
 
 
 def test_trigger_crawl_skipped_then_retry_with_same_idempotency_key_not_stuck(client, monkeypatch):
@@ -572,6 +571,7 @@ def test_trigger_crawl_invalid_secret_returns_401_before_rate_limit(client, monk
     async def _fake_get_db():
         class _DummySession:
             pass
+
         yield _DummySession()
 
     async def _fake_redis():
@@ -776,4 +776,3 @@ def test_logout_blocklist_unavailable_returns_503(client, monkeypatch):
         app.dependency_overrides.pop(get_current_user_id_and_jti, None)
         app.dependency_overrides.pop(get_redis_blocklist, None)
         app.dependency_overrides.pop(get_db, None)
-

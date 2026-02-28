@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from app.core.constants import CrawlRunStatus
-from app.domain.contracts.crawl_contracts import CrawlRunRow, CrawlStatsQueryPort
+from app.domain.contracts.crawl_contracts import CrawlRunRow
 from app.models.college import College
 from app.models.crawl_run import CrawlRun
 from app.models.crawl_run_task import CrawlRunTask
@@ -28,9 +28,7 @@ def _task_id_to_uuid(task_id: str) -> uuid.UUID:
     try:
         return uuid.UUID(str(task_id).strip())
     except (ValueError, TypeError) as e:
-        raise ValueError(
-            f"task_id must be a valid UUID string (got {type(task_id).__name__!r}): {e}"
-        ) from e
+        raise ValueError(f"task_id must be a valid UUID string (got {type(task_id).__name__!r}): {e}") from e
 
 
 def ensure_crawl_run_task_sync(session: Session, task_id: str) -> uuid.UUID:
@@ -40,10 +38,14 @@ def ensure_crawl_run_task_sync(session: Session, task_id: str) -> uuid.UUID:
     """
     task_uuid = _task_id_to_uuid(task_id)
     run_id = uuid.uuid4()
-    stmt = insert(CrawlRunTask).values(
-        celery_task_id=task_uuid,
-        run_id=run_id,
-    ).on_conflict_do_nothing(index_elements=["celery_task_id"])
+    stmt = (
+        insert(CrawlRunTask)
+        .values(
+            celery_task_id=task_uuid,
+            run_id=run_id,
+        )
+        .on_conflict_do_nothing(index_elements=["celery_task_id"])
+    )
     session.execute(stmt)
     session.flush()
     got = session.execute(
@@ -65,10 +67,7 @@ def create_or_update_crawl_run_sync(
     """
     now = datetime.now(UTC)
     existing = session.execute(
-        select(CrawlRun)
-        .where(CrawlRun.id == run_id)
-        .order_by(CrawlRun.started_at.desc())
-        .limit(1)
+        select(CrawlRun).where(CrawlRun.id == run_id).order_by(CrawlRun.started_at.desc()).limit(1)
     ).scalar_one_or_none()
     if existing:
         existing.status = CrawlRunStatus.RUNNING.value
@@ -107,10 +106,7 @@ def update_crawl_run_sync(
     계약: id 단독 조회. run_id당 1행 전제.
     """
     row = session.execute(
-        select(CrawlRun)
-        .where(CrawlRun.id == run_id)
-        .order_by(CrawlRun.started_at.desc())
-        .limit(1)
+        select(CrawlRun).where(CrawlRun.id == run_id).order_by(CrawlRun.started_at.desc()).limit(1)
     ).scalar_one_or_none()
     if not row:
         return None
@@ -183,7 +179,5 @@ async def get_recent_crawl_runs(
 class CrawlRunRepositoryAdapter:
     """CrawlStatsQueryPort 구현. get_recent_crawl_runs를 래핑하여 서비스에서 주입받을 수 있게 함."""
 
-    async def fetch_recent(
-        self, session: AsyncSession, limit: int
-    ) -> list[CrawlRunRow]:
+    async def fetch_recent(self, session: AsyncSession, limit: int) -> list[CrawlRunRow]:
         return await get_recent_crawl_runs(session, limit=limit)

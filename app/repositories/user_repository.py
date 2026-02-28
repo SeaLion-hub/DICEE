@@ -18,20 +18,14 @@ async def get_by_id(session: AsyncSession, user_id: uuid.UUID) -> User | None:
     return result.scalars().one_or_none()
 
 
-async def increment_refresh_token_version(
-    session: AsyncSession, user_id: uuid.UUID
-) -> None:
+async def increment_refresh_token_version(session: AsyncSession, user_id: uuid.UUID) -> None:
     """로그아웃/탈취 시 해당 유저의 모든 Refresh 토큰 무효화."""
     await session.execute(
-        update(User)
-        .where(User.id == user_id)
-        .values(refresh_token_version=User.refresh_token_version + 1)
+        update(User).where(User.id == user_id).values(refresh_token_version=User.refresh_token_version + 1)
     )
 
 
-async def rotate_refresh_token_version(
-    session: AsyncSession, user_id: uuid.UUID, expected_version: int
-) -> int | None:
+async def rotate_refresh_token_version(session: AsyncSession, user_id: uuid.UUID, expected_version: int) -> int | None:
     """
     Refresh 1회성 사용: expected_version과 일치할 때만 version을 1 증가시키고 새 version 반환.
     반환된 새 version으로 새 JWT 쌍 발급. 행이 없으면 None(이미 사용됐거나 불일치).
@@ -47,9 +41,7 @@ async def rotate_refresh_token_version(
     return int(row[0]) if row is not None else None
 
 
-async def get_by_provider_uid(
-    session: AsyncSession, provider: str, provider_user_id: str
-) -> User | None:
+async def get_by_provider_uid(session: AsyncSession, provider: str, provider_user_id: str) -> User | None:
     """provider + provider_user_id로 유저 조회."""
     result = await session.execute(
         select(User).where(

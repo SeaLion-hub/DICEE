@@ -1,4 +1,4 @@
-﻿from typing import NamedTuple
+from typing import NamedTuple
 
 
 class _DatabaseConfig(NamedTuple):

@@ -86,6 +86,7 @@ def _on_after_configure(**kwargs):
     """프로덕션 워커: API와 동일한 예외/로그 마스킹 필터 등록(스택·예외 메시지 원천 차단)."""
     if (settings.environment or "").strip().lower() == "production":
         from app.core.logging_safety import ProductionExceptionFilter
+
         root = logging.getLogger()
         if not any(isinstance(f, ProductionExceptionFilter) for f in root.filters):
             root.addFilter(ProductionExceptionFilter())

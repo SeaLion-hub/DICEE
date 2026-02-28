@@ -161,13 +161,10 @@ async def check_rate_limit(
         raise
     except Exception as e:
         if require_redis:
-            raise RateLimitUnavailableError(
-                "Rate limit Redis failed; require_redis=True."
-            ) from e
+            raise RateLimitUnavailableError("Rate limit Redis failed; require_redis=True.") from e
         logger.debug(
             "api rate limit failed (identifier=%s); using in-memory fallback: %s",
             identifier,
             e,
         )
         return await _check_rate_limit_inmemory(identifier, max_requests, window_seconds)
-

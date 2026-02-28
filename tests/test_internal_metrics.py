@@ -1,7 +1,6 @@
 """GET /internal/metrics Prometheus 노출 및 METRICS_ALLOWED_IPS 검증 (fail-closed: 미설정 시 전체 차단)."""
 
 
-
 def test_get_metrics_returns_403_when_empty_fail_closed(client, monkeypatch):
     """METRICS_ALLOWED_IPS 미설정(빈 값) 시 모든 IP 차단(fail-closed) → 403."""
     monkeypatch.setattr("app.api.internal.settings.metrics_allowed_ips", "")

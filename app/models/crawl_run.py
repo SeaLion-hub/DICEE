@@ -32,9 +32,7 @@ class CrawlRun(Base):
     college_id: Mapped[uuid.UUID] = mapped_column(
         PG_UUID(as_uuid=True), ForeignKey("colleges.id"), nullable=False, index=True
     )
-    started_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), primary_key=True, nullable=False, index=True
-    )
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), primary_key=True, nullable=False, index=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False)  # running | success | failed
     notices_upserted: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

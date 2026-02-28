@@ -96,16 +96,8 @@ class PoolBudgetManager:
             )
         p = self._params
         app_budget = int((effective_max_conn - p.reserved) * 0.7)
-        api_conn = (
-            p.api_instances
-            * p.uvicorn_workers
-            * (p.pool_size_async + p.pool_max_overflow_async)
-        )
-        worker_conn = (
-            p.worker_instances
-            * p.celery_concurrency
-            * (p.pool_size_sync + p.pool_max_overflow_sync)
-        )
+        api_conn = p.api_instances * p.uvicorn_workers * (p.pool_size_async + p.pool_max_overflow_async)
+        worker_conn = p.worker_instances * p.celery_concurrency * (p.pool_size_sync + p.pool_max_overflow_sync)
         total_pool_conn = api_conn + worker_conn
         peak_pool_conn = int(total_pool_conn * p.deploy_surge_factor)
         within_budget = peak_pool_conn <= app_budget
@@ -165,9 +157,7 @@ def get_resolved_max_connections() -> int | None:
 
 # SessionScope를 통해서만 set/reset. 직접 _session_context.set/reset 호출 금지.
 # 요청 경로: Depends(get_db)로 세션 주입 후 서비스에 인자로 전달(권장). 비요청 경로(Celery 등): run_in_session만 사용.
-_session_context: ContextVar[AsyncSession | None] = ContextVar(
-    "session_context", default=None
-)
+_session_context: ContextVar[AsyncSession | None] = ContextVar("session_context", default=None)
 
 
 def _async_database_url(url: str) -> str:
@@ -273,9 +263,7 @@ async def verify_db_connection() -> None:
             async with maker() as session:
                 await session.execute(text("SELECT 1"))
                 try:
-                    result = await session.execute(
-                        text("SELECT current_setting('max_connections')::int")
-                    )
+                    result = await session.execute(text("SELECT current_setting('max_connections')::int"))
                     val = result.scalar_one_or_none()
                     if val is not None:
                         _resolved_max_connections = int(val)
@@ -319,9 +307,7 @@ async def verify_db_connection() -> None:
         exc_info=True,
     )
     if settings.db.strict_startup_db_check:
-        raise RuntimeError(
-            f"Database connection failed after {retries} attempts: {last_exc}"
-        ) from last_exc
+        raise RuntimeError(f"Database connection failed after {retries} attempts: {last_exc}") from last_exc
 
 
 async def get_db(request: Request) -> AsyncGenerator[AsyncSession, None]:

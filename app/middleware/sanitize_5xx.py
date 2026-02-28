@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 # 5xx 응답에서 허용하는 최소 안전 본문. 이 구조가 아니거나 traceback/예외 메시지 의심 시 교체.
 _SAFE_500_BODY = {"detail": "Internal server error", "code": "INTERNAL_ERROR"}
-_SENSITIVE_MARKERS = ("Traceback", "File ", ".py\", line ", "Exception:", "Error:")
+_SENSITIVE_MARKERS = ("Traceback", "File ", '.py", line ', "Exception:", "Error:")
 _UNSAFE_FORWARD_HEADERS = {
     "connection",
     "keep-alive",

@@ -1,8 +1,8 @@
 """읽기 전용 세션 래퍼 및 get_read_only_db 방어 동작 검증."""
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
 from app.core.database import (
     READ_ONLY_SESSION_MSG,
     ReadOnlySessionWrapper,

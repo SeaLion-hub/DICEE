@@ -14,9 +14,7 @@ class CrawlStatsService:
     def __init__(self, query_port: CrawlStatsQueryPort) -> None:
         self._query_port = query_port
 
-    async def get_crawl_stats(
-        self, session: AsyncSession, limit: int = 50
-    ) -> CrawlStatsResponse:
+    async def get_crawl_stats(self, session: AsyncSession, limit: int = 50) -> CrawlStatsResponse:
         """
         최근 크롤 실행 이력. Port에서 CrawlRunRow 목록 조회 후
         error_message는 제거하고 has_error로만 노출해 CrawlStatsResponse 반환.

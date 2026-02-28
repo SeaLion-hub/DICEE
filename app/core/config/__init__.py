@@ -1,4 +1,4 @@
-﻿"""Public config interface.
+"""Public config interface.
 
 Compatibility contract: external imports continue to use
 `from app.core.config import settings`.

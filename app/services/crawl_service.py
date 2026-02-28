@@ -42,6 +42,7 @@ from app.core.crawl_rate_limit import (
 )
 from app.core.crawler_config import COLLEGE_CODE_TO_MODULE, CRAWLER_CONFIG, get_crawler, get_crawler_async
 from app.core.redis import get_shared_sync_redis_client
+from app.domain.contracts.crawl_contracts import NoticeDraft
 from app.repositories.college_repository import (
     get_by_external_id as get_college_by_external_id,
 )
@@ -53,7 +54,6 @@ from app.repositories.crawl_run_repository import (
     ensure_crawl_run_task_sync,
     update_crawl_run_sync,
 )
-from app.domain.contracts.crawl_contracts import NoticeDraft
 from app.repositories.notice_repository import (
     upsert_notices_bulk,
     upsert_notices_bulk_sync,
@@ -108,6 +108,7 @@ def _load_crawl_runtime_config() -> CrawlRuntimeConfig:
             crawl_seen_max_size=settings.crawl_seen_max_size,
         )
     return _crawl_runtime_config_cache
+
 
 # 요청/페이지 간 최소 딜레이(초). 부하·IP 차단 완화. .env POLITE_DELAY_SECONDS로 오버라이드 가능.
 
@@ -193,9 +194,7 @@ class _RedisSeenSet:
             self._client = get_shared_sync_redis_client()
         except Exception as e:
             if self._required:
-                raise RuntimeError(
-                    f"Redis Seen Set required but connection failed (run_id={self._run_id}): {e}"
-                ) from e
+                raise RuntimeError(f"Redis Seen Set required but connection failed (run_id={self._run_id}): {e}") from e
             logger.warning("RedisSeenSet connect failed: %s; falling back to in-memory", e)
         if self._client is None and self._required:
             raise RuntimeError(
@@ -505,19 +504,13 @@ async def _fetch_one_with_retry(
         reraise=False,
     ):
         with attempt:
-            last_result = await _fetch_one_async(
-                client, post, scrape_async_fn, rate_limiter, sem
-            )
-            if last_result.exc is not None and isinstance(
-                last_result.exc, _NETWORK_EXC_TYPES
-            ):
+            last_result = await _fetch_one_async(client, post, scrape_async_fn, rate_limiter, sem)
+            if last_result.exc is not None and isinstance(last_result.exc, _NETWORK_EXC_TYPES):
                 raise last_result.exc
             return last_result
     if last_result is not None:
         return last_result
-    return ScrapeAttemptResult(
-        post=post, detail_url=post.get("url") or "", data=None, exc=None
-    )
+    return ScrapeAttemptResult(post=post, detail_url=post.get("url") or "", data=None, exc=None)
 
 
 def _process_scrape_result(
@@ -572,9 +565,7 @@ def _process_scrape_result(
     if external_id in seen:
         return (None, None)
     body_text_for_hash = (
-        BeautifulSoup(html_content, "html.parser").get_text(separator="\n", strip=True)
-        if html_content
-        else ""
+        BeautifulSoup(html_content, "html.parser").get_text(separator="\n", strip=True) if html_content else ""
     )
     payload = build_notice_payload(
         college_id,
@@ -616,18 +607,14 @@ def _scrape_one_sync_with_sem(
                 with attempt:
                     rate_limiter.wait_sync(host)
                     last_result = _scrape_one_sync(post, scrape_fn)
-                    if last_result.exc is not None and isinstance(
-                        last_result.exc, _NETWORK_EXC_TYPES
-                    ):
+                    if last_result.exc is not None and isinstance(last_result.exc, _NETWORK_EXC_TYPES):
                         raise last_result.exc
                     return last_result
         except RetryError:
             pass
         if last_result is not None:
             return last_result
-        return ScrapeAttemptResult(
-            post=post, detail_url=detail_url, data=None, exc=None
-        )
+        return ScrapeAttemptResult(post=post, detail_url=detail_url, data=None, exc=None)
     finally:
         sem.release()
 
@@ -723,9 +710,7 @@ async def _collect_payloads_async(
     remaining = deque(links)
 
     def _task(post: dict) -> asyncio.Task:
-        return asyncio.create_task(
-            _fetch_one_with_retry(client, post, scrape_async_fn, rate_limiter, sem)
-        )
+        return asyncio.create_task(_fetch_one_with_retry(client, post, scrape_async_fn, rate_limiter, sem))
 
     def _refill_pending() -> None:
         while len(pending) < concurrency and remaining:
@@ -742,9 +727,7 @@ async def _collect_payloads_async(
             _refill_pending()
             if not pending:
                 continue
-            done, pending = await asyncio.wait(
-                pending, return_when=asyncio.FIRST_COMPLETED
-            )
+            done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
             for task in done:
                 try:
                     result = task.result()
@@ -753,9 +736,7 @@ async def _collect_payloads_async(
                     if remaining:
                         pending.add(_task(remaining.popleft()))
                     continue
-                if result.exc is not None and isinstance(
-                    result.exc, _NETWORK_EXC_TYPES
-                ):
+                if result.exc is not None and isinstance(result.exc, _NETWORK_EXC_TYPES):
                     tracker.record_attempt()
                     tracker.record_network_or_skip()
                     if remaining:

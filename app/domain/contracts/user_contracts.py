@@ -34,6 +34,4 @@ class UserRecord:
 class UserRepositoryPort(Protocol):
     """User 저장소 포트. Session은 호출자(서비스)가 소유하고 인자로 전달(실용적 포트)."""
 
-    async def upsert_by_provider_uid(
-        self, session: AsyncSession, cmd: UserUpsertCmd
-    ) -> User: ...
+    async def upsert_by_provider_uid(self, session: AsyncSession, cmd: UserUpsertCmd) -> User: ...

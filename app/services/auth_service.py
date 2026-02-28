@@ -86,9 +86,7 @@ async def exchange_google_code(
         raise AuthError("Invalid Google token response") from e
 
 
-async def decode_google_id_token(
-    id_token_str: str, key_fetcher: AsyncKeyFetcher
-) -> dict[str, Any]:
+async def decode_google_id_token(id_token_str: str, key_fetcher: AsyncKeyFetcher) -> dict[str, Any]:
     """구글 ID token 서명 검증(키는 key_fetcher·lifespan 공유·Depends)."""
     try:
         key_entry = await key_fetcher.get_key(id_token_str)
@@ -104,23 +102,13 @@ async def decode_google_id_token(
         raise AuthError("Invalid id_token") from e
     except Exception as e:
         logger.warning("ID token verification failed (JWKS/network): %s", e, exc_info=True)
-        raise AuthServiceUnavailableError(
-            "ID token verification temporarily unavailable"
-        ) from e
+        raise AuthServiceUnavailableError("ID token verification temporarily unavailable") from e
 
 
 def _jwt_encode_key_and_algorithm() -> tuple[str | bytes, str]:
     """Resolve encode algorithm/key using JWT_SIGNING_MODE."""
-    private_key = (
-        settings.jwt_private_key_pem.get_secret_value()
-        if settings.jwt_private_key_pem
-        else None
-    )
-    public_key = (
-        settings.jwt_public_key_pem.get_secret_value()
-        if settings.jwt_public_key_pem
-        else None
-    )
+    private_key = settings.jwt_private_key_pem.get_secret_value() if settings.jwt_private_key_pem else None
+    public_key = settings.jwt_public_key_pem.get_secret_value() if settings.jwt_public_key_pem else None
     secret = settings.jwt_secret.get_secret_value()
     try:
         algorithm = resolve_jwt_signing_algorithm(
@@ -140,16 +128,8 @@ def _jwt_encode_key_and_algorithm() -> tuple[str | bytes, str]:
 
 def _jwt_decode_key_and_algorithm() -> tuple[str | bytes, str]:
     """Resolve decode algorithm/key using JWT_SIGNING_MODE."""
-    private_key = (
-        settings.jwt_private_key_pem.get_secret_value()
-        if settings.jwt_private_key_pem
-        else None
-    )
-    public_key = (
-        settings.jwt_public_key_pem.get_secret_value()
-        if settings.jwt_public_key_pem
-        else None
-    )
+    private_key = settings.jwt_private_key_pem.get_secret_value() if settings.jwt_private_key_pem else None
+    public_key = settings.jwt_public_key_pem.get_secret_value() if settings.jwt_public_key_pem else None
     secret = settings.jwt_secret.get_secret_value()
     try:
         algorithm = resolve_jwt_signing_algorithm(
@@ -225,9 +205,7 @@ async def verify_access_token(
             raise AuthError("Invalid token type")
         jti = payload.get("jti")
         if redis_blocklist_client is not None and jti:
-            blocked = await is_access_blocked(
-                redis_blocklist_client, jti, fail_closed=fail_closed
-            )
+            blocked = await is_access_blocked(redis_blocklist_client, jti, fail_closed=fail_closed)
             if blocked:
                 raise AuthError("Token revoked or invalid")
         return cast(dict[str, Any], payload)
@@ -294,9 +272,7 @@ async def refresh_tokens(
     )
 
 
-async def revoke_refresh_tokens_for_user(
-    session: AsyncSession, user_id: uuid.UUID
-) -> None:
+async def revoke_refresh_tokens_for_user(session: AsyncSession, user_id: uuid.UUID) -> None:
     """해당 사용자의 refresh_token_version 증가 시 원본 Refresh 토큰 무효화."""
     await increment_refresh_token_version(session, user_id)
 
@@ -318,7 +294,7 @@ def _normalize_redirect_uri(uri: str) -> str:
         raise AuthError("redirect_uri must not contain query or fragment")
     host = parsed.hostname.lower()
     port = f":{parsed.port}" if parsed.port else ""
-    path = (unquote(parsed.path or "/").rstrip("/") or "/")
+    path = unquote(parsed.path or "/").rstrip("/") or "/"
     if "%" in path:
         raise AuthError("redirect_uri invalid encoding")
     return f"{parsed.scheme.lower()}://{host}{port}{path}"
@@ -432,4 +408,3 @@ async def logout_user(session: AsyncSession, user_id: uuid.UUID) -> None:
     순서: logout_user 내 commit 후 blocklist. 그래서 Redis 실패 시에도 DB는 이미 반영되어 있음. Blocklist만 미등록됨.
     """
     await revoke_refresh_tokens_for_user(session, user_id)
-

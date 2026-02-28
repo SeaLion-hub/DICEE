@@ -103,11 +103,7 @@ async def get_ready(request: Request) -> JSONResponse:
         redis_blocklist = "error"
     blocklist_ok = redis_blocklist == "ok"
     redis_trigger_lock = await _check_redis_trigger_lock(request)
-    ok = (
-        db_status == "ok"
-        and blocklist_ok
-        and redis_trigger_lock == "ok"
-    )
+    ok = db_status == "ok" and blocklist_ok and redis_trigger_lock == "ok"
     _update_operational_mode(request, ok)
     content = {
         "status": "ok" if ok else "not_ready",

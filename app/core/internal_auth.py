@@ -49,11 +49,8 @@ def check_crawl_trigger_secret(
         InvalidCrawlTriggerSecretError: when provided secret is missing or invalid.
     """
     if not settings.crawl_trigger_secret:
-        raise CrawlTriggerNotConfiguredError(
-            "Crawl trigger not configured (CRAWL_TRIGGER_SECRET missing)"
-        )
+        raise CrawlTriggerNotConfiguredError("Crawl trigger not configured (CRAWL_TRIGGER_SECRET missing)")
     provided = _extract_provided_secret(x_crawl_trigger_secret, authorization)
     expected = settings.crawl_trigger_secret.get_secret_value()
     if not secrets.compare_digest(provided, expected):
         raise InvalidCrawlTriggerSecretError("Invalid or missing crawl trigger secret")
-

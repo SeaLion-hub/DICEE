@@ -4,7 +4,6 @@ import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
 from app.core.constants import CrawlRunStatus
 from app.domain.contracts.crawl_contracts import NoticeDraft
 
@@ -33,22 +32,28 @@ def test_run_crawl_job_sync_rollback_then_failed_on_commit_failure():
 
     session.commit.side_effect = commit_side_effect
 
-    with patch(
-        "app.services.crawl_service.get_college_by_external_id_sync",
-        return_value=college,
-    ), patch(
-        "app.services.crawl_service.ensure_crawl_run_task_sync",
-        return_value=run_id,
-    ), patch(
-        "app.services.crawl_service.create_or_update_crawl_run_sync",
-        return_value=MagicMock(),
-    ), patch(
-        "app.services.crawl_service.crawl_college_sync",
-        return_value=(3, []),
-    ), patch(
-        "app.services.crawl_service.update_crawl_run_sync",
-        return_value=MagicMock(),
-    ) as mock_update:
+    with (
+        patch(
+            "app.services.crawl_service.get_college_by_external_id_sync",
+            return_value=college,
+        ),
+        patch(
+            "app.services.crawl_service.ensure_crawl_run_task_sync",
+            return_value=run_id,
+        ),
+        patch(
+            "app.services.crawl_service.create_or_update_crawl_run_sync",
+            return_value=MagicMock(),
+        ),
+        patch(
+            "app.services.crawl_service.crawl_college_sync",
+            return_value=(3, []),
+        ),
+        patch(
+            "app.services.crawl_service.update_crawl_run_sync",
+            return_value=MagicMock(),
+        ) as mock_update,
+    ):
         with pytest.raises(RuntimeError, match="simulated DB error"):
             run_crawl_job_sync(
                 session,
@@ -60,14 +65,10 @@ def test_run_crawl_job_sync_rollback_then_failed_on_commit_failure():
         # 실패한 트랜잭션 초기화
         session.rollback.assert_called()
         # FAILED 기록은 동일 세션(session)으로 1회 호출
-        failed_calls = [
-            c
-            for c in mock_update.call_args_list
-            if c.kwargs.get("status") == CrawlRunStatus.FAILED.value
-        ]
+        failed_calls = [c for c in mock_update.call_args_list if c.kwargs.get("status") == CrawlRunStatus.FAILED.value]
         assert len(failed_calls) == 1
-        assert failed_calls[0].kwargs.get("error_message", "")[:50] == (
-            "simulated DB error on success-path commit"[:50]
+        assert (
+            failed_calls[0].kwargs.get("error_message", "")[:50] == ("simulated DB error on success-path commit"[:50])
         )
         assert failed_calls[0].args[0] is session
         # except 내 FAILED 기록 후 commit 호출됨
@@ -90,18 +91,22 @@ def test_crawl_college_uses_bounded_seen_set():
             yield  # async generator (0 yields)
 
     college_mock = MagicMock(id=uuid.UUID("00000000-0000-0000-0000-000000000001"))
-    with patch(
-        "app.services.crawl_service.get_college_by_external_id",
-        new=AsyncMock(return_value=college_mock),
-    ), patch(
-        "app.services.crawl_service.get_crawler_async",
-        return_value=(
-            AsyncMock(return_value=[{"url": "https://example.com/1"}]),
-            AsyncMock(return_value=None),
+    with (
+        patch(
+            "app.services.crawl_service.get_college_by_external_id",
+            new=AsyncMock(return_value=college_mock),
         ),
-    ), patch(
-        "app.services.crawl_service._collect_payloads_async",
-        side_effect=_capture_seen,
+        patch(
+            "app.services.crawl_service.get_crawler_async",
+            return_value=(
+                AsyncMock(return_value=[{"url": "https://example.com/1"}]),
+                AsyncMock(return_value=None),
+            ),
+        ),
+        patch(
+            "app.services.crawl_service._collect_payloads_async",
+            side_effect=_capture_seen,
+        ),
     ):
         session = MagicMock(spec=AsyncSession)
         asyncio.run(crawl_college(session, "engineering"))
@@ -127,26 +132,32 @@ def test_crawl_college_sync_and_async_use_same_cap_helper(monkeypatch):
     async def _get_links_async(_client, _url):
         return [{"url": "https://example.com/1"}]
 
-    with patch(
-        "app.services.crawl_service.get_college_by_external_id",
-        new=AsyncMock(return_value=MagicMock(id=uuid.uuid4())),
-    ), patch(
-        "app.services.crawl_service.get_crawler_async",
-        return_value=(
-            _get_links_async,
-            AsyncMock(return_value=None),
+    with (
+        patch(
+            "app.services.crawl_service.get_college_by_external_id",
+            new=AsyncMock(return_value=MagicMock(id=uuid.uuid4())),
+        ),
+        patch(
+            "app.services.crawl_service.get_crawler_async",
+            return_value=(
+                _get_links_async,
+                AsyncMock(return_value=None),
+            ),
         ),
     ):
         asyncio.run(crawl_module.crawl_college(MagicMock(), "engineering"))
 
-    with patch(
-        "app.services.crawl_service.get_college_by_external_id_sync",
-        return_value=MagicMock(id=uuid.uuid4()),
-    ), patch(
-        "app.services.crawl_service.get_crawler",
-        return_value=(
-            lambda _url: [{"url": "https://example.com/1"}],
-            lambda _url: None,
+    with (
+        patch(
+            "app.services.crawl_service.get_college_by_external_id_sync",
+            return_value=MagicMock(id=uuid.uuid4()),
+        ),
+        patch(
+            "app.services.crawl_service.get_crawler",
+            return_value=(
+                lambda _url: [{"url": "https://example.com/1"}],
+                lambda _url: None,
+            ),
         ),
     ):
         crawl_module.crawl_college_sync(MagicMock(), "engineering")
@@ -337,6 +348,7 @@ def test_async_adapter_reflects_concurrency_config(monkeypatch):
     asyncio.run(_run())
     assert captured == {"concurrency": 13}
 
+
 def test_redis_seen_set_uses_shared_sync_client(monkeypatch):
     from app.services import crawl_service as crawl_module
 
@@ -464,9 +476,7 @@ async def test_fetch_one_async_returns_exception_in_tuple_on_exception():
     async def scrape_raise(_client, url):
         raise RuntimeError("fetch failed")
 
-    result = await _fetch_one_async(
-        client, post, scrape_raise, rate_limiter, sem
-    )
+    result = await _fetch_one_async(client, post, scrape_raise, rate_limiter, sem)
     assert result.detail_url == "https://example.com/1"
     assert result.data is None
     assert result.exc is not None
@@ -540,11 +550,10 @@ def test_collect_payloads_sync_applies_rate_limit_in_worker_thread(monkeypatch):
 def test_scrape_one_sync_with_sem_retries_request_exception_and_succeeds(monkeypatch):
     import threading
 
-    from requests.exceptions import RequestException
-    from tenacity import wait_none
-
     from app.services import crawl_service as crawl_module
     from app.services.crawlers.base import ScrapeResult
+    from requests.exceptions import RequestException
+    from tenacity import wait_none
 
     monkeypatch.setattr(crawl_module, "_crawl_retry_wait", wait_none())
     calls = {"scrape": 0, "wait": 0}
@@ -575,10 +584,9 @@ def test_scrape_one_sync_with_sem_retries_request_exception_and_succeeds(monkeyp
 def test_scrape_one_sync_with_sem_retries_request_exception_until_limit(monkeypatch):
     import threading
 
-    from tenacity import wait_none
-
     from app.services import crawl_service as crawl_module
     from requests.exceptions import RequestException
+    from tenacity import wait_none
 
     monkeypatch.setattr(crawl_module, "_crawl_retry_wait", wait_none())
     calls = {"scrape": 0, "wait": 0}

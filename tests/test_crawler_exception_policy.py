@@ -1,9 +1,8 @@
 from unittest.mock import MagicMock
 
 import pytest
-from requests.exceptions import RequestException
-
 from app.core.crawl_http import HtmlTooLargeError
+from requests.exceptions import RequestException
 
 
 def test_yonsei_engineering_sync_propagates_request_exception(monkeypatch):

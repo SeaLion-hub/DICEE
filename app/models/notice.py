@@ -39,9 +39,7 @@ class Notice(Base):
     external_id: Mapped[str] = mapped_column(String(512), nullable=False, index=True)
     title: Mapped[str] = mapped_column(String(512), nullable=False)
     url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
-    published_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True, index=True
-    )
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
 
     # 1. 원본 데이터 보존 (본문은 notice_contents.content_url로 S3 등에 분리 저장)
     images: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB, nullable=True)
@@ -64,17 +62,13 @@ class Notice(Base):
     content_hash: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     is_manual_edited: Mapped[bool] = mapped_column(default=False, nullable=False)
 
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC), index=True
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC), index=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(UTC),
         onupdate=lambda: datetime.now(UTC),
     )
-    deleted_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     college: Mapped["College"] = relationship("College", back_populates="notices")
     notice_content: Mapped["NoticeContent | None"] = relationship(

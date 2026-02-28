@@ -73,6 +73,7 @@ def client() -> TestClient:
     with patch.dict(os.environ, {"APP_ENTRY": "api"}):
         importlib.reload(config_module)
         from app.main import app
+
         with TestClient(app) as c:
             state = getattr(c.app, "state", None)
             if state is not None and getattr(state, "async_session_maker", None) is None:

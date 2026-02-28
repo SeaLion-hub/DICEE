@@ -356,16 +356,14 @@ class Settings(BaseSettings):
 
         if policy == "fail" and backend == "local" and not self.content_spool_allow_ephemeral:
             missing.append(
-                "production with local spool requires CONTENT_SPOOL_ALLOW_EPHEMERAL=true "
-                "or CONTENT_SPOOL_BACKEND=s3"
+                "production with local spool requires CONTENT_SPOOL_ALLOW_EPHEMERAL=true " "or CONTENT_SPOOL_BACKEND=s3"
             )
 
         if not self.trusted_proxy_skip_fast and not (self.trusted_proxy_ips or "").strip():
             missing.append("TRUSTED_PROXY_IPS")
 
         has_google_client = bool(
-            (self.google_client_id or "").strip()
-            or (self.google_client_secret.get_secret_value() or "").strip()
+            (self.google_client_id or "").strip() or (self.google_client_secret.get_secret_value() or "").strip()
         )
         if has_google_client:
             raw_uris = (self.google_redirect_uris or "").strip()

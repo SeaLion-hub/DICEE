@@ -58,9 +58,7 @@ async def init_database() -> None:
 def check_startup_pool_budget() -> None:
     """부팅 시 풀 예산 검사. 초과 시 strict면 RuntimeError, 아니면 critical 로그 + Sentry."""
     effective_max_conn = (
-        settings.db.db_max_connections
-        if settings.db.db_max_connections is not None
-        else get_resolved_max_connections()
+        settings.db.db_max_connections if settings.db.db_max_connections is not None else get_resolved_max_connections()
     )
     budget_result = check_pool_budget(effective_max_conn)
     if not budget_result.within_budget and budget_result.app_budget > 0:
@@ -69,6 +67,7 @@ def check_startup_pool_budget() -> None:
         logger.critical("%s", budget_result.message)
         try:
             import sentry_sdk
+
             with sentry_sdk.push_scope() as scope:
                 scope.set_tag("context", "db_capacity")
                 scope.set_context(
@@ -114,6 +113,7 @@ async def teardown_state(state: AppState) -> None:
     """
     리소스 병렬 해제. asyncio.gather(..., return_exceptions=True)로 한 타임아웃이 전체를 막지 않도록 함.
     """
+
     async def close_httpx() -> None:
         await state.httpx_client.aclose()
 
