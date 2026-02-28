@@ -31,9 +31,9 @@ class Settings(BaseSettings):
     sentry_dsn: SecretStr | None = None
     environment: str = "development"
 
-    # Entry point
+    # Entry point (required: no default — fail-fast when APP_ENTRY/ROLE missing)
     app_entry: Literal["api", "celery"] = Field(
-        default="api",
+        ...,
         description="Entry point: api | celery. Set APP_ENTRY or ROLE.",
         validation_alias=AliasChoices("APP_ENTRY", "ROLE"),
     )

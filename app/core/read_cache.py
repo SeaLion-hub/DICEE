@@ -36,7 +36,7 @@ async def get_cached(client: RedisAsyncio | None, *key_parts: str) -> dict[str, 
     except json.JSONDecodeError:
         return None
     if isinstance(parsed, dict):
-        return cast("dict[str, Any]", parsed)
+        return cast(dict[str, Any], parsed)
     return None
 
 

@@ -61,9 +61,10 @@ class HostRateLimiter:
             now = time.monotonic()
             last = self._last.get(host, 0.0)
             wait_sec = max(0.0, self.min_interval_sec - (now - last))
-            self._last[host] = now + wait_sec
         if wait_sec > 0:
             time.sleep(wait_sec)
+        with self._sync_lock:
+            self._last[host] = time.monotonic()
 
     async def wait_async(self, host: str) -> None:
         """비동기: 호스트에 대해 min_interval_sec 이상 경과할 때까지 대기."""
@@ -73,9 +74,10 @@ class HostRateLimiter:
             now = time.monotonic()
             last = self._last.get(host, 0.0)
             wait_sec = max(0.0, self.min_interval_sec - (now - last))
-            self._last[host] = now + wait_sec
         if wait_sec > 0:
             await asyncio.sleep(wait_sec)
+        async with self._lock:
+            self._last[host] = time.monotonic()
 
 
 class RedisHostRateLimiterSync:
