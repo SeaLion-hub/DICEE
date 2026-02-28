@@ -1,6 +1,35 @@
+"""
+단과대(College) 시드 스크립트.
+
+실행: 프로젝트 루트에서 python scripts/seed_colleges.py [--dry-run] [--verbose]
+Import 시점 부작용을 피하기 위해 경로·env 보정 후 app을 로드하고, 실패 시 rollback 후 재전파·비영구 종료(exit 1).
+"""
+from __future__ import annotations
+
+import argparse
 import asyncio
-import os
+import logging
 import sys
+from pathlib import Path
+
+# 경로·env 보정은 반드시 app import보다 먼저
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+try:
+    from dotenv import load_dotenv
+except ImportError:
+    pass
+else:
+    load_dotenv(PROJECT_ROOT / ".env")
+
+# 스크립트 단독 실행 시 Settings에 필요한 최소 env (필드가 없으면 기본값)
+import os as _os
+if "APP_ENTRY" not in _os.environ:
+    _os.environ.setdefault("APP_ENTRY", "api")
+
+from dataclasses import dataclass
 
 from sqlalchemy import select
 from sqlalchemy.engine import make_url
@@ -9,110 +38,107 @@ from app.core import database
 from app.core.config import settings
 from app.models.college import College
 
+logger = logging.getLogger("seed_colleges")
+
+
+@dataclass(frozen=True, slots=True)
+class CollegeSeed:
+    name: str
+    external_id: str
+
+
+COLLEGES_DATA: tuple[CollegeSeed, ...] = (
+    CollegeSeed(name="공과대학", external_id="engineering"),
+    CollegeSeed(name="이과대학", external_id="science"),
+    CollegeSeed(name="의과대학", external_id="medicine"),
+    CollegeSeed(name="인공지능융합대학", external_id="ai"),
+    CollegeSeed(name="글로벌인재대학", external_id="glc"),
+    CollegeSeed(name="언더우드국제대학", external_id="underwood"),
+    CollegeSeed(name="경영대학", external_id="business"),
+)
+
 
 def _mask_db_url(raw: str | None) -> str:
-    """DB URL에서 비밀번호를 마스킹한 문자열을 반환."""
     if not raw:
         return "<empty>"
     try:
         url = make_url(str(raw))
-        password = "****" if url.password else None
-        masked = url.set(password=password)
-        return str(masked)
+        return str(url.set(password="****" if url.password else None))
     except Exception:
-        safe = str(raw)
-        if "@" in safe:
-            prefix, suffix = safe.split("@", 1)
-            if ":" in prefix:
-                scheme_and_user = prefix.rsplit(":", 1)[0]
-                return f"{scheme_and_user}:****@{suffix}"
         return "<redacted>"
 
 
-# 1. 경로 설정 (프로젝트 루트 인식)
-current_dir = os.path.dirname(os.path.abspath(__file__))
-project_root = os.path.dirname(current_dir)
-sys.path.append(project_root)
+def _configure_logging(verbose: bool) -> None:
+    level = logging.DEBUG if verbose else logging.INFO
+    logging.basicConfig(
+        level=level,
+        format="%(asctime)s %(levelname)s %(name)s - %(message)s",
+    )
 
-print(f"📍 [DEBUG] 현재 실행 위치(CWD): {os.getcwd()}")
-print(f"📍 [DEBUG] 프로젝트 루트 경로: {project_root}")
 
-# 2. .env 파일 직접 확인 (Pydantic 거치지 않고 확인)
-env_path = os.path.join(os.getcwd(), ".env")
-print(f"📍 [DEBUG] .env 파일 예상 경로: {env_path}")
-
-if os.path.exists(env_path):
-    print("✅ [DEBUG] .env 파일이 존재합니다!")
-    with open(env_path, "r", encoding="utf-8") as f:
-        for line in f:
-            if line.startswith("DATABASE_URL"):
-                # 값만 파싱해서 마스킹
-                value = ""
-                if "=" in line:
-                    _, value = line.strip().split("=", 1)
-                masked = _mask_db_url(value)
-                print(f"👀 [DEBUG] 파일 내 DATABASE_URL(마스킹): {masked}")
-else:
-    print("❌ [DEBUG] .env 파일을 찾을 수 없습니다! (경로를 확인하세요)")
-
-# 3. 모듈 로드 및 설정 확인
-try:
-    masked_settings_url = _mask_db_url(settings.db.database_url)
-    print(f"⚙️ [DEBUG] settings.db.database_url 값(마스킹): {masked_settings_url}")
-
-    print("🔄 [DEBUG] DB 초기화(init_db) 시도 중...")
+async def seed_colleges(*, dry_run: bool) -> tuple[int, int]:
+    """기존 건 수, 삽입 건 수 반환. N+1 제거를 위해 external_id 일괄 조회 후 삽입."""
     database.init_db()
-
-    if database.get_engine():
-        print("✅ [DEBUG] Engine 생성 성공!")
-        print(f"   -> 접속 URL(마스킹): {_mask_db_url(str(database.engine.url))}")
-    else:
-        print("❌ [DEBUG] Engine이 None입니다. (settings.db.database_url이 비어있을 확률 높음)")
-
-except Exception as e:
-    print(f"🔥 [DEBUG] 로드 중 치명적 에러 발생: {e}")
-    import traceback
-
-    traceback.print_exc()
-
-
-# external_id는 crawler_config.COLLEGE_CODE_TO_MODULE 키와 일치 (engineering, science, medicine, ai, glc, underwood, business).
-COLLEGES_DATA = [
-    {"name": "공과대학", "external_id": "engineering"},
-    {"name": "이과대학", "external_id": "science"},
-    {"name": "의과대학", "external_id": "medicine"},
-    {"name": "인공지능융합대학", "external_id": "ai"},
-    {"name": "글로벌인재대학", "external_id": "glc"},
-    {"name": "언더우드국제대학", "external_id": "underwood"},
-    {"name": "경영대학", "external_id": "business"},
-]
-
-async def seed_colleges():
     maker = database.get_async_session_maker()
-    if not maker:
-        print("\n🚫 [STOP] DB 세션이 없어 작업을 중단합니다.")
-        return
+    if maker is None:
+        raise RuntimeError("DB session maker is not initialized. Check DATABASE_URL.")
 
-    print("\n🌱 단과대 데이터 시딩 시작...")
+    target_ids = [c.external_id for c in COLLEGES_DATA]
+
+    async with maker() as session:
+        try:
+            result = await session.execute(
+                select(College.external_id).where(College.external_id.in_(target_ids))
+            )
+            existing_ids = set(result.scalars().all())
+
+            to_insert = [c for c in COLLEGES_DATA if c.external_id not in existing_ids]
+            for item in to_insert:
+                session.add(College(name=item.name, external_id=item.external_id))
+
+            if dry_run:
+                await session.rollback()
+            else:
+                await session.commit()
+
+            return (len(existing_ids), len(to_insert))
+        except Exception:
+            await session.rollback()
+            raise
+
+
+async def _run(dry_run: bool) -> int:
+    raw_url = settings.db.database_url
+    masked = _mask_db_url(raw_url)
+    logger.info("Starting seed_colleges (database_url=%s, dry_run=%s)", masked, dry_run)
+
+    existed, inserted = await seed_colleges(dry_run=dry_run)
+    logger.info(
+        "Seed finished (existing=%d, inserted=%d, dry_run=%s)",
+        existed,
+        inserted,
+        dry_run,
+    )
+    return 0
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Seed colleges into DB.")
+    parser.add_argument("--dry-run", action="store_true", help="Do not commit changes.")
+    parser.add_argument("--verbose", action="store_true", help="Enable debug logging.")
+    args = parser.parse_args()
+
+    _configure_logging(args.verbose)
+
+    if sys.platform == "win32":
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
     try:
-        async with maker() as session:
-            for data in COLLEGES_DATA:
-                stmt = select(College).where(College.external_id == data["external_id"])
-                result = await session.execute(stmt)
-                existing = result.scalar_one_or_none()
-                
-                if existing:
-                    print(f"  ⚠️ Skip: {data['name']} ({data['external_id']})")
-                else:
-                    print(f"  ✅ Add: {data['name']} ({data['external_id']})")
-                    new_college = College(name=data['name'], external_id=data['external_id'])
-                    session.add(new_college)
-            await session.commit()
-        print("✨ 시딩 완료!")
-    except Exception as e:
-        print(f"🔥 [ERROR] DB 작업 중 오류: {e}")
+        return asyncio.run(_run(dry_run=args.dry_run))
+    except Exception:
+        logger.exception("seed_colleges failed")
+        return 1
+
 
 if __name__ == "__main__":
-    if sys.platform == 'win32':
-        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-    asyncio.run(seed_colleges())
+    raise SystemExit(main())
