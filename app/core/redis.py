@@ -287,8 +287,8 @@ async def try_claim_trigger_idempotency(
         if fail_closed:
             raise RedisIdempotencyUnavailableError("Trigger idempotency claim failed.") from e
         logger.warning(
-            "Trigger idempotency claim failed; proceeding without idempotency: %s",
-            e,
+            "Trigger idempotency claim failed; proceeding without idempotency.",
+            exc_info=True,
         )
         return True
 
@@ -307,8 +307,8 @@ async def get_trigger_idempotency_result(client: RedisAsyncio | None, idempotenc
         if raw == IDEMPOTENCY_VALUE_IN_PROGRESS:
             return {"status": "in_progress", "detail": "in_progress", "code": "IDEMPOTENCY_IN_PROGRESS"}
         return cast(dict[str, Any], json.loads(raw))
-    except (json.JSONDecodeError, Exception) as e:
-        logger.warning("Trigger idempotency get failed: %s", e)
+    except (json.JSONDecodeError, Exception):
+        logger.warning("Trigger idempotency get failed.", exc_info=True)
         return None
 
 
@@ -322,8 +322,8 @@ async def set_trigger_idempotency_result(
     key = f"{TRIGGER_IDEMPOTENCY_KEY_PREFIX}{_idempotency_key_hash(idempotency_key)}:{scope_hash}"
     try:
         await client.set(key, json.dumps(payload), ex=TRIGGER_IDEMPOTENCY_TTL_SECONDS)
-    except Exception as e:
-        logger.warning("Trigger idempotency set failed: %s", e)
+    except Exception:
+        logger.warning("Trigger idempotency set failed.", exc_info=True)
 
 
 async def clear_trigger_idempotency_in_progress(
@@ -345,8 +345,8 @@ async def clear_trigger_idempotency_in_progress(
             client.eval(LUA_RELEASE_IF_OWNER, 1, key, IDEMPOTENCY_VALUE_IN_PROGRESS),
         )
         return bool(raw == 1)
-    except Exception as e:
-        logger.warning("Trigger idempotency clear failed: %s", e)
+    except Exception:
+        logger.warning("Trigger idempotency clear failed.", exc_info=True)
         return False
 
 

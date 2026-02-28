@@ -94,6 +94,45 @@ def test_clear_trigger_idempotency_in_progress_deletes_only_in_progress():
     assert asyncio.run(get_trigger_idempotency_result(client, key, scope)) == payload
 
 
+async def _idempotency_get_raises(key):
+    raise ConnectionError("redis down")
+
+
+def test_idempotency_get_failure_logs_no_key_exposure(caplog):
+    """get_trigger_idempotency_result 실패 시 로그에 idempotency key 또는 (key=) 미노출."""
+    secret_key = "secret-idempotency-key-must-not-appear-in-logs"
+    client = MagicMock()
+    client.get = _idempotency_get_raises
+    with caplog.at_level("WARNING"):
+        result = asyncio.run(
+            get_trigger_idempotency_result(client, secret_key, "scope")
+        )
+    assert result is None
+    log_text = " ".join(r.message for r in caplog.records)
+    assert secret_key not in log_text
+    assert "(key=" not in log_text
+
+
+async def _idempotency_set_raises(key, value, ex=None):
+    raise OSError("redis set failed")
+
+
+def test_idempotency_set_failure_logs_no_key_exposure(caplog):
+    """set_trigger_idempotency_result 실패 시 로그에 idempotency key 또는 (key=) 미노출."""
+    secret_key = "another-secret-key-not-in-logs"
+    client = MagicMock()
+    client.set = _idempotency_set_raises
+    with caplog.at_level("WARNING"):
+        asyncio.run(
+            set_trigger_idempotency_result(
+                client, secret_key, "scope", {"status": "ok"}
+            )
+        )
+    log_text = " ".join(r.message for r in caplog.records)
+    assert secret_key not in log_text
+    assert "(key=" not in log_text
+
+
 def test_trigger_crawl_failed_enqueue_clears_idempotency_claim(client, monkeypatch):
     from unittest.mock import AsyncMock  # noqa: I001
 

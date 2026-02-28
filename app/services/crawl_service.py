@@ -12,6 +12,7 @@ import logging
 import threading
 import uuid
 from collections import deque
+from functools import lru_cache
 from collections.abc import AsyncIterator, Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
@@ -90,24 +91,19 @@ class CrawlRuntimeConfig:
     crawl_seen_max_size: int
 
 
-_crawl_runtime_config_cache: CrawlRuntimeConfig | None = None
-
-
+@lru_cache(maxsize=1)
 def _load_crawl_runtime_config() -> CrawlRuntimeConfig:
     """크롤 런타임 설정을 프로세스당 1회만 로드하고 캐시. 재시작 없이 변경할 일이 없으므로 기동 시 1회 로드로 성능 유리."""
-    global _crawl_runtime_config_cache
-    if _crawl_runtime_config_cache is None:
-        _crawl_runtime_config_cache = CrawlRuntimeConfig(
-            polite_delay_seconds=settings.polite_delay_seconds,
-            page_timeout_seconds=settings.crawl_page_timeout_seconds,
-            upsert_chunk_size=settings.crawl_upsert_chunk_size,
-            collect_sync_max_workers=settings.crawl_collect_sync_max_workers,
-            collect_in_flight_limit=settings.crawl_collect_in_flight_limit,
-            max_links_per_run=settings.crawl_max_links_per_run,
-            collect_async_concurrency=settings.crawl_collect_async_concurrency,
-            crawl_seen_max_size=settings.crawl_seen_max_size,
-        )
-    return _crawl_runtime_config_cache
+    return CrawlRuntimeConfig(
+        polite_delay_seconds=settings.polite_delay_seconds,
+        page_timeout_seconds=settings.crawl_page_timeout_seconds,
+        upsert_chunk_size=settings.crawl_upsert_chunk_size,
+        collect_sync_max_workers=settings.crawl_collect_sync_max_workers,
+        collect_in_flight_limit=settings.crawl_collect_in_flight_limit,
+        max_links_per_run=settings.crawl_max_links_per_run,
+        collect_async_concurrency=settings.crawl_collect_async_concurrency,
+        crawl_seen_max_size=settings.crawl_seen_max_size,
+    )
 
 
 # 요청/페이지 간 최소 딜레이(초). 부하·IP 차단 완화. .env POLITE_DELAY_SECONDS로 오버라이드 가능.
@@ -261,13 +257,19 @@ def _cap_links_for_run(links_raw: list[dict], college_code: str, max_links: int)
     return links_raw[:max_links]
 
 
-def _init_seen_set(
+def _init_seen_set_async(seen_max_size: int) -> _BoundedSeenSet:
+    """비동기 파이프라인 전용. in-memory만 사용하여 Redis Seen이 타입/경로상 들어가지 않음."""
+    return _BoundedSeenSet(seen_max_size)
+
+
+def _init_seen_set_sync(
     *,
     run_id: uuid.UUID | None,
     redis_url: str,
     redis_required: bool,
     seen_max_size: int,
 ) -> _BoundedSeenSet | _RedisSeenSet:
+    """동기 파이프라인 전용. run_id+redis_url 있으면 Redis, 아니면 in-memory."""
     if run_id and redis_url:
         return _RedisSeenSet(
             run_id,
@@ -300,7 +302,7 @@ class _AsyncCrawlAdapter(Protocol):
         links: list[dict],
         college_id: uuid.UUID,
         scrape_async_fn: Callable,
-        seen: _SeenSet,
+        seen: _BoundedSeenSet,
         cfg: CrawlRuntimeConfig,
     ) -> AsyncIterator[NoticeDraft]: ...
 
@@ -343,7 +345,7 @@ class _DefaultAsyncCrawlAdapter:
         links: list[dict],
         college_id: uuid.UUID,
         scrape_async_fn: Callable,
-        seen: _SeenSet,
+        seen: _BoundedSeenSet,
         cfg: CrawlRuntimeConfig,
     ) -> AsyncIterator[NoticeDraft]:
         async for payload in _collect_payloads_async(
@@ -386,12 +388,7 @@ async def _run_crawl_pipeline_async(
     cfg: CrawlRuntimeConfig,
     adapter: _AsyncCrawlAdapter,
 ) -> int:
-    seen = _init_seen_set(
-        run_id=None,
-        redis_url="",
-        redis_required=False,
-        seen_max_size=cfg.crawl_seen_max_size,
-    )
+    seen = _init_seen_set_async(cfg.crawl_seen_max_size)
     async with httpx.AsyncClient(timeout=cfg.page_timeout_seconds) as client:
         links_raw = await get_links_async_fn(client, list_url)
         links = _cap_links_for_run(links_raw, college_code, cfg.max_links_per_run)
@@ -815,7 +812,7 @@ def _run_crawl_pipeline_sync(
 
     raw_redis = (settings.redis.redis_url or "").strip()
     crawl_seen_required = settings.redis.redis_crawl_seen_required
-    seen = _init_seen_set(
+    seen = _init_seen_set_sync(
         run_id=run_id,
         redis_url=raw_redis,
         redis_required=crawl_seen_required,
