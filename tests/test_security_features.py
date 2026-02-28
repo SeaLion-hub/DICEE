@@ -410,6 +410,82 @@ def test_trigger_crawl_all_enqueues_fail_returns_503(client, monkeypatch):
     ).lower() or "crawl" in (data.get("detail") or "").lower()
 
 
+def test_trigger_crawl_skipped_then_retry_with_same_idempotency_key_not_stuck(client, monkeypatch):
+    from unittest.mock import AsyncMock, MagicMock
+
+    from app.api import internal as internal_module
+    from app.core.deps import get_redis_trigger_lock
+    from app.main import app
+
+    class AsyncMockRedis:
+        def __init__(self):
+            self.stored = {}
+
+        async def set(self, key, value, nx=False, ex=None):
+            if nx and key in self.stored:
+                return False
+            self.stored[key] = value
+            return True
+
+        async def get(self, key):
+            return self.stored.get(key)
+
+        async def eval(self, script, numkeys, key, value):
+            if self.stored.get(key) == value:
+                del self.stored[key]
+                return 1
+            return 0
+
+    def _noop_authorize(request, x_secret, auth):
+        pass
+
+    async def _allow_rate_limit(*args, **kwargs):
+        return True
+
+    async def _fake_redis():
+        yield mock_redis
+
+    mock_redis = AsyncMockRedis()
+    monkeypatch.setattr(internal_module, "_authorize_internal_trigger", _noop_authorize)
+    monkeypatch.setattr(internal_module, "check_rate_limit", _allow_rate_limit)
+    monkeypatch.setattr(internal_module, "get_client_ip", lambda request: "127.0.0.1")
+    monkeypatch.setattr(
+        internal_module,
+        "acquire_trigger_lock",
+        AsyncMock(side_effect=[(False, None), (True, "token-1")]),
+    )
+    monkeypatch.setattr(internal_module, "release_trigger_lock", AsyncMock(return_value=True))
+
+    task_result = MagicMock()
+    task_result.id = "task-1"
+    monkeypatch.setattr(
+        "app.services.tasks.crawl_college_task.apply_async",
+        lambda *args, **kwargs: task_result,
+    )
+
+    app.dependency_overrides[get_redis_trigger_lock] = _fake_redis
+    try:
+        headers = {"Idempotency-Key": "skip-then-retry-key"}
+        first = client.post(
+            "/internal/trigger-crawl",
+            params={"college_code": "engineering"},
+            headers=headers,
+        )
+        assert first.status_code == 200, first.json()
+        assert "engineering" in first.json().get("skipped", [])
+
+        second = client.post(
+            "/internal/trigger-crawl",
+            params={"college_code": "engineering"},
+            headers=headers,
+        )
+        assert second.status_code == 200, second.json()
+        assert second.json().get("enqueued") == 1
+        assert second.json().get("detail") != "in_progress"
+    finally:
+        app.dependency_overrides.pop(get_redis_trigger_lock, None)
+
+
 def test_trigger_crawl_invalid_secret_returns_401_before_rate_limit(client, monkeypatch):
     """POST /internal/trigger-crawl에 잘못된 시크릿이면 401 (rate-limit 소비 전 인증 실패, P1 회귀 방지)."""
     from app.core.config import settings

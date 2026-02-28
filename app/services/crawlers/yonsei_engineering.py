@@ -71,9 +71,9 @@ def scrape_yonsei_engineering_precise(url):
             text = fetch_html(url, timeout=10)
         except HtmlTooLargeError as e:
             logger.warning("scrape_yonsei_engineering_precise body too large url=%s: %s", url, e)
-            return ScrapeResult(None, "접속 실패", None, [], [])
+            raise
         except RequestException:
-            return ScrapeResult(None, "접속 실패", None, [], [])
+            raise
         soup = BeautifulSoup(text, "html.parser")
 
         # 제목
@@ -375,7 +375,7 @@ async def scrape_yonsei_engineering_precise_async(client: httpx.AsyncClient, url
         return ScrapeResult(title, date, content_text, images_data, attachment_names)
     except HtmlTooLargeError as e:
         logger.warning("scrape_yonsei_engineering_precise_async body too large url=%s: %s", url, e)
-        return ScrapeResult(None, "본문 초과", None, [], [])
+        raise
     except Exception:
         logger.exception("scrape_yonsei_engineering_precise_async error url=%s", url)
         raise

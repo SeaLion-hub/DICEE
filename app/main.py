@@ -27,6 +27,7 @@ from app.core.exception_handlers import (
     validation_exception_handler,
 )
 from app.core.lifespan import (
+    check_startup_crawler_contract,
     check_startup_pool_budget,
     create_app_state,
     init_database,
@@ -49,6 +50,7 @@ async def lifespan(app: FastAPI):
         logging.getLogger().addFilter(ProductionExceptionFilter())
     await init_database()
     check_startup_pool_budget()
+    check_startup_crawler_contract()
     state = create_app_state()
     app.state = cast(State, state)
     yield

@@ -23,7 +23,14 @@ from bs4 import BeautifulSoup
 from requests.exceptions import RequestException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
-from tenacity import AsyncRetrying, retry_if_exception_type, stop_after_attempt, wait_exponential_jitter
+from tenacity import (
+    AsyncRetrying,
+    RetryError,
+    Retrying,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_exponential_jitter,
+)
 
 from app.core.config import settings
 from app.core.constants import CrawlRunStatus
@@ -570,12 +577,32 @@ def _process_scrape_result(
 def _scrape_one_sync_with_sem(
     post: dict,
     scrape_fn: Callable,
+    rate_limiter,
     sem: threading.BoundedSemaphore,
 ) -> tuple[dict, str, ScrapeResult | None, Exception | None]:
     """BoundedSemaphore로 동시 스크랩 수 제한. 워커 스레드에서 호출."""
     sem.acquire()
     try:
-        return _scrape_one_sync(post, scrape_fn)
+        detail_url = post.get("url") or ""
+        host = host_from_url(detail_url) or "_"
+        last_result: tuple[dict, str, ScrapeResult | None, Exception | None] | None = None
+        try:
+            for attempt in Retrying(
+                stop=stop_after_attempt(CRAWL_RETRY_MAX_ATTEMPTS),
+                wait=_crawl_retry_wait,
+                retry=retry_if_exception_type(_NETWORK_EXC_TYPES),
+                reraise=False,
+            ):
+                with attempt:
+                    rate_limiter.wait_sync(host)
+                    last_result = _scrape_one_sync(post, scrape_fn)
+                    _, _, _, exc = last_result
+                    if exc is not None and isinstance(exc, _NETWORK_EXC_TYPES):
+                        raise exc
+                    return last_result
+        except RetryError:
+            pass
+        return last_result if last_result is not None else (post, detail_url, None, None)
     finally:
         sem.release()
 
@@ -605,8 +632,7 @@ def _collect_payloads_sync(
         if not remaining:
             return
         post = remaining.popleft()
-        rate_limiter.wait_sync(host_from_url(post.get("url") or "") or "_")
-        fut = executor.submit(_scrape_one_sync_with_sem, post, scrape_fn, sem)
+        fut = executor.submit(_scrape_one_sync_with_sem, post, scrape_fn, rate_limiter, sem)
         futures[fut] = post
 
     executor = ThreadPoolExecutor(max_workers=max_workers)

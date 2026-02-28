@@ -6,6 +6,7 @@ Redis + Lua 기반 분산 limiter 지원. Redis 미설정/실패 시 인메모�
 
 import asyncio
 import logging
+import threading
 import time
 from typing import cast
 from urllib.parse import urlparse
@@ -44,23 +45,25 @@ class HostRateLimiter:
     동기(wait_sync) / 비동기(wait_async) 모두 지원.
     """
 
-    __slots__ = ("min_interval_sec", "_last", "_lock")
+    __slots__ = ("min_interval_sec", "_last", "_lock", "_sync_lock")
 
     def __init__(self, min_interval_sec: float):
         self.min_interval_sec = min_interval_sec
         self._last: dict[str, float] = {}
         self._lock = asyncio.Lock()
+        self._sync_lock = threading.Lock()
 
     def wait_sync(self, host: str) -> None:
         """동기: 호스트에 대해 min_interval_sec 이상 경과할 때까지 대기."""
         if not host:
             return
-        now = time.monotonic()
-        last = self._last.get(host, 0.0)
-        wait_sec = self.min_interval_sec - (now - last)
+        with self._sync_lock:
+            now = time.monotonic()
+            last = self._last.get(host, 0.0)
+            wait_sec = max(0.0, self.min_interval_sec - (now - last))
+            self._last[host] = now + wait_sec
         if wait_sec > 0:
             time.sleep(wait_sec)
-        self._last[host] = time.monotonic()
 
     async def wait_async(self, host: str) -> None:
         """비동기: 호스트에 대해 min_interval_sec 이상 경과할 때까지 대기."""

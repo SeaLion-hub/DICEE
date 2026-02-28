@@ -10,6 +10,7 @@ import httpx
 from pyjwt_key_fetcher import AsyncKeyFetcher
 
 from app.core.config import settings
+from app.core.crawler_config import validate_crawler_contract
 from app.core.database import (
     check_pool_budget,
     get_async_session_maker,
@@ -81,6 +82,11 @@ def check_startup_pool_budget() -> None:
                 sentry_sdk.capture_message(budget_result.message, level="error")
         except ImportError:
             pass
+
+
+def check_startup_crawler_contract() -> None:
+    """CRAWLER_CONFIG에 등록된 sync/async 크롤러 함수 계약을 부팅 시점에 검증."""
+    validate_crawler_contract()
 
 
 def create_app_state() -> AppState:

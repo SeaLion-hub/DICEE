@@ -11,6 +11,7 @@ from celery.signals import worker_init
 from kombu import Queue  # type: ignore[import-untyped]
 
 from app.core.config import settings
+from app.core.crawler_config import validate_crawler_contract
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +78,7 @@ if broker_url.startswith("rediss://"):
 def _on_worker_init(**kwargs):
     """워커 프로세스 기동 시에만 APP_ENTRY=celery 검사. API에서 tasks import 시에는 검사하지 않음."""
     _ensure_celery_entry()
+    validate_crawler_contract()
 
 
 @app.on_after_configure.connect

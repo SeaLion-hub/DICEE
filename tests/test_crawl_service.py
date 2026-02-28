@@ -476,3 +476,110 @@ async def test_fetch_one_async_cancelled_error_propagates():
 
     with pytest.raises(asyncio.CancelledError):
         await _fetch_one_async(client, post, scrape_raise, rate_limiter, sem)
+
+
+def test_collect_payloads_sync_applies_rate_limit_in_worker_thread(monkeypatch):
+    import threading
+
+    from app.services import crawl_service as crawl_module
+    from app.services.crawlers.base import ScrapeResult
+
+    events: list[tuple[str, str]] = []
+
+    class _FakeLimiter:
+        def wait_sync(self, host: str) -> None:
+            events.append(("wait", threading.current_thread().name))
+
+        def close(self) -> None:
+            return
+
+    monkeypatch.setattr(crawl_module, "get_host_rate_limiter_sync", lambda _delay: _FakeLimiter())
+
+    def _scrape(_url: str):
+        events.append(("scrape", threading.current_thread().name))
+        return ScrapeResult("title", "2024.01.01", "<p>body</p>", [], [])
+
+    links = [{"no": "1", "url": "https://example.com/post/1", "title": "title"}]
+    payloads = list(
+        crawl_module._collect_payloads_sync(
+            links,
+            uuid.uuid4(),
+            _scrape,
+            1.0,
+            max_workers=1,
+            in_flight_limit=1,
+            seen=set(),
+        )
+    )
+
+    assert len(payloads) == 1
+    assert events[0][0] == "wait"
+    assert events[1][0] == "scrape"
+    assert events[0][1] != "MainThread"
+
+
+def test_scrape_one_sync_with_sem_retries_request_exception_and_succeeds(monkeypatch):
+    import threading
+
+    from requests.exceptions import RequestException
+    from tenacity import wait_none
+
+    from app.services import crawl_service as crawl_module
+    from app.services.crawlers.base import ScrapeResult
+
+    monkeypatch.setattr(crawl_module, "_crawl_retry_wait", wait_none())
+    calls = {"scrape": 0, "wait": 0}
+
+    class _FakeLimiter:
+        def wait_sync(self, host: str) -> None:
+            calls["wait"] += 1
+
+    def _scrape(_url: str):
+        calls["scrape"] += 1
+        if calls["scrape"] < 3:
+            raise RequestException("transient")
+        return ScrapeResult("ok", "2024.01.01", "<p>ok</p>", [], [])
+
+    post = {"url": "https://example.com/post/1"}
+    _, _, data, exc = crawl_module._scrape_one_sync_with_sem(
+        post,
+        _scrape,
+        _FakeLimiter(),
+        threading.BoundedSemaphore(1),
+    )
+    assert exc is None
+    assert data is not None
+    assert calls["scrape"] == 3
+    assert calls["wait"] == 3
+
+
+def test_scrape_one_sync_with_sem_retries_request_exception_until_limit(monkeypatch):
+    import threading
+
+    from tenacity import wait_none
+
+    from app.services import crawl_service as crawl_module
+    from requests.exceptions import RequestException
+
+    monkeypatch.setattr(crawl_module, "_crawl_retry_wait", wait_none())
+    calls = {"scrape": 0, "wait": 0}
+
+    class _FakeLimiter:
+        def wait_sync(self, host: str) -> None:
+            calls["wait"] += 1
+
+    def _scrape(_url: str):
+        calls["scrape"] += 1
+        raise RequestException("network down")
+
+    post = {"url": "https://example.com/post/1"}
+    _, _, data, exc = crawl_module._scrape_one_sync_with_sem(
+        post,
+        _scrape,
+        _FakeLimiter(),
+        threading.BoundedSemaphore(1),
+    )
+    assert data is None
+    assert isinstance(exc, RequestException)
+    assert calls["scrape"] == crawl_module.CRAWL_RETRY_MAX_ATTEMPTS
+    assert calls["wait"] == crawl_module.CRAWL_RETRY_MAX_ATTEMPTS

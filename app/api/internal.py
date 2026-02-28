@@ -32,6 +32,7 @@ from app.core.redis import (
     RedisIdempotencyUnavailableError,
     RedisLockUnavailableError,
     acquire_trigger_lock,
+    clear_trigger_idempotency_in_progress,
     get_trigger_idempotency_result,
     release_trigger_lock,
     set_trigger_idempotency_result,
@@ -292,18 +293,28 @@ async def post_trigger_crawl(
         out, status_code = await _enqueue_crawls(request, redis_client, codes)
     finally:
         # 부분 실패/스킵이 있으면 캐시하지 않음(재요청 시 복구 가능하도록).
+        has_failed_or_skipped = bool(out.get("failed")) or bool(out.get("skipped"))
         should_cache = (
             claimed
             and redis_client is not None
             and key_stripped is not None
             and status_code == 200
             and bool(out)
-            and not out.get("failed")
-            and not out.get("skipped")
+            and not has_failed_or_skipped
         )
         if should_cache and key_stripped is not None:
             await set_trigger_idempotency_result(
                 redis_client, key_stripped, idempotency_scope, out
+            )
+        should_clear_claim = (
+            claimed
+            and redis_client is not None
+            and key_stripped is not None
+            and (status_code != 200 or has_failed_or_skipped)
+        )
+        if should_clear_claim and key_stripped is not None:
+            await clear_trigger_idempotency_in_progress(
+                redis_client, key_stripped, idempotency_scope
             )
     return JSONResponse(status_code=status_code, content=out)
 

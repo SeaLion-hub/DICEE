@@ -46,6 +46,53 @@ def test_crawl_college_task_releases_lock_in_finally():
                 assert call_args[1] == "lock-token-12345"
 
 
+def test_crawl_college_task_duplicate_delivery_skips_execution():
+    from app.services import tasks as tasks_module
+    from app.services.tasks import crawl_college_task
+
+    with patch.object(tasks_module, "claim_crawl_task_execution", return_value=False) as mock_claim, patch.object(
+        tasks_module, "run_crawl_job_sync"
+    ) as mock_run, patch.object(
+        tasks_module, "release_crawl_task_execution"
+    ) as mock_release_exec, patch.object(
+        tasks_module, "release_trigger_lock_sync"
+    ) as mock_release_lock:
+        result = crawl_college_task.apply(args=("engineering", "lock-token"), throw=True).result
+
+    assert result == {"skipped": True, "reason": "duplicate_delivery"}
+    assert mock_claim.called
+    mock_run.assert_not_called()
+    mock_release_exec.assert_not_called()
+    mock_release_lock.assert_not_called()
+
+
+def test_crawl_college_task_releases_execution_claim_in_finally():
+    from app.services import tasks as tasks_module
+    from app.services.tasks import crawl_college_task
+
+    with patch.object(tasks_module, "claim_crawl_task_execution", return_value=True), patch.object(
+        tasks_module, "release_crawl_task_execution"
+    ) as mock_release_exec, patch.object(
+        tasks_module, "release_trigger_lock_sync"
+    ), patch.object(
+        tasks_module, "get_sync_session"
+    ) as mock_session, patch.object(
+        tasks_module, "run_crawl_job_sync"
+    ) as mock_run:
+        mock_run.side_effect = RuntimeError("simulated crawl failure")
+        ctx = MagicMock()
+        ctx.__enter__ = MagicMock(return_value=ctx)
+        ctx.__exit__ = MagicMock(return_value=False)
+        mock_session.return_value = ctx
+
+        with pytest.raises(RuntimeError, match="simulated crawl failure"):
+            crawl_college_task.apply(args=("engineering", "lock-token"), throw=True)
+
+    assert mock_release_exec.call_count == 1
+    task_id = mock_release_exec.call_args[0][0]
+    assert isinstance(task_id, str) and task_id
+
+
 def test_production_fail_fast_requires_ip_hmac_key():
     """environment=production이고 IP_HMAC_KEY가 비어 있으면 Settings 로드 시 ValueError."""
     with patch.dict(
@@ -140,6 +187,39 @@ def test_celery_entry_fail_fast_when_app_entry_api():
             sys.modules["app.core.celery_app"] = celery_app_module
         with patch.dict("os.environ", {"APP_ENTRY": "celery"}, clear=False):
             importlib.reload(config_module)
+
+
+def test_validate_crawler_contract_fails_when_async_callable_missing(monkeypatch):
+    from app.core import crawler_config
+
+    class _DummyCrawlerModule:
+        @staticmethod
+        def get_links(_list_url):
+            return []
+
+        @staticmethod
+        def scrape_detail(_url):
+            return None
+
+    monkeypatch.setattr(
+        crawler_config,
+        "CRAWLER_CONFIG",
+        {
+            "dummy_module": {
+                "url": "https://example.com",
+                "get_links": "get_links",
+                "scrape_detail": "scrape_detail",
+            }
+        },
+    )
+    monkeypatch.setattr(
+        crawler_config.importlib,
+        "import_module",
+        lambda _name: _DummyCrawlerModule,
+    )
+
+    with pytest.raises(ValueError, match="missing required callables"):
+        crawler_config.validate_crawler_contract()
 
 
 def test_production_local_spool_fail_fast_without_ephemeral_override():

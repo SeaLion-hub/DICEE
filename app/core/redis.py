@@ -24,6 +24,8 @@ logger = logging.getLogger(__name__)
 BLOCKLIST_KEY_PREFIX = "dicee:blocklist:access:"
 TRIGGER_IDEMPOTENCY_KEY_PREFIX = "dicee:trigger_idempotency:"
 TRIGGER_IDEMPOTENCY_TTL_SECONDS = 86400  # 24h
+CRAWL_TASK_EXECUTION_CLAIM_KEY_PREFIX = "dicee:crawl_task_execution:"
+CRAWL_TASK_EXECUTION_CLAIM_TTL_SECONDS = 7200
 
 # --- Cache Stampede 방어용 Lock Prefix 추가 ---
 CACHE_LOCK_KEY_PREFIX = "dicee:cache_lock:"
@@ -335,6 +337,34 @@ async def set_trigger_idempotency_result(
         logger.warning("Trigger idempotency set failed (key=%s): %s", idempotency_key[:32], e)
 
 
+async def clear_trigger_idempotency_in_progress(
+    client: RedisAsyncio | None,
+    idempotency_key: str,
+    scope: str,
+) -> bool:
+    """
+    Idempotency-Key+scope의 in_progress 클레임만 삭제한다.
+    이미 결과 payload가 저장된 경우에는 삭제하지 않는다.
+    """
+    if client is None or not idempotency_key:
+        return False
+    scope_hash = _idempotency_scope_hash(scope)
+    key = f"{TRIGGER_IDEMPOTENCY_KEY_PREFIX}{_idempotency_key_hash(idempotency_key)}:{scope_hash}"
+    try:
+        raw = await cast(
+            Awaitable[Any],
+            client.eval(LUA_RELEASE_IF_OWNER, 1, key, IDEMPOTENCY_VALUE_IN_PROGRESS),
+        )
+        return bool(raw == 1)
+    except Exception as e:
+        logger.warning(
+            "Trigger idempotency clear failed (key=%s): %s",
+            idempotency_key[:32],
+            e,
+        )
+        return False
+
+
 # renew_trigger_lock_sync·release_trigger_lock_sync 모두 이 싱글톤 사용. 호출마다 from_url/close 금지.
 _sync_redis_client = None
 
@@ -418,6 +448,52 @@ def release_trigger_lock_sync(college_code: str, lock_token: str | None) -> None
         logger.warning(
             "Trigger lock release failed (college=%s): %s", college_code, e, exc_info=True
         )
+
+
+def claim_crawl_task_execution(task_id: str) -> bool:
+    """
+    Celery task delivery 중복 실행 방지를 위한 실행 클레임.
+    Redis 미구성/일시 장애 시 fail-open으로 True를 반환한다.
+    """
+    if not task_id:
+        return True
+    from app.core.config import settings
+
+    if not (settings.redis.redis_url or "").strip():
+        return True
+    client = _get_sync_redis_client()
+    if client is None:
+        return True
+    key = f"{CRAWL_TASK_EXECUTION_CLAIM_KEY_PREFIX}{task_id}"
+    try:
+        ok = client.set(
+            key,
+            "1",
+            nx=True,
+            ex=CRAWL_TASK_EXECUTION_CLAIM_TTL_SECONDS,
+        )
+        return bool(ok)
+    except Exception as e:
+        logger.warning("Task execution claim failed (task_id=%s): %s", task_id, e, exc_info=True)
+        return True
+
+
+def release_crawl_task_execution(task_id: str) -> None:
+    """claim_crawl_task_execution으로 획득한 실행 클레임을 해제한다."""
+    if not task_id:
+        return
+    from app.core.config import settings
+
+    if not (settings.redis.redis_url or "").strip():
+        return
+    client = _get_sync_redis_client()
+    if client is None:
+        return
+    key = f"{CRAWL_TASK_EXECUTION_CLAIM_KEY_PREFIX}{task_id}"
+    try:
+        client.delete(key)
+    except Exception as e:
+        logger.warning("Task execution release failed (task_id=%s): %s", task_id, e, exc_info=True)
 
 
 async def _is_access_blocked_raw(

@@ -22,7 +22,12 @@ from app.core.metrics import (
     increment,
     set_gauge,
 )
-from app.core.redis import release_trigger_lock_sync, renew_trigger_lock_sync
+from app.core.redis import (
+    claim_crawl_task_execution,
+    release_crawl_task_execution,
+    release_trigger_lock_sync,
+    renew_trigger_lock_sync,
+)
 from app.core.storage import (
     SPOOL_LAST_ERROR_TYPE_KEY,
     SPOOL_RETRY_COUNT_KEY,
@@ -98,6 +103,16 @@ def crawl_college_task(
         "Task Started: task_id=%s college_code=%s lock_token=%s",
         task_id, college_code, lock_hint,
     )
+    execution_claimed = False
+    if task_id:
+        execution_claimed = claim_crawl_task_execution(task_id)
+        if not execution_claimed:
+            logger.info(
+                "Duplicate task delivery skipped: task_id=%s college_code=%s",
+                task_id,
+                college_code,
+            )
+            return {"skipped": True, "reason": "duplicate_delivery"}
     labels = {"college_code": college_code}
     if enqueued_at is not None:
         lag = time.time() - enqueued_at
@@ -158,6 +173,8 @@ def crawl_college_task(
         if heartbeat_thread is not None:
             heartbeat_thread.join(timeout=2.0)
         release_trigger_lock_sync(college_code, lock_token)
+        if execution_claimed and task_id:
+            release_crawl_task_execution(task_id)
 
 
 @app.task(name="app.services.tasks.close_stale_crawl_runs_task")

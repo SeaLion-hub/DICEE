@@ -333,7 +333,7 @@ async def scrape_business_detail_async(client: httpx.AsyncClient, url: str):
         return ScrapeResult(title, date, content_html, images, attachments)
     except HtmlTooLargeError as e:
         logger.warning("scrape_business_detail_async body too large url=%s: %s", url, e)
-        return ScrapeResult(None, "본문 초과", None, [], [])
+        raise
     except Exception:
         logger.exception("scrape_business_detail_async error url=%s", url, exc_info=True)
         raise
