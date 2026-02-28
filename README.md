@@ -1,5 +1,10 @@
 # DICEE
 
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.115+-green.svg)](https://fastapi.tiangolo.com/)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-15+-blue.svg)](https://www.postgresql.org/)
+[![License](https://img.shields.io/badge/license-See%20repo-lightgrey)](./)
+
 대학교 공지사항의 **분산과 이용자의 번거로움**을 줄이기 위한 서비스.
 
 ---
@@ -7,6 +12,7 @@
 ## 목차
 
 - [아이디어와 맥락](#아이디어와-맥락)
+- [사전 요구 사항 (Prerequisites)](#사전-요구-사항-prerequisites)
 - [기술 스택](#기술-스택)
 - [문서](#문서)
 - [로컬 실행](#로컬-실행)
@@ -39,7 +45,18 @@
 - 반영 사항: 비동기 백엔드, ORM, 계층형 구조, Playwright 자체 크롤러, Structured AI 출력, Auth(구글 OAuth + JWT, 다중 제공자 확장 가능), Celery rate limit 등.
 - 배포: 백엔드 **Railway**, 프론트 **Vercel**.
 
-**현재**: M2 Intelligence 진행 중 (연세대 크롤러·Celery·Redis·trigger-crawl·분산 락·헬스·Rate limit). 단계·마일스톤·구현 현황은 [ROADMAP](docs/ROADMAP.md)·[ROADMAP_PHASES](docs/ROADMAP_PHASES.md) 참고.
+**현재 진행 상황**: 마일스톤 **M2 (Intelligence)** — 크롤러·Celery·Redis·트리거 크롤·분산 락·헬스·Rate limit 구축 중. 단계·마일스톤·구현 현황은 [ROADMAP](docs/ROADMAP.md)·[ROADMAP_PHASES](docs/ROADMAP_PHASES.md) 참고.
+
+---
+
+## 사전 요구 사항 (Prerequisites)
+
+| 항목 | 설명 |
+|------|------|
+| **Python** | 3.10 이상 |
+| **PostgreSQL** | 로컬 또는 Railway 등 원격 DB |
+| **Redis** | Celery 워커 사용 시(로드맵 3단계 이후) 필요 |
+| **환경 변수** | `.env` — [.env.example](.env.example) 복사 후 값 채우기. 변수 목록·배포 설정은 [DEPLOYMENT](docs/DEPLOYMENT.md) 참고. |
 
 ---
 
@@ -62,35 +79,63 @@
 | [docs/ROADMAP.md](docs/ROADMAP.md) | 1~6단계 로드맵, 현재 단계·마일스톤. **확정 사항**(데이터 구조·OAuth·달력 UX 등)은 동 문서 상단 표 참고. |
 | [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | Railway(백엔드)·Vercel(프론트) 배포 설정 |
 | [docs/WORK_LOG.md](docs/WORK_LOG.md) | 작업별 구체적 수정 기록 |
-| [docs/CAUTIONS.md](docs/CAUTIONS.md) | 바이브 코딩 시 주의사항·체크리스트 |
+| [docs/CAUTIONS.md](docs/CAUTIONS.md) | 개발·코딩 시 주의사항 및 체크리스트 |
 
 ---
 
 ## 로컬 실행
 
-**필요 환경**: Python 3.10+, PostgreSQL, (3단계 이후) Redis. `.env`는 [.env.example](.env.example)을 복사한 뒤 값을 채우고, 변수 목록·배포 시 설정은 [DEPLOYMENT](docs/DEPLOYMENT.md) 참고.
+### 1. 의존성 및 DB 마이그레이션
 
 ```bash
 # 가상환경 생성·활성화 후
 pip install -r requirements.txt
-# .env 설정 후 DB 마이그레이션 (로컬 PostgreSQL 또는 Railway DB)
+# .env 설정 후
 alembic upgrade head
+```
 
-# Windows: python run.py (이벤트 루프 정책·psycopg 호환)
-# Linux/Mac: uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+- **DATABASE_URL**: 시스템 환경변수가 .env를 덮어씀. Railway DB만 쓰려면 PowerShell에서 `$env:DATABASE_URL = $null` 후 실행.
+
+### 2. 백엔드 서버 기동
+
+**Windows**
+
+```bash
 python run.py
 ```
 
-- **DATABASE_URL**: 시스템 환경변수가 .env를 덮어씀. Railway DB만 쓰려면 `$env:DATABASE_URL = $null`(PowerShell) 후 실행.
+(이벤트 루프 정책·psycopg 호환을 위해 `run.py` 사용.)
 
-**3단계: Celery 워커 (로컬)**
+**Linux / macOS**
 
-- Redis 실행 후 별도 터미널에서 워커 기동. 진입점은 `app.core.celery_app:app` (DEPLOYMENT·worker.py와 동일).
-- **Windows**: prefork 풀 미지원이므로 **`--pool=solo`** 필수.  
-  `celery -A app.core.celery_app:app worker -l info -O fair --pool=solo`
-- Linux/Mac: `celery -A app.core.celery_app:app worker -l info -O fair`
-- trigger-crawl 테스트 시 Windows PowerShell에서는 `curl`이 별칭이므로 **`curl.exe`** 사용 권장.  
-  예: `curl.exe -X POST "http://localhost:8000/internal/trigger-crawl?college_code=engineering" -H "X-Crawl-Trigger-Secret: YOUR_SECRET"`
+```bash
+uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+```
+
+### 3. Celery 워커 (로컬, 3단계 이후)
+
+Redis 실행 후 **별도 터미널**에서 실행. 진입점: `app.core.celery_app:app` (DEPLOYMENT·worker.py와 동일).
+
+**Windows**
+
+```bash
+celery -A app.core.celery_app:app worker -l info -O fair --pool=solo
+```
+
+(prefork 풀 미지원이므로 `--pool=solo` 필수.)
+
+**Linux / macOS**
+
+```bash
+celery -A app.core.celery_app:app worker -l info -O fair
+```
+
+**트리거 크롤 테스트 (Windows PowerShell)**  
+PowerShell에서 `curl`은 별칭이므로 `curl.exe` 사용 권장:
+
+```powershell
+curl.exe -X POST "http://localhost:8000/internal/trigger-crawl?college_code=engineering" -H "X-Crawl-Trigger-Secret: YOUR_SECRET"
+```
 
 ---
 

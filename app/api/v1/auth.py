@@ -32,6 +32,11 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 logger = logging.getLogger(__name__)
 security = HTTPBearer(auto_error=False)
 
+# 캠퍼스·기숙사 등 동일 IP 다수 사용자 환경 안내 (429 시)
+RATE_LIMIT_429_DETAIL_SUFFIX = (
+    " 같은 네트워크(캠퍼스·기숙사 등)를 쓰는 경우일 수 있습니다. 잠시 후 다시 시도해 주세요."
+)
+
 
 def _auth_rate_limit_dep(
     action: str,
@@ -70,7 +75,10 @@ def _auth_rate_limit_dep(
                 action,
                 extra={"client_ip": client_ip, "identifier": identifier},
             )
-            raise HTTPException(status_code=429, detail=too_many_detail)
+            raise HTTPException(
+                status_code=429,
+                detail=too_many_detail + RATE_LIMIT_429_DETAIL_SUFFIX,
+            )
         return client_ip
 
     return _dep
@@ -202,7 +210,8 @@ async def post_refresh(
         )
         raise HTTPException(
             status_code=429,
-            detail="Too many refresh requests, please try again later.",
+            detail="Too many refresh requests, please try again later."
+            + RATE_LIMIT_429_DETAIL_SUFFIX,
         )
 
     try:

@@ -1,4 +1,4 @@
-﻿"""Settings model and validators."""
+"""Settings model and validators."""
 
 import logging
 from typing import Literal
@@ -91,7 +91,7 @@ class Settings(BaseSettings):
     google_client_secret: SecretStr = SecretStr("")
     google_redirect_uris: str = ""
 
-    auth_google_rate_limit_per_minute: int = Field(10, ge=1, le=1000)
+    auth_google_rate_limit_per_minute: int = Field(28, ge=1, le=1000)
     auth_refresh_rate_limit_per_minute: int = Field(60, ge=1, le=5000)
     auth_refresh_token_fingerprint_rate_limit_per_minute: int = Field(15, ge=1, le=5000)
 
