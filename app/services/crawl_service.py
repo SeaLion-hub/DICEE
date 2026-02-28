@@ -69,6 +69,16 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
+class ScrapeAttemptResult:
+    """한 건 스크랩 시도 결과. (post, detail_url, data, exc) 튜플 대신 이름으로 접근."""
+
+    post: dict
+    detail_url: str
+    data: ScrapeResult | None
+    exc: Exception | None
+
+
+@dataclass(frozen=True, slots=True)
 class CrawlRuntimeConfig:
     polite_delay_seconds: float
     page_timeout_seconds: float
@@ -80,18 +90,24 @@ class CrawlRuntimeConfig:
     crawl_seen_max_size: int
 
 
+_crawl_runtime_config_cache: CrawlRuntimeConfig | None = None
+
+
 def _load_crawl_runtime_config() -> CrawlRuntimeConfig:
-    """Load crawl runtime knobs at call time."""
-    return CrawlRuntimeConfig(
-        polite_delay_seconds=settings.polite_delay_seconds,
-        page_timeout_seconds=settings.crawl_page_timeout_seconds,
-        upsert_chunk_size=settings.crawl_upsert_chunk_size,
-        collect_sync_max_workers=settings.crawl_collect_sync_max_workers,
-        collect_in_flight_limit=settings.crawl_collect_in_flight_limit,
-        max_links_per_run=settings.crawl_max_links_per_run,
-        collect_async_concurrency=settings.crawl_collect_async_concurrency,
-        crawl_seen_max_size=settings.crawl_seen_max_size,
-    )
+    """크롤 런타임 설정을 프로세스당 1회만 로드하고 캐시. 재시작 없이 변경할 일이 없으므로 기동 시 1회 로드로 성능 유리."""
+    global _crawl_runtime_config_cache
+    if _crawl_runtime_config_cache is None:
+        _crawl_runtime_config_cache = CrawlRuntimeConfig(
+            polite_delay_seconds=settings.polite_delay_seconds,
+            page_timeout_seconds=settings.crawl_page_timeout_seconds,
+            upsert_chunk_size=settings.crawl_upsert_chunk_size,
+            collect_sync_max_workers=settings.crawl_collect_sync_max_workers,
+            collect_in_flight_limit=settings.crawl_collect_in_flight_limit,
+            max_links_per_run=settings.crawl_max_links_per_run,
+            collect_async_concurrency=settings.crawl_collect_async_concurrency,
+            crawl_seen_max_size=settings.crawl_seen_max_size,
+        )
+    return _crawl_runtime_config_cache
 
 # 요청/페이지 간 최소 딜레이(초). 부하·IP 차단 완화. .env POLITE_DELAY_SECONDS로 오버라이드 가능.
 
@@ -434,16 +450,14 @@ async def crawl_college(session: AsyncSession, college_code: str) -> int:
     )
 
 
-def _scrape_one_sync(
-    post: dict, scrape_fn: Callable
-) -> tuple[dict, str, ScrapeResult | None, Exception | None]:
-    """워커용: scrape_fn(detail_url) 호출. (post, detail_url, data, exc) 반환. data는 ScrapeResult 또는 None."""
+def _scrape_one_sync(post: dict, scrape_fn: Callable) -> ScrapeAttemptResult:
+    """워커용: scrape_fn(detail_url) 호출. data는 ScrapeResult 또는 None."""
     detail_url = post.get("url") or ""
     try:
         data = scrape_fn(detail_url)
-        return (post, detail_url, data, None)
+        return ScrapeAttemptResult(post=post, detail_url=detail_url, data=data, exc=None)
     except Exception as e:
-        return (post, detail_url, None, e)
+        return ScrapeAttemptResult(post=post, detail_url=detail_url, data=None, exc=e)
 
 
 # 네트워크/타임아웃 예외 (sync: RequestException, async: httpx.HTTPError/TimeoutException)
@@ -463,16 +477,16 @@ async def _fetch_one_async(
     scrape_async_fn,
     rate_limiter,
     sem: asyncio.Semaphore,
-) -> tuple[dict, str, ScrapeResult | None, Exception | None]:
+) -> ScrapeAttemptResult:
     """한 건 비동기 스크랩. 모듈 레벨로 분리해 단위 테스트 가능."""
     async with sem:
         detail_url = post.get("url") or ""
         await rate_limiter.wait_async(host_from_url(detail_url) or "_")
         try:
             data = await scrape_async_fn(client, detail_url)
-            return (post, detail_url, data, None)
+            return ScrapeAttemptResult(post=post, detail_url=detail_url, data=data, exc=None)
         except Exception as e:
-            return (post, detail_url, None, e)
+            return ScrapeAttemptResult(post=post, detail_url=detail_url, data=None, exc=e)
 
 
 async def _fetch_one_with_retry(
@@ -481,9 +495,9 @@ async def _fetch_one_with_retry(
     scrape_async_fn,
     rate_limiter,
     sem: asyncio.Semaphore,
-) -> tuple[dict, str, ScrapeResult | None, Exception | None]:
+) -> ScrapeAttemptResult:
     """한 건 비동기 스크랩 + 네트워크/타임아웃 시 tenacity 재시도. 재시도 소진 시 마지막 결과 반환."""
-    last_result: tuple[dict, str, ScrapeResult | None, Exception | None] | None = None
+    last_result: ScrapeAttemptResult | None = None
     async for attempt in AsyncRetrying(
         stop=stop_after_attempt(CRAWL_RETRY_MAX_ATTEMPTS),
         wait=_crawl_retry_wait,
@@ -494,11 +508,16 @@ async def _fetch_one_with_retry(
             last_result = await _fetch_one_async(
                 client, post, scrape_async_fn, rate_limiter, sem
             )
-            _, _, _, exc = last_result
-            if exc is not None and isinstance(exc, _NETWORK_EXC_TYPES):
-                raise exc
+            if last_result.exc is not None and isinstance(
+                last_result.exc, _NETWORK_EXC_TYPES
+            ):
+                raise last_result.exc
             return last_result
-    return last_result if last_result is not None else (post, post.get("url") or "", None, None)
+    if last_result is not None:
+        return last_result
+    return ScrapeAttemptResult(
+        post=post, detail_url=post.get("url") or "", data=None, exc=None
+    )
 
 
 def _process_scrape_result(
@@ -580,13 +599,13 @@ def _scrape_one_sync_with_sem(
     scrape_fn: Callable,
     rate_limiter,
     sem: threading.BoundedSemaphore,
-) -> tuple[dict, str, ScrapeResult | None, Exception | None]:
+) -> ScrapeAttemptResult:
     """BoundedSemaphore로 동시 스크랩 수 제한. 워커 스레드에서 호출."""
     sem.acquire()
     try:
         detail_url = post.get("url") or ""
         host = host_from_url(detail_url) or "_"
-        last_result: tuple[dict, str, ScrapeResult | None, Exception | None] | None = None
+        last_result: ScrapeAttemptResult | None = None
         try:
             for attempt in Retrying(
                 stop=stop_after_attempt(CRAWL_RETRY_MAX_ATTEMPTS),
@@ -597,13 +616,18 @@ def _scrape_one_sync_with_sem(
                 with attempt:
                     rate_limiter.wait_sync(host)
                     last_result = _scrape_one_sync(post, scrape_fn)
-                    _, _, _, exc = last_result
-                    if exc is not None and isinstance(exc, _NETWORK_EXC_TYPES):
-                        raise exc
+                    if last_result.exc is not None and isinstance(
+                        last_result.exc, _NETWORK_EXC_TYPES
+                    ):
+                        raise last_result.exc
                     return last_result
         except RetryError:
             pass
-        return last_result if last_result is not None else (post, detail_url, None, None)
+        if last_result is not None:
+            return last_result
+        return ScrapeAttemptResult(
+            post=post, detail_url=detail_url, data=None, exc=None
+        )
     finally:
         sem.release()
 
@@ -646,15 +670,21 @@ def _collect_payloads_sync(
 
         while futures:
             for fut in as_completed(set(futures.keys())):
-                post = futures.pop(fut)
+                futures.pop(fut)
                 try:
-                    _, detail_url, data, exc = fut.result()
+                    result = fut.result()
                 except Exception as e:
                     logger.warning("scrape future exception: %s", e, exc_info=True)
                     submit_one()
                     continue
                 payload, raise_exc = _process_scrape_result(
-                    post, detail_url, data, exc, college_id, seen, tracker
+                    result.post,
+                    result.detail_url,
+                    result.data,
+                    result.exc,
+                    college_id,
+                    seen,
+                    tracker,
                 )
                 if raise_exc is not None:
                     raise raise_exc
@@ -717,20 +747,28 @@ async def _collect_payloads_async(
             )
             for task in done:
                 try:
-                    post, detail_url, data, exc = task.result()
+                    result = task.result()
                 except Exception as e:
                     logger.warning("scrape task exception: %s", e, exc_info=True)
                     if remaining:
                         pending.add(_task(remaining.popleft()))
                     continue
-                if exc is not None and isinstance(exc, _NETWORK_EXC_TYPES):
+                if result.exc is not None and isinstance(
+                    result.exc, _NETWORK_EXC_TYPES
+                ):
                     tracker.record_attempt()
                     tracker.record_network_or_skip()
                     if remaining:
                         pending.add(_task(remaining.popleft()))
                     continue
                 payload, raise_exc = _process_scrape_result(
-                    post, detail_url, data, exc, college_id, seen, tracker
+                    result.post,
+                    result.detail_url,
+                    result.data,
+                    result.exc,
+                    college_id,
+                    seen,
+                    tracker,
                 )
                 if raise_exc is not None:
                     raise raise_exc

@@ -417,7 +417,7 @@ def test_record_crawl_failure_fallback_uses_shared_sync_client(monkeypatch):
 
 
 def test_scrape_one_sync_returns_exception_in_tuple_on_value_error():
-    """_scrape_one_sync: ValueError 발생 시 tuple의 exc에 담겨 반환된다."""
+    """_scrape_one_sync: ValueError 발생 시 ScrapeAttemptResult.exc에 담겨 반환된다."""
     from app.services.crawl_service import _scrape_one_sync
 
     post = {"url": "https://example.com/1", "no": "ext-1"}
@@ -425,12 +425,12 @@ def test_scrape_one_sync_returns_exception_in_tuple_on_value_error():
     def scrape_raise(_url):
         raise ValueError("parser error")
 
-    _, detail_url, data, exc = _scrape_one_sync(post, scrape_raise)
-    assert detail_url == "https://example.com/1"
-    assert data is None
-    assert exc is not None
-    assert isinstance(exc, ValueError)
-    assert str(exc) == "parser error"
+    result = _scrape_one_sync(post, scrape_raise)
+    assert result.detail_url == "https://example.com/1"
+    assert result.data is None
+    assert result.exc is not None
+    assert isinstance(result.exc, ValueError)
+    assert str(result.exc) == "parser error"
 
 
 def test_scrape_one_sync_keyboard_interrupt_propagates():
@@ -448,7 +448,7 @@ def test_scrape_one_sync_keyboard_interrupt_propagates():
 
 @pytest.mark.asyncio
 async def test_fetch_one_async_returns_exception_in_tuple_on_exception():
-    """_fetch_one_async: 일반 Exception 발생 시 tuple로 반환된다."""
+    """_fetch_one_async: 일반 Exception 발생 시 ScrapeAttemptResult.exc로 반환된다."""
     from unittest.mock import AsyncMock, MagicMock
 
     from app.services.crawl_service import _fetch_one_async
@@ -464,14 +464,14 @@ async def test_fetch_one_async_returns_exception_in_tuple_on_exception():
     async def scrape_raise(_client, url):
         raise RuntimeError("fetch failed")
 
-    _, detail_url, data, exc = await _fetch_one_async(
+    result = await _fetch_one_async(
         client, post, scrape_raise, rate_limiter, sem
     )
-    assert detail_url == "https://example.com/1"
-    assert data is None
-    assert exc is not None
-    assert isinstance(exc, RuntimeError)
-    assert str(exc) == "fetch failed"
+    assert result.detail_url == "https://example.com/1"
+    assert result.data is None
+    assert result.exc is not None
+    assert isinstance(result.exc, RuntimeError)
+    assert str(result.exc) == "fetch failed"
 
 
 @pytest.mark.asyncio
@@ -560,14 +560,14 @@ def test_scrape_one_sync_with_sem_retries_request_exception_and_succeeds(monkeyp
         return ScrapeResult("ok", "2024.01.01", "<p>ok</p>", [], [])
 
     post = {"url": "https://example.com/post/1"}
-    _, _, data, exc = crawl_module._scrape_one_sync_with_sem(
+    result = crawl_module._scrape_one_sync_with_sem(
         post,
         _scrape,
         _FakeLimiter(),
         threading.BoundedSemaphore(1),
     )
-    assert exc is None
-    assert data is not None
+    assert result.exc is None
+    assert result.data is not None
     assert calls["scrape"] == 3
     assert calls["wait"] == 3
 
@@ -592,13 +592,13 @@ def test_scrape_one_sync_with_sem_retries_request_exception_until_limit(monkeypa
         raise RequestException("network down")
 
     post = {"url": "https://example.com/post/1"}
-    _, _, data, exc = crawl_module._scrape_one_sync_with_sem(
+    result = crawl_module._scrape_one_sync_with_sem(
         post,
         _scrape,
         _FakeLimiter(),
         threading.BoundedSemaphore(1),
     )
-    assert data is None
-    assert isinstance(exc, RequestException)
+    assert result.data is None
+    assert isinstance(result.exc, RequestException)
     assert calls["scrape"] == crawl_module.CRAWL_RETRY_MAX_ATTEMPTS
     assert calls["wait"] == crawl_module.CRAWL_RETRY_MAX_ATTEMPTS

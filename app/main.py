@@ -35,6 +35,7 @@ from app.core.lifespan import (
     create_app_state,
     init_database,
     init_sentry,
+    preload_crawl_runtime_config,
     teardown_state,
 )
 from app.core.network import InvalidForwardedHeaderError, warn_trusted_proxy_configuration
@@ -55,6 +56,7 @@ async def lifespan(app: FastAPI):
     await init_database()
     check_startup_pool_budget()
     check_startup_crawler_contract()
+    preload_crawl_runtime_config()
     state = create_app_state()
     app.state = cast(State, state)
     yield

@@ -58,55 +58,104 @@ class PoolBudgetResult:
     message: str
 
 
-def check_pool_budget(effective_max_conn: int | None) -> PoolBudgetResult:
+@dataclass(frozen=True)
+class PoolBudgetParams:
+    """풀 예산 산출에 필요한 배포/설정 파라미터. DB·배포 구조 변경 시 이 타입만 수정·테스트하면 됨."""
+
+    reserved: int
+    api_instances: int
+    uvicorn_workers: int
+    pool_size_async: int
+    pool_max_overflow_async: int
+    worker_instances: int
+    celery_concurrency: int
+    pool_size_sync: int
+    pool_max_overflow_sync: int
+    deploy_surge_factor: float
+
+
+class PoolBudgetManager:
     """
-    풀 예산 검사(실제 설정값 기준). effective_max_conn이 None이면 검사 생략(within_budget=True, 0 값 반환).
-    산식: App_budget = floor((max_conn - DB_RESERVED) * 0.7),
-    API_conn = N_api * N_uvicorn_workers * (db_pool_size_async + db_pool_max_overflow_async),
-    Worker_conn = N_worker * N_celery_concurrency * (db_pool_size_sync + db_pool_max_overflow_sync),
-    Total = API_conn + Worker_conn, Peak = Total * DEPLOY_SURGE_FACTOR.
-    통과 조건: Peak_pool_conn <= App_budget.
+    풀 예산 계산 전용 타입. 설정값을 받아 Peak vs App_budget 검사.
+    산식: App_budget = floor((max_conn - reserved) * 0.7),
+    Total = API_conn + Worker_conn, Peak = Total * deploy_surge_factor.
     """
-    if effective_max_conn is None or effective_max_conn < 1:
+
+    def __init__(self, params: PoolBudgetParams) -> None:
+        self._params = params
+
+    def check(self, effective_max_conn: int | None) -> PoolBudgetResult:
+        """effective_max_conn이 None이면 검사 생략(within_budget=True, 0 값 반환)."""
+        if effective_max_conn is None or effective_max_conn < 1:
+            return PoolBudgetResult(
+                within_budget=True,
+                app_budget=0,
+                total_pool_conn=0,
+                peak_pool_conn=0,
+                message="Pool budget check skipped (no effective max_connections).",
+            )
+        p = self._params
+        app_budget = int((effective_max_conn - p.reserved) * 0.7)
+        api_conn = (
+            p.api_instances
+            * p.uvicorn_workers
+            * (p.pool_size_async + p.pool_max_overflow_async)
+        )
+        worker_conn = (
+            p.worker_instances
+            * p.celery_concurrency
+            * (p.pool_size_sync + p.pool_max_overflow_sync)
+        )
+        total_pool_conn = api_conn + worker_conn
+        peak_pool_conn = int(total_pool_conn * p.deploy_surge_factor)
+        within_budget = peak_pool_conn <= app_budget
+        if within_budget:
+            msg = (
+                f"Pool budget OK: peak={peak_pool_conn} <= app_budget={app_budget} "
+                f"(total={total_pool_conn}, max_conn={effective_max_conn})."
+            )
+        else:
+            msg = (
+                f"Pool budget exceeded: peak_pool_conn={peak_pool_conn} > app_budget={app_budget}. "
+                "Adjust DB_API_INSTANCES or DB_MAX_CONNECTIONS. See DEPLOYMENT.md."
+            )
         return PoolBudgetResult(
-            within_budget=True,
-            app_budget=0,
-            total_pool_conn=0,
-            peak_pool_conn=0,
-            message="Pool budget check skipped (no effective max_connections).",
+            within_budget=within_budget,
+            app_budget=app_budget,
+            total_pool_conn=total_pool_conn,
+            peak_pool_conn=peak_pool_conn,
+            message=msg,
         )
-    reserved = settings.db.db_reserved
-    app_budget = int((effective_max_conn - reserved) * 0.7)
-    api_conn = (
-        settings.db.db_api_instances
-        * settings.db.db_uvicorn_workers
-        * (settings.db.db_pool_size_async + settings.db.db_pool_max_overflow_async)
-    )
-    worker_conn = (
-        settings.db.db_worker_instances
-        * settings.db.db_celery_concurrency
-        * (settings.db.db_pool_size_sync + settings.db.db_pool_max_overflow_sync)
-    )
-    total_pool_conn = api_conn + worker_conn
-    peak_pool_conn = int(total_pool_conn * settings.db.deploy_surge_factor)
-    within_budget = peak_pool_conn <= app_budget
-    if within_budget:
-        msg = (
-            f"Pool budget OK: peak={peak_pool_conn} <= app_budget={app_budget} "
-            f"(total={total_pool_conn}, max_conn={effective_max_conn})."
+
+
+_pool_budget_manager: PoolBudgetManager | None = None
+
+
+def _get_pool_budget_manager() -> PoolBudgetManager:
+    """설정 기반 PoolBudgetManager 싱글턴. 테스트에서 오버라이드 가능."""
+    global _pool_budget_manager
+    if _pool_budget_manager is None:
+        db = settings.db
+        _pool_budget_manager = PoolBudgetManager(
+            PoolBudgetParams(
+                reserved=db.db_reserved,
+                api_instances=db.db_api_instances,
+                uvicorn_workers=db.db_uvicorn_workers,
+                pool_size_async=db.db_pool_size_async,
+                pool_max_overflow_async=db.db_pool_max_overflow_async,
+                worker_instances=db.db_worker_instances,
+                celery_concurrency=db.db_celery_concurrency,
+                pool_size_sync=db.db_pool_size_sync,
+                pool_max_overflow_sync=db.db_pool_max_overflow_sync,
+                deploy_surge_factor=db.deploy_surge_factor,
+            )
         )
-    else:
-        msg = (
-            f"Pool budget exceeded: peak_pool_conn={peak_pool_conn} > app_budget={app_budget}. "
-            "Adjust DB_API_INSTANCES or DB_MAX_CONNECTIONS. See DEPLOYMENT.md."
-        )
-    return PoolBudgetResult(
-        within_budget=within_budget,
-        app_budget=app_budget,
-        total_pool_conn=total_pool_conn,
-        peak_pool_conn=peak_pool_conn,
-        message=msg,
-    )
+    return _pool_budget_manager
+
+
+def check_pool_budget(effective_max_conn: int | None) -> PoolBudgetResult:
+    """풀 예산 검사. 내부적으로 PoolBudgetManager 사용."""
+    return _get_pool_budget_manager().check(effective_max_conn)
 
 
 def get_resolved_max_connections() -> int | None:

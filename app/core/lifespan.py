@@ -89,6 +89,13 @@ def check_startup_crawler_contract() -> None:
     validate_crawler_contract()
 
 
+def preload_crawl_runtime_config() -> None:
+    """앱 기동 시 크롤 런타임 설정을 1회 로드. 첫 크롤 요청 시점이 아닌 기동 시점에 로드."""
+    from app.services.crawl_service import _load_crawl_runtime_config
+
+    _load_crawl_runtime_config()
+
+
 def create_app_state() -> AppState:
     """AppState 인스턴스 생성 (httpx, KeyFetcher, Redis, engine, session_maker)."""
     return AppState(
