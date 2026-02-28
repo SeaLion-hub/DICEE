@@ -9,10 +9,11 @@ Repository·파서는 이미 열린 세션으로 쿼리만 수행하며, 세션 
 import asyncio
 import json
 import logging
+import threading
 import uuid
 from collections import deque
 from collections.abc import AsyncIterator, Callable, Iterator
-from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Protocol
@@ -140,9 +141,10 @@ class _RedisSeenSet:
     """
     Redis SET 기반 분산 Seen Set. run_id 단위로 워커 간 이미 본 URL 공유.
     멀티 워커 환경에서 동일 URL 중복 크롤 방지(필수). add/__contains__ 인터페이스.
+    생성자에서는 I/O 없음. 첫 add/__contains__ 호출 시 lazy로 Redis 클라이언트 연결.
     """
 
-    __slots__ = ("_key", "_client", "_ttl", "_closed", "_required")
+    __slots__ = ("_key", "_client", "_ttl", "_closed", "_required", "_run_id")
 
     def __init__(
         self,
@@ -153,24 +155,31 @@ class _RedisSeenSet:
         required: bool = False,
     ) -> None:
         self._key = f"{CRAWL_SEEN_REDIS_KEY_PREFIX}{run_id}"
+        self._run_id = run_id
         self._ttl = ttl_seconds
         self._closed = False
         self._required = required
         self._client: Any | None = None
+
+    def _ensure_client(self) -> None:
+        """첫 사용 시점에 Redis 클라이언트 연결. 생성자 I/O 분리용."""
+        if self._client is not None or self._closed:
+            return
         try:
             self._client = get_shared_sync_redis_client()
         except Exception as e:
-            if required:
+            if self._required:
                 raise RuntimeError(
-                    f"Redis Seen Set required but connection failed (run_id={run_id}): {e}"
+                    f"Redis Seen Set required but connection failed (run_id={self._run_id}): {e}"
                 ) from e
-            logger.warning("RedisSeenSet init failed: %s; falling back to in-memory", e)
-        if self._client is None and required:
+            logger.warning("RedisSeenSet connect failed: %s; falling back to in-memory", e)
+        if self._client is None and self._required:
             raise RuntimeError(
-                f"Redis Seen Set required but connection failed (run_id={run_id}): redis client unavailable"
+                f"Redis Seen Set required but connection failed (run_id={self._run_id}): redis client unavailable"
             )
 
     def add(self, x: str) -> None:
+        self._ensure_client()
         if self._client is None:
             if self._required:
                 raise RuntimeError("Redis Seen Set required but client is unavailable (init failed).")
@@ -186,6 +195,7 @@ class _RedisSeenSet:
             logger.warning("RedisSeenSet add failed: %s", e)
 
     def __contains__(self, x: str) -> bool:
+        self._ensure_client()
         if self._client is None:
             if self._required:
                 raise RuntimeError("Redis Seen Set required but client is unavailable (init failed).")
@@ -557,6 +567,19 @@ def _process_scrape_result(
     return (payload, None)
 
 
+def _scrape_one_sync_with_sem(
+    post: dict,
+    scrape_fn: Callable,
+    sem: threading.BoundedSemaphore,
+) -> tuple[dict, str, ScrapeResult | None, Exception | None]:
+    """BoundedSemaphore로 동시 스크랩 수 제한. 워커 스레드에서 호출."""
+    sem.acquire()
+    try:
+        return _scrape_one_sync(post, scrape_fn)
+    finally:
+        sem.release()
+
+
 def _collect_payloads_sync(
     links: list[dict],
     college_id: uuid.UUID,
@@ -568,7 +591,7 @@ def _collect_payloads_sync(
     seen: set[str] | _BoundedSeenSet | _RedisSeenSet | None = None,
 ) -> Iterator[dict]:
     """
-    동기: Bounded in-flight(K)로 링크 처리. delay → scrape_fn 병렬 → build_notice_payload → 중복 제거.
+    동기: Bounded in-flight(K)로 링크 처리. Semaphore + as_completed로 제어 단순화.
     O(K) 메모리. 파서/구조 예외는 임계치 초과 시 CrawlThresholdExceeded raise.
     """
     if seen is None:
@@ -576,32 +599,32 @@ def _collect_payloads_sync(
     rate_limiter = get_host_rate_limiter_sync(delay_sec)
     tracker = CrawlErrorTracker()
     remaining = deque(links)
+    sem = threading.BoundedSemaphore(in_flight_limit)
+
+    def submit_one() -> None:
+        if not remaining:
+            return
+        post = remaining.popleft()
+        rate_limiter.wait_sync(host_from_url(post.get("url") or "") or "_")
+        fut = executor.submit(_scrape_one_sync_with_sem, post, scrape_fn, sem)
+        futures[fut] = post
 
     executor = ThreadPoolExecutor(max_workers=max_workers)
+    futures: dict = {}
     try:
-        futures: dict = {}
         for _ in range(min(in_flight_limit, len(remaining))):
             if not remaining:
                 break
-            post = remaining.popleft()
-            rate_limiter.wait_sync(host_from_url(post.get("url") or "") or "_")
-            fut = executor.submit(_scrape_one_sync, post, scrape_fn)
-            futures[fut] = post
+            submit_one()
 
         while futures:
-            done, _ = wait(futures.keys(), return_when=FIRST_COMPLETED)
-            for fut in done:
+            for fut in as_completed(set(futures.keys())):
                 post = futures.pop(fut)
                 try:
                     _, detail_url, data, exc = fut.result()
                 except Exception as e:
                     logger.warning("scrape future exception: %s", e, exc_info=True)
-                    if remaining:
-                        next_post = remaining.popleft()
-                        rate_limiter.wait_sync(
-                            host_from_url(next_post.get("url") or "") or "_"
-                        )
-                        futures[executor.submit(_scrape_one_sync, next_post, scrape_fn)] = next_post
+                    submit_one()
                     continue
                 payload, raise_exc = _process_scrape_result(
                     post, detail_url, data, exc, college_id, seen, tracker
@@ -610,21 +633,14 @@ def _collect_payloads_sync(
                     raise raise_exc
                 if payload is not None:
                     yield payload
-                if remaining:
-                    next_post = remaining.popleft()
-                    rate_limiter.wait_sync(
-                        host_from_url(next_post.get("url") or "") or "_"
-                    )
-                    futures[executor.submit(_scrape_one_sync, next_post, scrape_fn)] = next_post
+                submit_one()
     finally:
-        # 소비자 중단 시에도 shutdown(wait=False, cancel_futures=True)로 대기 최소화. with 미사용으로 블로킹 방지.
         executor.shutdown(wait=False, cancel_futures=True)
         close_fn = getattr(rate_limiter, "close", None)
         if callable(close_fn):
             try:
                 close_fn()
             except Exception:
-                # 종료 실패는 치명적이지 않으므로 무시
                 pass
 
 

@@ -159,6 +159,50 @@ def _build_missing_notice_stmt(
     )
 
 
+def _build_bulk_upsert_stmt(notices: list[dict[str, Any]]) -> tuple[Any, list[dict[str, Any]]]:
+    """
+    Bulk upsert용 Insert statement와 정렬된 notices를 반환. 데드락 방지를 위해
+    (college_id, external_id) 기준 오름차순 정렬. sync/async 실행부에서 공통 사용.
+    """
+    # [핵심 리팩토링: 데드락 방지]
+    # 병렬 Celery 워커들이 무작위 순서로 행(Row) 잠금을 획득하여 데드락이 발생하는 것을 막기 위해,
+    # 복합 유니크 키(college_id, external_id)를 기준으로 항상 오름차순 정렬합니다.
+    sorted_notices = sorted(
+        notices,
+        key=lambda x: (str(x.get("college_id", "")), str(x.get("external_id", ""))),
+    )
+    notice_rows = [_notice_values_no_content(p) for p in sorted_notices]
+    base = insert(Notice).values(notice_rows)
+    stmt = base.on_conflict_do_update(
+        index_elements=["college_id", "external_id"],
+        index_where=Notice.deleted_at.is_(None),
+        set_=_notice_upsert_set_excluded(base),
+        where=Notice.content_hash.is_distinct_from(base.excluded.content_hash),
+    ).returning(Notice.id, Notice.college_id, Notice.external_id)
+    return stmt, sorted_notices
+
+
+def _build_notice_contents_upsert_payloads(
+    payloads: list[dict[str, Any]],
+    key_to_id: dict[tuple[uuid.UUID, str], uuid.UUID],
+) -> list[dict[str, Any]]:
+    """payloads와 key_to_id로 notice_contents upsert용 to_insert 리스트 구성. sync/async 공통."""
+    to_insert: list[dict[str, Any]] = []
+    for p in payloads:
+        content_url = p.get("content_url")
+        if not content_url:
+            continue
+        cid = p.get("college_id")
+        eid = p.get("external_id")
+        if cid is None or eid is None:
+            continue
+        nid = key_to_id.get((cid, eid))
+        if nid is None:
+            continue
+        to_insert.append({"notice_id": nid, "content_url": content_url})
+    return to_insert
+
+
 async def _fill_key_to_id_from_notices(
     session: AsyncSession,
     payloads: list[dict[str, Any]],
@@ -202,23 +246,7 @@ async def upsert_notices_bulk(
     """
     if not notices:
         return []
-
-    # [핵심 리팩토링: 데드락 방지]
-    # 병렬 Celery 워커들이 무작위 순서로 행(Row) 잠금을 획득하여 데드락이 발생하는 것을 막기 위해,
-    # 복합 유니크 키(college_id, external_id)를 기준으로 항상 오름차순 정렬합니다.
-    sorted_notices = sorted(
-        notices,
-        key=lambda x: (str(x.get("college_id", "")), str(x.get("external_id", "")))
-    )
-
-    notice_rows = [_notice_values_no_content(p) for p in sorted_notices]
-    base = insert(Notice).values(notice_rows)
-    stmt = base.on_conflict_do_update(
-        index_elements=["college_id", "external_id"],
-        index_where=Notice.deleted_at.is_(None),
-        set_=_notice_upsert_set_excluded(base),
-        where=Notice.content_hash.is_distinct_from(base.excluded.content_hash),
-    ).returning(Notice.id, Notice.college_id, Notice.external_id)
+    stmt, sorted_notices = _build_bulk_upsert_stmt(notices)
     result = await session.execute(stmt)
     rows = result.all()
     await session.flush()
@@ -245,27 +273,12 @@ def upsert_notices_bulk_sync(
     """
     if not notices:
         return []
-
-    # [핵심 리팩토링: 데드락 방지]
-    # 동기 워커에서도 동일하게 유니크 키 기준으로 정렬을 수행하여 락 순서를 강제합니다.
-    sorted_notices = sorted(
-        notices,
-        key=lambda x: (str(x.get("college_id", "")), str(x.get("external_id", "")))
-    )
-
-    notice_rows = [_notice_values_no_content(p) for p in sorted_notices]
-    base = insert(Notice).values(notice_rows)
-    stmt = base.on_conflict_do_update(
-        index_elements=["college_id", "external_id"],
-        index_where=Notice.deleted_at.is_(None),
-        set_=_notice_upsert_set_excluded(base),
-        where=Notice.content_hash.is_distinct_from(base.excluded.content_hash),
-    ).returning(Notice.id, Notice.college_id, Notice.external_id)
+    stmt, sorted_notices = _build_bulk_upsert_stmt(notices)
     result = session.execute(stmt)
     rows = result.all()
     session.flush()
-    key_to_id = {}
-    ids = []
+    key_to_id: dict[tuple[uuid.UUID, str], uuid.UUID] = {}
+    ids: list[uuid.UUID] = []
     for row in rows:
         nid, cid, eid = row[0], row[1], row[2]
         key_to_id[(cid, eid)] = nid
@@ -281,19 +294,7 @@ def _upsert_notice_contents_bulk_from_payloads_sync(
     key_to_id: dict[tuple[uuid.UUID, str], uuid.UUID],
 ) -> None:
     """payloads와 key_to_id로 notice_contents bulk upsert (동기)."""
-    to_insert: list[dict[str, Any]] = []
-    for p in payloads:
-        content_url = p.get("content_url")
-        if not content_url:
-            continue
-        cid = p.get("college_id")
-        eid = p.get("external_id")
-        if cid is None or eid is None:
-            continue
-        nid = key_to_id.get((cid, eid))
-        if nid is None:
-            continue
-        to_insert.append({"notice_id": nid, "content_url": content_url})
+    to_insert = _build_notice_contents_upsert_payloads(payloads, key_to_id)
     if not to_insert:
         return
     ins = insert(NoticeContent).values(to_insert)
@@ -311,19 +312,7 @@ async def _upsert_notice_contents_bulk_from_payloads(
     key_to_id: dict[tuple[uuid.UUID, str], uuid.UUID],
 ) -> None:
     """payloads와 key_to_id로 notice_contents bulk upsert (비동기)."""
-    to_insert = []
-    for p in payloads:
-        content_url = p.get("content_url")
-        if not content_url:
-            continue
-        cid = p.get("college_id")
-        eid = p.get("external_id")
-        if cid is None or eid is None:
-            continue
-        nid = key_to_id.get((cid, eid))
-        if nid is None:
-            continue
-        to_insert.append({"notice_id": nid, "content_url": content_url})
+    to_insert = _build_notice_contents_upsert_payloads(payloads, key_to_id)
     if not to_insert:
         return
     ins = insert(NoticeContent).values(to_insert)

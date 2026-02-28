@@ -17,6 +17,17 @@
 
 ---
 
+## ContextVar와 백그라운드 태스크 (asyncio.create_task 사용 시 주의)
+
+`session_scope(Propagation.REQUIRED)` 안에서 `asyncio.create_task(background_coro)`를 호출하면, **자식 태스크가 현재 컨텍스트를 복사**해 같은 `_session_context` 값을 갖게 됩니다. 요청이 끝나 세션이 닫힌 뒤에도 해당 백그라운드 태스크가 그 세션을 참조할 수 있어, 라이프사이클 오류·데드락·연결 풀 오염 가능성이 있습니다.
+
+**권장**:
+
+- 백그라운드 작업에 DB가 필요하면 `run_in_session(session_factory, fn)`처럼 **세션을 인자로 넘기거나**, 백그라운드 코루틴 내부에서 **새 세션을 열도록** 설계하세요.
+- `session_scope`에 묶인 컨텍스트에 의존하는 코루틴을 `create_task`로 스폰하지 마세요.
+
+---
+
 ## 적용 위치
 
 - `app/core/database.py`: `session_scope()`, `transaction()`, `run_in_session()`, `Propagation` enum.

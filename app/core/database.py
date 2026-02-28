@@ -286,19 +286,48 @@ async def get_db(request: Request) -> AsyncGenerator[AsyncSession, None]:
     async with maker() as session:
         yield session
 
+
+READ_ONLY_SESSION_MSG = "This session is read-only. Use get_db for writes."
+
+
+class ReadOnlySessionWrapper:
+    """
+    AsyncSession 읽기 전용 래퍼. flush/commit 호출 시 RuntimeError 발생.
+    목록·조회 전용 API에서 실수로 쓰기를 막기 위한 방어 레이어.
+    """
+
+    __slots__ = ("_session",)
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def commit(self) -> None:
+        raise RuntimeError(READ_ONLY_SESSION_MSG)
+
+    async def flush(self) -> None:
+        raise RuntimeError(READ_ONLY_SESSION_MSG)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._session, name)
+
+
 async def get_read_only_db(request: Request) -> AsyncGenerator[AsyncSession, None]:
     """
     FastAPI Depends용 비동기 읽기 전용(Read-Only) DB 세션 생성기.
     목록 조회 등 트래픽이 많은 SELECT 전용 API에서 사용하여
     쓰기 잠금(Lock) 오버헤드를 없애고 조회 속도를 극대화합니다.
+    쓰기 금지: flush/commit 호출 시 RuntimeError 발생. 쓰기가 필요하면 get_db를 사용하세요.
     """
     maker = getattr(request.app.state, "async_session_maker", None)
     if not maker:
         raise RuntimeError("Database not initialized. Set DATABASE_URL.")
 
-    # AUTOCOMMIT 모드로 세션을 열어 불필요한 BEGIN/COMMIT 트랜잭션 오버헤드를 원천 차단
     async with maker(execution_options={"isolation_level": "AUTOCOMMIT"}) as session:
-        yield session
+        try:
+            await session.execute(text("SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY"))
+        except Exception as e:
+            logger.debug("Read-only session: could not set PG READ ONLY: %s", e)
+        yield ReadOnlySessionWrapper(session)
 
 
 @asynccontextmanager

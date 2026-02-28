@@ -8,6 +8,7 @@
 - [ROADMAP_PHASES.md](./ROADMAP_PHASES.md) — 단계별 할 일·확정 사항·예상 문제·추가 검토
 - [DEPLOYMENT.md](./DEPLOYMENT.md)
 - [WORK_LOG.md](./WORK_LOG.md)
+- [session-scope-propagation.md](./decisions/session-scope-propagation.md) — SessionScope 전파 정책 및 **ContextVar + create_task 주의**
 
 ---
 
