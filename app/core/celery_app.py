@@ -4,7 +4,11 @@ Celery 앱 단일 진입점. broker=Redis, result_backend, beat_schedule, includ
 """
 
 import logging
+import os
 import ssl
+
+# Celery CLI가 이 모듈을 로드할 때 APP_ENTRY가 없으면 celery로 설정. Settings() 검증 통과용.
+os.environ.setdefault("APP_ENTRY", "celery")
 
 from celery import Celery
 from celery.signals import worker_init
