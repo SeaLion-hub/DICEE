@@ -12,6 +12,29 @@ logger = logging.getLogger(__name__)
 # 5xx 응답에서 허용하는 최소 안전 본문. 이 구조가 아니거나 traceback/예외 메시지 의심 시 교체.
 _SAFE_500_BODY = {"detail": "Internal server error", "code": "INTERNAL_ERROR"}
 _SENSITIVE_MARKERS = ("Traceback", "File ", ".py\", line ", "Exception:", "Error:")
+_UNSAFE_FORWARD_HEADERS = {
+    "connection",
+    "keep-alive",
+    "proxy-authenticate",
+    "proxy-authorization",
+    "te",
+    "trailer",
+    "transfer-encoding",
+    "upgrade",
+    "content-length",
+    "content-type",
+    "content-encoding",
+}
+
+
+def _filtered_error_headers(headers: dict[str, str]) -> dict[str, str]:
+    """5xx 치환 응답으로 전달하면 안 되는 헤더를 제거한다."""
+    out: dict[str, str] = {}
+    for k, v in headers.items():
+        if k.lower() in _UNSAFE_FORWARD_HEADERS:
+            continue
+        out[k] = v
+    return out
 
 
 class Sanitize5xxMiddleware(BaseHTTPMiddleware):
@@ -44,7 +67,7 @@ class Sanitize5xxMiddleware(BaseHTTPMiddleware):
             return JSONResponse(
                 status_code=response.status_code,
                 content=_SAFE_500_BODY,
-                headers=dict(response.headers),
+                headers=_filtered_error_headers(dict(response.headers)),
             )
         except Exception as e:
             logger.warning("Sanitize5xxMiddleware: %s", e, exc_info=True)

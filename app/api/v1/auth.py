@@ -16,6 +16,7 @@ from app.core.api_rate_limit import (
 from app.core.config import settings
 from app.core.database import get_db
 from app.core.deps import get_google_key_fetcher, get_httpx_client, get_redis_blocklist
+from app.core.ip_hmac import compute_ip_hmac
 from app.core.network import get_client_ip
 from app.core.redis import BlocklistUnavailableError, add_access_to_blocklist
 from app.schemas.auth import RefreshTokenPayload, TokenPayload, TokenResponse
@@ -36,6 +37,11 @@ security = HTTPBearer(auto_error=False)
 RATE_LIMIT_429_DETAIL_SUFFIX = (
     " 같은 네트워크(캠퍼스·기숙사 등)를 쓰는 경우일 수 있습니다. 잠시 후 다시 시도해 주세요."
 )
+RATE_LIMIT_RETRY_AFTER_SECONDS = 60
+
+
+def _rate_limit_headers() -> dict[str, str]:
+    return {"Retry-After": str(RATE_LIMIT_RETRY_AFTER_SECONDS)}
 
 
 def _auth_rate_limit_dep(
@@ -70,14 +76,15 @@ def _auth_rate_limit_dep(
                 detail="Rate limiting is temporarily unavailable. Try again later.",
             ) from None
         if not allowed:
+            ip_hmac_val, ip_hmac_key_version = compute_ip_hmac(client_ip)
             logger.warning(
-                "auth %s rate limit exceeded",
-                action,
-                extra={"client_ip": client_ip, "identifier": identifier},
+                "auth rate limit exceeded",
+                extra={"ip_hmac": ip_hmac_val, "ip_hmac_key_version": ip_hmac_key_version},
             )
             raise HTTPException(
                 status_code=429,
                 detail=too_many_detail + RATE_LIMIT_429_DETAIL_SUFFIX,
+                headers=_rate_limit_headers(),
             )
         return client_ip
 
@@ -189,7 +196,7 @@ async def post_refresh(
     type=refresh, token_version 검증 후 새 쌍 반환. 무효화된 토큰 시 401.
     """
     token_fp = _refresh_token_fingerprint(payload.refresh_token)
-    identifier = f"auth_refresh_fp:{client_ip}:{token_fp}"
+    identifier = f"auth_refresh_fp:{token_fp}"
     try:
         allowed = await check_rate_limit(
             redis_rate,
@@ -204,14 +211,16 @@ async def post_refresh(
             detail="Rate limiting is temporarily unavailable. Try again later.",
         ) from None
     if not allowed:
+        ip_hmac_val, ip_hmac_key_version = compute_ip_hmac(client_ip)
         logger.warning(
-            "auth refresh fingerprint rate limit exceeded",
-            extra={"client_ip": client_ip, "identifier": identifier},
+            "auth rate limit exceeded",
+            extra={"ip_hmac": ip_hmac_val, "ip_hmac_key_version": ip_hmac_key_version},
         )
         raise HTTPException(
             status_code=429,
             detail="Too many refresh requests, please try again later."
             + RATE_LIMIT_429_DETAIL_SUFFIX,
+            headers=_rate_limit_headers(),
         )
 
     try:

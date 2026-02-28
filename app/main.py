@@ -34,7 +34,7 @@ from app.core.lifespan import (
     init_sentry,
     teardown_state,
 )
-from app.core.network import InvalidForwardedHeaderError
+from app.core.network import InvalidForwardedHeaderError, warn_trusted_proxy_configuration
 from app.middleware import RequestIDMiddleware, Sanitize5xxMiddleware
 
 logger = logging.getLogger(__name__)
@@ -44,6 +44,7 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     """앱 수명 주기: init_sentry → init_database → check_startup_pool_budget → create_app_state → yield → teardown."""
     init_sentry()
+    warn_trusted_proxy_configuration()
     # 프로덕션: 예외 traceback 로그 누출 원천 차단(프레임워크 레벨)
     if (settings.environment or "").strip().lower() == "production":
         from app.core.logging_safety import ProductionExceptionFilter

@@ -183,6 +183,7 @@ def create_jwt_pair(user_id: uuid.UUID, token_version: int = 0) -> tuple[str, st
         "aud": settings.jwt_audience,
         "exp": now + timedelta(seconds=settings.jwt_access_expire_seconds),
         "iat": now,
+        "nbf": now,
     }
     refresh_payload = {
         "sub": str(user_id),
@@ -192,6 +193,7 @@ def create_jwt_pair(user_id: uuid.UUID, token_version: int = 0) -> tuple[str, st
         "aud": settings.jwt_audience,
         "exp": now + timedelta(days=settings.jwt_refresh_expire_days),
         "iat": now,
+        "nbf": now,
     }
     access_token = jwt.encode(access_payload, key, algorithm=algorithm)
     refresh_token = jwt.encode(refresh_payload, key, algorithm=algorithm)
@@ -217,7 +219,7 @@ async def verify_access_token(
             algorithms=[algorithm],
             issuer=settings.jwt_issuer,
             audience=settings.jwt_audience,
-            options={"require": ["exp", "iat", "sub", "type", "jti"]},
+            options={"require": ["exp", "iat", "sub", "type", "jti", "nbf"]},
         )
         if payload.get("type") != "access":
             raise AuthError("Invalid token type")
@@ -249,11 +251,13 @@ def verify_refresh_token(encoded: str) -> dict[str, Any]:
             algorithms=[algorithm],
             issuer=settings.jwt_issuer,
             audience=settings.jwt_audience,
-            options={"require": ["exp", "iat", "sub", "type", "token_version"]},
+            options={"require": ["exp", "iat", "sub", "type", "token_version", "nbf"]},
         )
         if payload.get("type") != "refresh":
             raise AuthError("Invalid token type")
         return cast(dict[str, Any], payload)
+    except AuthError:
+        raise
     except jwt.InvalidTokenError as e:
         logger.warning("Invalid refresh token: %s", e)
         raise AuthError("Invalid or expired refresh token") from e
@@ -269,7 +273,15 @@ async def refresh_tokens(
     """
     payload = verify_refresh_token(refresh_token)
     user_id = uuid.UUID(payload["sub"])
-    token_version = int(payload["token_version"])
+    raw_version = payload.get("token_version")
+    if raw_version is None:
+        raise AuthError("Refresh token revoked or invalid")
+    try:
+        token_version = int(raw_version)
+    except (TypeError, ValueError):
+        raise AuthError("Refresh token revoked or invalid")
+    if token_version < 0:
+        raise AuthError("Refresh token revoked or invalid")
     new_version = await rotate_refresh_token_version(session, user_id, token_version)
     if new_version is None:
         raise AuthError("Refresh token revoked or invalid")
@@ -383,14 +395,22 @@ async def google_login(
     )
 
     if client_ip:
-        ip_hmac_val, ip_hmac_key_version = compute_ip_hmac(client_ip)
-        await create_login_audit(
-            session,
-            ip_hmac=ip_hmac_val,
-            ip_hmac_key_version=ip_hmac_key_version,
-            user_id=user.id,
-            provider="google",
-        )
+        try:
+            ip_hmac_val, ip_hmac_key_version = compute_ip_hmac(client_ip)
+            await create_login_audit(
+                session,
+                ip_hmac=ip_hmac_val,
+                ip_hmac_key_version=ip_hmac_key_version,
+                user_id=user.id,
+                provider="google",
+            )
+        except Exception as e:
+            logger.warning(
+                "Login audit failed (user_id=%s): %s",
+                user.id,
+                e,
+                exc_info=True,
+            )
 
     version = getattr(user, "refresh_token_version", 0)
     access_token, refresh_token = create_jwt_pair(user.id, token_version=version)

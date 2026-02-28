@@ -115,8 +115,11 @@ class Settings(BaseSettings):
     redis_crawl_seen_required: bool = Field(False)
 
     crawl_trigger_secret: SecretStr | None = None
+    internal_preauth_rate_limit_per_minute: int = Field(30, ge=1, le=10000)
+    internal_auth_fail_rate_limit_per_minute: int = Field(10, ge=1, le=10000)
     internal_trigger_crawl_rate_limit_per_minute: int = Field(10, ge=1, le=1000)
     internal_crawl_stats_rate_limit_per_minute: int = Field(30, ge=1, le=1000)
+    client_ip_resolution_log_sample_rate: float = Field(0.0, ge=0.0, le=1.0)
 
     metrics_allowed_ips: str = Field(
         "",

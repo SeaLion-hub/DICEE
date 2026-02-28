@@ -19,7 +19,7 @@ from app.core.api_rate_limit import (
 )
 from app.core.config import settings
 from app.core.crawler_config import COLLEGE_CODE_TO_MODULE
-from app.core.database import get_db, get_read_only_db
+from app.core.database import get_read_only_db
 from app.core.deps import get_redis_trigger_lock
 from app.core.internal_auth import (
     CrawlTriggerNotConfiguredError,
@@ -45,6 +45,46 @@ logger = logging.getLogger(__name__)
 
 # 단과대별 크롤 시작 시간 분산(Thundering Herd 방지). 초 단위. 예: 300 = 5분 간격.
 CRAWL_STAGGER_SECONDS = 300
+RATE_LIMIT_RETRY_AFTER_SECONDS = 60
+
+
+def _rate_limit_headers() -> dict[str, str]:
+    return {"Retry-After": str(RATE_LIMIT_RETRY_AFTER_SECONDS)}
+
+
+def _rate_limit_identity(request: Request) -> str:
+    """
+    pre-auth rate limit용 식별자.
+    get_client_ip가 없으면 direct peer host, 그것도 없으면 unknown 사용.
+    """
+    ip = get_client_ip(request)
+    if ip:
+        return ip
+    if request.client and request.client.host:
+        return request.client.host
+    return "unknown"
+
+
+async def _enforce_rate_limit_or_503(
+    redis_client: RedisAsyncio | None,
+    *,
+    identifier: str,
+    max_requests: int,
+) -> bool:
+    """공통 rate limit 검사. 백엔드 장애 시 503으로 fail-closed."""
+    try:
+        return await check_rate_limit(
+            redis_client,
+            identifier=identifier,
+            max_requests=max_requests,
+            window_seconds=60,
+            require_redis=settings.api_rate_limit_require_redis,
+        )
+    except RateLimitUnavailableError:
+        raise HTTPException(
+            status_code=503,
+            detail="Rate limiting is temporarily unavailable. Try again later.",
+        ) from None
 
 
 def _log_internal_auth_failure(
@@ -53,11 +93,16 @@ def _log_internal_auth_failure(
     error: Exception | None = None,
 ) -> None:
     """구조화 로그로 내부 인증 실패 기록. 시크릿 값·평문 IP는 로깅하지 않으며, IP는 HMAC만 기록."""
-    client_ip = request.client.host if request and request.client else None
+    endpoint = getattr(request.url, "path", "unknown") if request else "unknown"
+    metrics.increment(
+        metrics.INTERNAL_AUTH_FAILED_TOTAL,
+        labels={"endpoint": endpoint, "reason": reason},
+    )
+    client_ip = get_client_ip(request) if request else None
     ip_hmac_val, ip_hmac_key_version = compute_ip_hmac(client_ip or "")
     request_id = getattr(request.state, "request_id", None) if request else None
     extra = {
-        "path": getattr(request.url, "path", None) if request else None,
+        "path": endpoint,
         "ip_hmac": ip_hmac_val or "(no key)",
         "ip_hmac_key_version": ip_hmac_key_version,
         "request_id": request_id,
@@ -111,6 +156,59 @@ def _require_client_ip(request: Request, *, endpoint: str) -> str:
             detail=f"Client IP could not be determined for {endpoint}",
         )
     return client_ip
+
+
+async def _apply_internal_preauth_limit(
+    request: Request,
+    redis_client: RedisAsyncio | None,
+    *,
+    endpoint: str,
+) -> None:
+    identity = _rate_limit_identity(request)
+    allowed = await _enforce_rate_limit_or_503(
+        redis_client,
+        identifier=f"internal_preauth:{endpoint}:{identity}",
+        max_requests=settings.internal_preauth_rate_limit_per_minute,
+    )
+    if allowed:
+        return
+    metrics.increment(
+        metrics.INTERNAL_PREAUTH_RATE_LIMITED_TOTAL,
+        labels={"endpoint": endpoint},
+    )
+    raise HTTPException(
+        status_code=429,
+        detail="Too many internal requests, please try again later.",
+        headers=_rate_limit_headers(),
+    )
+
+
+async def _authorize_with_fail_limit(
+    request: Request,
+    redis_client: RedisAsyncio | None,
+    *,
+    endpoint: str,
+    x_crawl_trigger_secret: str | None,
+    authorization: str | None,
+) -> None:
+    try:
+        _authorize_internal_trigger(request, x_crawl_trigger_secret, authorization)
+    except HTTPException as exc:
+        if exc.status_code != 401:
+            raise
+        identity = _rate_limit_identity(request)
+        allowed = await _enforce_rate_limit_or_503(
+            redis_client,
+            identifier=f"internal_auth_fail:{endpoint}:{identity}",
+            max_requests=settings.internal_auth_fail_rate_limit_per_minute,
+        )
+        if not allowed:
+            raise HTTPException(
+                status_code=429,
+                detail="Too many internal authentication failures, please try again later.",
+                headers=_rate_limit_headers(),
+            ) from None
+        raise
 
 
 async def _claim_idempotency(
@@ -229,22 +327,22 @@ async def post_trigger_crawl(
     Idempotency-Key 있으면 동일 키 재요청 시 202 + 캐시된 결과. 부분 실패 시에도 200으로 enqueued/skipped/failed 반환.
     P1: 인증 후 rate-limit 적용. 식별자는 get_client_ip(프록시 대응) 사용.
     """
-    _authorize_internal_trigger(request, x_crawl_trigger_secret, authorization)
+    endpoint = "/internal/trigger-crawl"
+    await _apply_internal_preauth_limit(request, redis_client, endpoint=endpoint)
+    await _authorize_with_fail_limit(
+        request,
+        redis_client,
+        endpoint=endpoint,
+        x_crawl_trigger_secret=x_crawl_trigger_secret,
+        authorization=authorization,
+    )
     client_ip = _require_client_ip(request, endpoint="/internal/trigger-crawl")
     rate_identifier = f"internal_trigger_crawl:{client_ip}"
-    try:
-        allowed = await check_rate_limit(
-            redis_client,
-            identifier=rate_identifier,
-            max_requests=settings.internal_trigger_crawl_rate_limit_per_minute,
-            window_seconds=60,
-            require_redis=settings.api_rate_limit_require_redis,
-        )
-    except RateLimitUnavailableError:
-        raise HTTPException(
-            status_code=503,
-            detail="Rate limiting is temporarily unavailable. Try again later.",
-        ) from None
+    allowed = await _enforce_rate_limit_or_503(
+        redis_client,
+        identifier=rate_identifier,
+        max_requests=settings.internal_trigger_crawl_rate_limit_per_minute,
+    )
     if not allowed:
         _log_internal_auth_failure(
             request,
@@ -254,6 +352,7 @@ async def post_trigger_crawl(
         raise HTTPException(
             status_code=429,
             detail="Too many internal trigger requests, please try again later.",
+            headers=_rate_limit_headers(),
         )
 
     codes = _resolve_college_codes(college_code)
@@ -334,22 +433,22 @@ async def get_crawl_stats(
     인증 실패 시 공통 _authorize_internal_trigger 로깅/응답으로 감사 추적 일관성 유지.
     P1: 인증 후 rate-limit. 식별자는 get_client_ip(프록시 대응) 사용.
     """
-    _authorize_internal_trigger(request, x_crawl_trigger_secret, authorization)
+    endpoint = "/internal/crawl-stats"
+    await _apply_internal_preauth_limit(request, redis_client, endpoint=endpoint)
+    await _authorize_with_fail_limit(
+        request,
+        redis_client,
+        endpoint=endpoint,
+        x_crawl_trigger_secret=x_crawl_trigger_secret,
+        authorization=authorization,
+    )
     client_ip = _require_client_ip(request, endpoint="/internal/crawl-stats")
     rate_identifier = f"internal_crawl_stats:{client_ip}"
-    try:
-        allowed = await check_rate_limit(
-            redis_client,
-            identifier=rate_identifier,
-            max_requests=settings.internal_crawl_stats_rate_limit_per_minute,
-            window_seconds=60,
-            require_redis=settings.api_rate_limit_require_redis,
-        )
-    except RateLimitUnavailableError:
-        raise HTTPException(
-            status_code=503,
-            detail="Rate limiting is temporarily unavailable. Try again later.",
-        ) from None
+    allowed = await _enforce_rate_limit_or_503(
+        redis_client,
+        identifier=rate_identifier,
+        max_requests=settings.internal_crawl_stats_rate_limit_per_minute,
+    )
     if not allowed:
         _log_internal_auth_failure(
             request,
@@ -359,6 +458,7 @@ async def get_crawl_stats(
         raise HTTPException(
             status_code=429,
             detail="Too many internal stats requests, please try again later.",
+            headers=_rate_limit_headers(),
         )
     from app.core.read_cache import get_cached, set_cached
 

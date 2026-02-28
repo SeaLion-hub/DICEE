@@ -122,6 +122,7 @@ def test_auth_google_rate_limit_returns_429(client, monkeypatch):
     assert response.status_code == 429
     body = response.json()
     assert body["detail"].startswith("Too many")
+    assert response.headers.get("retry-after") == "60"
 
 
 def test_auth_refresh_rate_limit_returns_429(client, monkeypatch):
@@ -152,11 +153,13 @@ def test_auth_refresh_rate_limit_returns_429(client, monkeypatch):
     assert response.status_code == 429
     body = response.json()
     assert "Too many" in body["detail"] or "refresh" in body["detail"].lower()
+    assert response.headers.get("retry-after") == "60"
 
 
 def test_auth_refresh_rate_limit_fingerprint_returns_429(client, monkeypatch):
     """1차 IP 제한 통과 후 2차 token fingerprint 제한 초과 시 429를 반환한다."""
     from app.api.v1 import auth as auth_module
+    seen_identifiers: list[str] = []
 
     async def _mixed_rate_limit(
         _client,
@@ -167,6 +170,7 @@ def test_auth_refresh_rate_limit_fingerprint_returns_429(client, monkeypatch):
         require_redis: bool = False,
         **kwargs: object,
     ) -> bool:
+        seen_identifiers.append(identifier)
         if identifier.startswith("auth_refresh_fp:"):
             return False
         return True
@@ -184,6 +188,10 @@ def test_auth_refresh_rate_limit_fingerprint_returns_429(client, monkeypatch):
     assert response.status_code == 429
     body = response.json()
     assert "Too many" in body["detail"] or "refresh" in body["detail"].lower()
+    assert response.headers.get("retry-after") == "60"
+    fp_identifiers = [i for i in seen_identifiers if i.startswith("auth_refresh_fp:")]
+    assert fp_identifiers, "fingerprint limiter identifier must be evaluated"
+    assert all("testclient" not in i for i in fp_identifiers)
 
 
 @pytest.mark.parametrize("raise_stage", ["ip", "fingerprint"])
@@ -288,19 +296,59 @@ def test_get_client_ip_no_trusted_proxy_uses_client_host(monkeypatch):
     assert get_client_ip(_Req()) == "1.2.3.4"
 
 
+def test_get_client_ip_records_resolution_metrics(monkeypatch):
+    from unittest.mock import MagicMock
+
+    from starlette.datastructures import Headers
+
+    from app.core import metrics as metrics_module
+    from app.core import network as network_module
+    from app.core.network import get_client_ip
+
+    mock_settings = MagicMock()
+    mock_settings.trusted_proxy_ips_set = frozenset({"10.0.0.1"})
+    mock_settings.client_ip_resolution_log_sample_rate = 0.0
+    monkeypatch.setattr(network_module, "settings", mock_settings)
+
+    fallback_labels = {"mode": "fallback", "trusted_peer": "false"}
+    xff_labels = {"mode": "xff", "trusted_peer": "true"}
+    fallback_before = metrics_module.get_counter(metrics_module.CLIENT_IP_RESOLUTION_TOTAL, labels=fallback_labels)
+    xff_before = metrics_module.get_counter(metrics_module.CLIENT_IP_RESOLUTION_TOTAL, labels=xff_labels)
+
+    class _ReqFallback:
+        client = type("_C", (), {"host": "1.2.3.4"})()
+        headers = Headers({"x-forwarded-for": "8.8.8.8"})
+
+    class _ReqXff:
+        client = type("_C", (), {"host": "10.0.0.1"})()
+        headers = Headers({"x-forwarded-for": "8.8.8.8,10.0.0.1"})
+
+    assert get_client_ip(_ReqFallback()) == "1.2.3.4"
+    assert get_client_ip(_ReqXff()) == "8.8.8.8"
+
+    fallback_after = metrics_module.get_counter(metrics_module.CLIENT_IP_RESOLUTION_TOTAL, labels=fallback_labels)
+    xff_after = metrics_module.get_counter(metrics_module.CLIENT_IP_RESOLUTION_TOTAL, labels=xff_labels)
+    assert fallback_after == fallback_before + 1
+    assert xff_after == xff_before + 1
+
+
 def test_get_client_ip_trusted_proxy_invalid_header_raises(monkeypatch):
     """신뢰 프록시 경유 시 X-Forwarded-For에 비IP 문자열이 있으면 InvalidForwardedHeaderError → 400."""
     from unittest.mock import MagicMock  # noqa: I001
 
     from starlette.datastructures import Headers
 
+    from app.core import metrics as metrics_module
     from app.core import network as network_module
     from app.core.network import InvalidForwardedHeaderError, get_client_ip
 
     # network가 참조하는 settings를 mock으로 교체해 trusted_proxy_ips_set = {10.0.0.1} 보장
     mock_settings = MagicMock()
     mock_settings.trusted_proxy_ips_set = frozenset({"10.0.0.1"})
+    mock_settings.client_ip_resolution_log_sample_rate = 0.0
     monkeypatch.setattr(network_module, "settings", mock_settings)
+
+    before = metrics_module.get_counter(metrics_module.INVALID_XFF_TOTAL)
 
     class _Req:
         client = type("_C", (), {"host": "10.0.0.1"})()
@@ -308,6 +356,20 @@ def test_get_client_ip_trusted_proxy_invalid_header_raises(monkeypatch):
 
     with pytest.raises(InvalidForwardedHeaderError):
         get_client_ip(_Req())
+    after = metrics_module.get_counter(metrics_module.INVALID_XFF_TOTAL)
+    assert after == before + 1
+
+
+def test_warn_trusted_proxy_configuration_logs_when_empty(monkeypatch, caplog):
+    from app.core import network as network_module
+
+    class _MockSettings:
+        trusted_proxy_ips = ""
+
+    monkeypatch.setattr(network_module, "settings", _MockSettings())
+    with caplog.at_level("WARNING"):
+        network_module.warn_trusted_proxy_configuration()
+    assert "TRUSTED_PROXY_IPS is empty" in caplog.text
 
 
 def test_request_id_sanitize_rejects_long_or_invalid_charset():
@@ -517,6 +579,42 @@ def test_trigger_crawl_invalid_secret_returns_401_before_rate_limit(client, monk
         app.dependency_overrides.pop(get_db, None)
         app.dependency_overrides.pop(get_redis_trigger_lock, None)
     assert response.status_code == 401
+
+
+def test_trigger_crawl_invalid_secret_repeated_hits_preauth_429(client, monkeypatch):
+    """잘못된 시크릿 반복 호출 시 pre-auth limiter가 먼저 429를 반환한다."""
+    from app.api import internal as internal_module
+    from app.core.config import settings
+    from pydantic import SecretStr
+
+    monkeypatch.setattr(settings, "crawl_trigger_secret", SecretStr("correct-secret"))
+    counters: dict[str, int] = {}
+
+    async def _fake_rate_limit(
+        _client,
+        *,
+        identifier: str,
+        max_requests: int,
+        window_seconds: int,
+        require_redis: bool = False,
+        **kwargs: object,
+    ) -> bool:
+        if identifier.startswith("internal_preauth:/internal/trigger-crawl:"):
+            counters[identifier] = counters.get(identifier, 0) + 1
+            return counters[identifier] <= 2
+        return True
+
+    monkeypatch.setattr(internal_module, "check_rate_limit", _fake_rate_limit)
+
+    headers = {"X-Crawl-Trigger-Secret": "wrong-secret"}
+    first = client.post("/internal/trigger-crawl", params={"college_code": "engineering"}, headers=headers)
+    second = client.post("/internal/trigger-crawl", params={"college_code": "engineering"}, headers=headers)
+    third = client.post("/internal/trigger-crawl", params={"college_code": "engineering"}, headers=headers)
+
+    assert first.status_code == 401
+    assert second.status_code == 401
+    assert third.status_code == 429
+    assert third.headers.get("retry-after") == "60"
 
 
 def test_trigger_crawl_returns_503_when_client_ip_unresolved(client, monkeypatch):
