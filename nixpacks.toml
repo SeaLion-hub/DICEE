@@ -6,4 +6,5 @@ cmds = ["pip install --no-cache-dir -r requirements.txt"]
 
 [start]
 # Single head required (007_merge_heads). Deploy branch must include alembic/versions/007_merge_heads.py. See DEPLOYMENT.md.
-cmd = "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"
+# APP_ENTRY=api ensures the API process passes main.py check (avoids RuntimeError when env has APP_ENTRY=celery).
+cmd = "alembic upgrade head && APP_ENTRY=api uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"
