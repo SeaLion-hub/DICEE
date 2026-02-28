@@ -63,7 +63,7 @@ try:
     print("🔄 [DEBUG] DB 초기화(init_db) 시도 중...")
     database.init_db()
 
-    if database.engine:
+    if database.get_engine():
         print("✅ [DEBUG] Engine 생성 성공!")
         print(f"   -> 접속 URL(마스킹): {_mask_db_url(str(database.engine.url))}")
     else:
@@ -88,13 +88,14 @@ COLLEGES_DATA = [
 ]
 
 async def seed_colleges():
-    if not database.async_session_maker:
+    maker = database.get_async_session_maker()
+    if not maker:
         print("\n🚫 [STOP] DB 세션이 없어 작업을 중단합니다.")
         return
 
     print("\n🌱 단과대 데이터 시딩 시작...")
     try:
-        async with database.async_session_maker() as session:
+        async with maker() as session:
             for data in COLLEGES_DATA:
                 stmt = select(College).where(College.external_id == data["external_id"])
                 result = await session.execute(stmt)
