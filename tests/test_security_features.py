@@ -11,6 +11,8 @@ from pydantic import SecretStr
 
 def test_crawl_stats_masks_error_message(client, monkeypatch):
     """GET /internal/crawl-stats 응답에서 error_message는 제거되고 has_error만 노출된다."""
+    from unittest.mock import AsyncMock
+
     from app.api import internal as internal_module
     from app.core.database import get_read_only_db
     from app.main import app
@@ -20,6 +22,14 @@ def test_crawl_stats_masks_error_message(client, monkeypatch):
         pass
 
     monkeypatch.setattr(internal_module, "_authorize_internal_trigger", _noop_authorize)
+    # Soft TTL: miss + 락 획득으로 DB refresh 경로 타서 마스킹 검증
+    monkeypatch.setattr(
+        internal_module,
+        "get_cached_with_soft_ttl",
+        AsyncMock(return_value=(None, True, "lock-token")),
+    )
+    monkeypatch.setattr(internal_module, "set_cached_with_soft_ttl", AsyncMock())
+    monkeypatch.setattr(internal_module, "release_cached_lock", AsyncMock())
 
     # 서비스가 호출하는 Repository 결과를 고정된 CrawlRunRow로 대체
     async def _fake_get_recent_crawl_runs(session, limit=50):

@@ -108,12 +108,14 @@ def _discover_crawler_specs() -> tuple[dict[str, str], dict[str, dict[str, Any]]
     college_to_module: dict[str, str] = {}
     config: dict[str, dict[str, Any]] = {}
     for modname, spec in specs:
+        get_links = (spec.get_links or "").strip() or "get_notice_links"
+        scrape_detail = (spec.scrape_detail or "").strip() or "scrape_detail"
         college_to_module[spec.college_code] = modname
         config[modname] = {
             "name": spec.display_name,
             "url": spec.list_url,
-            "get_links": spec.get_links,
-            "scrape_detail": spec.scrape_detail,
+            "get_links": get_links,
+            "scrape_detail": scrape_detail,
         }
     return (college_to_module, config)
 
@@ -152,8 +154,9 @@ def get_seed_colleges_from_crawlers() -> list[tuple[str, str]]:
 
 
 def _crawler_callable_names(config: dict[str, Any]) -> tuple[str, str]:
-    get_links_name = config.get("get_links") or "get_notice_links"
-    scrape_name = config.get("scrape_detail") or "scrape_detail"
+    """registry 저장값 조회 시 strip 정규화(공백 문자열·불일치 방지)."""
+    get_links_name = (config.get("get_links") or "get_notice_links").strip() or "get_notice_links"
+    scrape_name = (config.get("scrape_detail") or "scrape_detail").strip() or "scrape_detail"
     return (get_links_name, scrape_name)
 
 

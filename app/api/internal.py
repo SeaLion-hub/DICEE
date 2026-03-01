@@ -346,11 +346,19 @@ async def get_crawl_stats(
                 detail="Service degraded; cached data unavailable. Try again later.",
                 headers={"Retry-After": "60"},
             )
-        # 재조회 후에도 miss면 DB로 (lock 없이 진행)
-        should_refresh = True
+        # 재조회 후에도 miss면 한 번 더 락 획득 시도. 성공 시에만 refresh, 실패 시 503(stampede 방지)
+        cached, should_refresh, lock_token = await get_cached_with_soft_ttl(redis_client, *key_parts)
+        if cached is not None:
+            return CrawlStatsResponse.model_validate(cached)
+        if lock_token is None:
+            raise HTTPException(
+                status_code=503,
+                detail="Cache unavailable; try again later.",
+                headers={"Retry-After": "2"},
+            )
 
-    # should_refresh && (lock_token or cached is None): DB 조회 후 갱신
-    if should_refresh and (lock_token is not None or cached is None):
+    # should_refresh && lock_token 있음: DB 조회 후 갱신 (락 없이 DB 직접 치는 경로 제거)
+    if should_refresh and lock_token is not None:
         metrics.increment(metrics.READ_CACHE_MISS_TOTAL if cached is None else metrics.READ_CACHE_STALE_HIT_TOTAL)
         metrics.increment(metrics.READ_CACHE_REFRESH_TOTAL)
         result = await crawl_stats_service.get_crawl_stats(session, limit=limit)
@@ -369,11 +377,9 @@ async def get_crawl_stats(
             limit=result.limit,
         )
         await set_cached_with_soft_ttl(redis_client, *key_parts, value=response.model_dump())
-        if lock_token:
-            await release_cached_lock(redis_client, *key_parts, token=lock_token)
+        await release_cached_lock(redis_client, *key_parts, token=lock_token)
         return response
 
-    # 타입 만족: cached 있으면 반환 (실제로는 위 분기에서 처리됨)
     if cached is not None:
         return CrawlStatsResponse.model_validate(cached)
     raise HTTPException(
