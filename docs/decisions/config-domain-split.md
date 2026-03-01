@@ -16,7 +16,7 @@
 
 ## 참고
 
-- [app/core/config.py](../../app/core/config.py): `Settings`, 도메인 뷰(`.db`, `.redis` 등). 구형 평탄 필드 접근 차단은 `Settings.__getattribute__` 가드(구형 필드명 집합)로 구현되어 있으며, `LEGACY_CONFIG_FORBIDDEN=true` 시 해당 필드 접근 시 `RuntimeError` 발생.
+- **app/core/config/** 패키지 (`base.py`가 `Settings` 조립 진입점): `Settings`, 도메인 뷰(`.db`, `.redis` 등). 구형 평탄 필드 접근 차단은 `Settings.__getattribute__` 가드(구형 필드명 집합)로 구현되어 있으며, `LEGACY_CONFIG_FORBIDDEN=true` 시 해당 필드 접근 시 `RuntimeError` 발생.
 - 마이그레이션 기한 및 `LEGACY_CONFIG_FORBIDDEN` 정책은 배포·CI에서 적용.
 
 ---
