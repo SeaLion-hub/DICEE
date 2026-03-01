@@ -28,13 +28,15 @@ TEARDOWN_TIMEOUT_SECONDS = 10
 
 
 def init_sentry() -> None:
-    """Sentry 초기화. lifespan 진입 시점에만 수행."""
+    """Sentry 초기화. lifespan 진입 시점에만 수행. before_send로 스크러빙·fingerprint 정책 적용."""
     if not settings.sentry_dsn:
         return
     try:
         import sentry_sdk
         from sentry_sdk.integrations.fastapi import FastApiIntegration
         from sentry_sdk.integrations.logging import LoggingIntegration
+
+        from app.core.sentry_config import before_send_scrub
 
         sentry_sdk.init(
             dsn=settings.sentry_dsn.get_secret_value(),
@@ -44,6 +46,7 @@ def init_sentry() -> None:
             ],
             traces_sample_rate=0.1,
             environment=settings.environment,
+            before_send=before_send_scrub,
         )
     except Exception as e:
         logger.warning("Sentry init skipped: %s", e, exc_info=True)

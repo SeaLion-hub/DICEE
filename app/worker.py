@@ -15,6 +15,8 @@ if settings.sentry_dsn:
         from sentry_sdk.integrations.celery import CeleryIntegration
         from sentry_sdk.integrations.logging import LoggingIntegration
 
+        from app.core.sentry_config import before_send_scrub
+
         sentry_sdk.init(
             dsn=settings.sentry_dsn.get_secret_value(),
             integrations=[
@@ -23,6 +25,7 @@ if settings.sentry_dsn:
             ],
             traces_sample_rate=0.1,
             environment=settings.environment,
+            before_send=before_send_scrub,
         )
         logger.info("Sentry initialized for worker")
     except ImportError:

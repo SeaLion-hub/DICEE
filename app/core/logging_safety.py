@@ -21,6 +21,6 @@ class ProductionExceptionFilter(logging.Filter):
                 exc_type_name = getattr(exc_info[0], "__name__", str(exc_info[0]))
             record.exc_info = None
             record.exc_text = None
-            record.msg = "Internal error (%s)" % exc_type_name
+            record.msg = f"Internal error ({exc_type_name})"
             record.args = ()
         return True

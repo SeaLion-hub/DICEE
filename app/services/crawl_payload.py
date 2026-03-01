@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 MAX_HTML_BYTES = 5 * 1024 * 1024  # 본문 HTML 최대 바이트. 초과 시 해당 공지 스킵(OOM 방지).
 
-# Sentry 건별 전송 폭주 방지: 동일 시그니처는 TTL 내 1회만 전송.
+# Sentry 건별 전송 폭주 방지: 동일 시그니처는 TTL 내 1회만 전송 (디듀프 훅).
 _SENTRY_DEDUP_TTL_SECONDS = 60
 _sentry_last_sent: dict[str, float] = {}
 
@@ -32,6 +32,30 @@ def _should_send_crawl_sentry(signature: str) -> bool:
         return False
     _sentry_last_sent[signature] = now
     return True
+
+
+def _capture_crawl_sentry_exception(signature: str, exc: BaseException) -> None:
+    """크롤 파싱 경로 전용: TTL 디듀프 후 capture_exception. 동일 시그니처 60초 1회만 전송."""
+    if not _should_send_crawl_sentry(signature):
+        return
+    try:
+        import sentry_sdk
+
+        sentry_sdk.capture_exception(exc)
+    except (OSError, Exception) as sentry_err:
+        logger.warning("Sentry capture_exception failed: %s", sentry_err)
+
+
+def _capture_crawl_sentry_message(signature: str, message: str, level: str = "warning") -> None:
+    """크롤 파싱 경로 전용: TTL 디듀프 후 capture_message. 동일 시그니처 60초 1회만 전송."""
+    if not _should_send_crawl_sentry(signature):
+        return
+    try:
+        import sentry_sdk
+
+        sentry_sdk.capture_message(message, level=level)
+    except (OSError, Exception) as sentry_err:
+        logger.warning("Sentry capture_message failed: %s", sentry_err)
 
 
 def _url_path_only_for_hash(url: str) -> str:
@@ -62,13 +86,7 @@ def _external_id_from_url(url: str) -> str:
             url[:200] if url else "",
             e,
         )
-        if _should_send_crawl_sentry("crawl_payload:external_id_fallback"):
-            try:
-                import sentry_sdk
-
-                sentry_sdk.capture_exception(e)
-            except (OSError, Exception) as sentry_err:
-                logger.warning("Sentry capture_exception failed: %s", sentry_err)
+        _capture_crawl_sentry_exception("crawl_payload:external_id_fallback", e)
         path_only = _url_path_only_for_hash(url)
         return hashlib.sha256(path_only.encode()).hexdigest()[:32]
 
@@ -113,16 +131,11 @@ def _parse_published_at(date_str: str | None) -> datetime | None:
             "_parse_published_at no match (format change?): date_str=%r",
             date_str[:100] if date_str else None,
         )
-        if _should_send_crawl_sentry("crawl_payload:parse_published_at_no_match"):
-            try:
-                import sentry_sdk
-
-                sentry_sdk.capture_message(
-                    "_parse_published_at no match (format change?)",
-                    level="warning",
-                )
-            except (OSError, Exception) as sentry_err:
-                logger.warning("Sentry capture_message failed: %s", sentry_err)
+        _capture_crawl_sentry_message(
+            "crawl_payload:parse_published_at_no_match",
+            "_parse_published_at no match (format change?)",
+            level="warning",
+        )
     except (ValueError, AttributeError, TypeError) as e:
         logger.warning(
             "_parse_published_at failed: date_str=%r error=%s",
@@ -130,13 +143,7 @@ def _parse_published_at(date_str: str | None) -> datetime | None:
             e,
             exc_info=True,
         )
-        if _should_send_crawl_sentry("crawl_payload:parse_published_at_exception"):
-            try:
-                import sentry_sdk
-
-                sentry_sdk.capture_exception(e)
-            except (OSError, Exception) as sentry_err:
-                logger.warning("Sentry capture_exception failed: %s", sentry_err)
+        _capture_crawl_sentry_exception("crawl_payload:parse_published_at_exception", e)
     return None
 
 

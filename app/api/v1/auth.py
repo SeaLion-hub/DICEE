@@ -78,9 +78,14 @@ def _auth_rate_limit_dep(
                 ip_hmac_val, ip_hmac_key_version = compute_ip_hmac(client_ip)
             except Exception:
                 ip_hmac_val, ip_hmac_key_version = "", "unknown"
+            request_id = getattr(request.state, "request_id", None)
             logger.warning(
                 "auth rate limit exceeded",
-                extra={"ip_hmac": ip_hmac_val, "ip_hmac_key_version": ip_hmac_key_version},
+                extra={
+                    "ip_hmac": ip_hmac_val,
+                    "ip_hmac_key_version": ip_hmac_key_version,
+                    "request_id": request_id,
+                },
             )
             raise HTTPException(
                 status_code=429,
@@ -188,6 +193,7 @@ async def post_google_auth(
 
 @router.post("/refresh", response_model=TokenResponse)
 async def post_refresh(
+    request: Request,
     payload: RefreshTokenPayload,
     session: AsyncSession = Depends(get_db),
     client_ip: str = Depends(
@@ -223,9 +229,14 @@ async def post_refresh(
             ip_hmac_val, ip_hmac_key_version = compute_ip_hmac(client_ip)
         except Exception:
             ip_hmac_val, ip_hmac_key_version = "", "unknown"
+        request_id = getattr(request.state, "request_id", None)
         logger.warning(
             "auth rate limit exceeded",
-            extra={"ip_hmac": ip_hmac_val, "ip_hmac_key_version": ip_hmac_key_version},
+            extra={
+                "ip_hmac": ip_hmac_val,
+                "ip_hmac_key_version": ip_hmac_key_version,
+                "request_id": request_id,
+            },
         )
         raise HTTPException(
             status_code=429,
