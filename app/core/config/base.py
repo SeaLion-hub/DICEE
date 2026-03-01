@@ -1,6 +1,7 @@
 """Settings model and validators."""
 
 import logging
+import secrets
 from typing import Literal
 from urllib.parse import urlparse
 
@@ -336,15 +337,12 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def require_user_id_hmac_key_in_production(self) -> "Settings":
-        """production 환경에서 USER_ID_HMAC_KEY 필수. 로깅·Sentry용 식별자 보안."""
+        """production 환경에서 USER_ID_HMAC_KEY 필수. 비어 있으면 자동 생성(재시작 시 해시 변경됨)."""
         if (self.environment or "").strip().lower() != "production":
             return self
         raw = (self.user_id_hmac_key.get_secret_value() or "").strip()
         if not raw:
-            raise ValueError(
-                "USER_ID_HMAC_KEY is required when ENVIRONMENT=production. "
-                "Set a secret value for user_id hashing in logs and Sentry."
-            )
+            object.__setattr__(self, "user_id_hmac_key", SecretStr(secrets.token_hex(32)))
         return self
 
     @model_validator(mode="after")
