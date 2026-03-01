@@ -49,6 +49,9 @@ htmlcov/
 .DS_Store
 .env
 tmp/
+dispatch_repo
+.cursor/debug.log
+.cursor/*.log
 
 # 벤치마크 인사이트 (참고용, 커밋 제외)
 docs/reports/BENCHMARK_INSIGHTS.md
