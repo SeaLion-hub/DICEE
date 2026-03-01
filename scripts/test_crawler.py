@@ -1,30 +1,25 @@
-import asyncio
+"""크롤러 동기 경로 테스트. crawl_college_sync 사용 (Celery 워커와 동일 경로)."""
+
 import os
 import sys
 
 sys.path.insert(0, os.getcwd())
 
-from app.core import database
-from app.services.crawl_service import crawl_college
+from app.core.database_sync import get_sync_session, init_sync_db
+from app.services.crawl_service import crawl_college_sync
 
 
-async def main():
-    database.init_db()
-    print("🕷️ 크롤러 테스트 시작...")
+def main():
+    init_sync_db()
+    print("🕷️ 크롤러 테스트 시작 (sync)...")
 
-    if not database.async_session_maker:
-        print("❌ DB 세션 생성 실패. .env 설정을 확인하세요.")
-        return
-
-    async with database.async_session_maker() as session:
-        count = await crawl_college(session, "engineering")
-        await session.commit()
-        print(f"✅ 공대 크롤 완료. Upsert된 공지 수: {count}")
+    with get_sync_session() as session:
+        count, notice_ids = crawl_college_sync(session, "engineering")
+        session.commit()
+        print(f"✅ 공대 크롤 완료. Upsert된 공지 수: {count}, AI 대상 ID 수: {len(notice_ids)}")
 
     print("✅ 테스트 종료!")
 
 
 if __name__ == "__main__":
-    if sys.platform == "win32":
-        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-    asyncio.run(main())
+    main()

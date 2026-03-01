@@ -186,7 +186,8 @@ def test_celery_entry_fail_fast_when_app_entry_api():
             importlib.reload(config_module)
 
 
-def test_validate_crawler_contract_fails_when_async_callable_missing(monkeypatch):
+def test_validate_crawler_contract_fails_when_sync_callable_missing(monkeypatch):
+    """Sync-only 계약: get_links 또는 scrape_detail 누락 시 fail-fast."""
     from app.core import crawler_config
 
     class _DummyCrawlerModule:
@@ -194,9 +195,7 @@ def test_validate_crawler_contract_fails_when_async_callable_missing(monkeypatch
         def get_links(_list_url):
             return []
 
-        @staticmethod
-        def scrape_detail(_url):
-            return None
+        # scrape_detail 누락
 
     monkeypatch.setattr(
         crawler_config,

@@ -96,12 +96,10 @@ CRAWLER_CONFIG: dict[str, dict[str, Any]] = {
 }
 
 
-def _crawler_callable_names(config: dict[str, Any]) -> tuple[str, str, str, str]:
+def _crawler_callable_names(config: dict[str, Any]) -> tuple[str, str]:
     get_links_name = config.get("get_links") or "get_notice_links"
     scrape_name = config.get("scrape_detail") or "scrape_detail"
-    get_links_async_name = f"{get_links_name}_async"
-    scrape_async_name = f"{scrape_name}_async"
-    return (get_links_name, scrape_name, get_links_async_name, scrape_async_name)
+    return (get_links_name, scrape_name)
 
 
 def get_crawler_spec(module_name: str) -> CrawlerSpec | None:
@@ -129,7 +127,7 @@ def get_crawler(module_name: str) -> tuple[Callable[..., list], Callable[..., tu
     if spec is None:
         raise ValueError(f"No crawler config for module: {module_name}")
     config = CRAWLER_CONFIG[module_name]
-    get_links_name, scrape_name, _, _ = _crawler_callable_names(config)
+    get_links_name, scrape_name = _crawler_callable_names(config)
     mod = importlib.import_module(f"app.services.crawlers.{module_name}")
     get_links_fn = getattr(mod, get_links_name, None)
     scrape_fn = getattr(mod, scrape_name, None)
@@ -145,37 +143,10 @@ def get_crawler(module_name: str) -> tuple[Callable[..., list], Callable[..., tu
     return (get_links_fn, scrape_fn)
 
 
-def get_crawler_async(
-    module_name: str,
-) -> tuple[Callable[..., Any], Callable[..., Any]]:
-    """
-    (get_links_async_fn, scrape_detail_async_fn) 반환. 비동기용.
-    모듈에 get_*_links_async, scrape_*_detail_async 이름으로 등록된 함수 사용.
-    """
-    spec = get_crawler_spec(module_name)
-    if spec is None:
-        raise ValueError(f"No crawler config for module: {module_name}")
-    config = CRAWLER_CONFIG[module_name]
-    _, _, get_links_async_name, scrape_async_name = _crawler_callable_names(config)
-    mod = importlib.import_module(f"app.services.crawlers.{module_name}")
-    get_links_async_fn = getattr(mod, get_links_async_name, None)
-    scrape_async_fn = getattr(mod, scrape_async_name, None)
-    if not get_links_async_fn or not scrape_async_fn:
-        missing = [
-            n for n in (get_links_async_name, scrape_async_name)
-            if not (getattr(mod, n, None) and callable(getattr(mod, n, None)))
-        ]
-        raise ValueError(
-            f"Module {module_name} missing required callables: {', '.join(missing)}. "
-            f"Add them to app.services.crawlers.{module_name}"
-        )
-    return (get_links_async_fn, scrape_async_fn)
-
-
 def validate_crawler_contract() -> None:
     """
-    CRAWLER_CONFIG에 등록된 모든 모듈이 sync/async 크롤러 함수를 갖는지 검증한다.
-    누락 시 부팅 단계에서 fail-fast. 메시지는 액션 가능 형태(어떤 모듈·어떤 함수·수정 위치).
+    CRAWLER_CONFIG에 등록된 모든 모듈이 sync 크롤러 함수(get_links, scrape_detail)를 갖는지 검증한다.
+    누락 시 부팅 단계에서 fail-fast. (sync-only 계약.)
     """
     for module_name, config in CRAWLER_CONFIG.items():
         try:
@@ -186,8 +157,8 @@ def validate_crawler_contract() -> None:
                 f"Fix the module at app.services.crawlers.{module_name} or remove from CRAWLER_CONFIG."
             ) from e
 
-        get_links_name, scrape_name, get_links_async_name, scrape_async_name = _crawler_callable_names(config)
-        required = [get_links_name, scrape_name, get_links_async_name, scrape_async_name]
+        get_links_name, scrape_name = _crawler_callable_names(config)
+        required = [get_links_name, scrape_name]
         missing = [name for name in required if not callable(getattr(mod, name, None))]
         if missing:
             missing_str = ", ".join(missing)

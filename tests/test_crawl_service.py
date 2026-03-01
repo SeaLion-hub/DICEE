@@ -1,7 +1,7 @@
 """run_crawl_job_sync 등 크롤 서비스 단위 테스트."""
 
 import uuid
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from app.core.constants import CrawlRunStatus
@@ -74,49 +74,46 @@ def test_run_crawl_job_sync_rollback_then_failed_on_commit_failure():
         assert session.commit.call_count >= 2
 
 
-def test_crawl_college_uses_bounded_seen_set():
-    """crawl_college(비동기)는 seen으로 _BoundedSeenSet 사용 (P1 OOM 회귀 방지)."""
-    import asyncio
-    from unittest.mock import AsyncMock, MagicMock, patch
+def test_crawl_college_sync_uses_seen_set():
+    """crawl_college_sync는 seen으로 _BoundedSeenSet 또는 _RedisSeenSet 사용 (멀티 워커 중복 방지)."""
+    from unittest.mock import MagicMock, patch
 
-    from app.services.crawl_service import _BoundedSeenSet, crawl_college
-    from sqlalchemy.ext.asyncio import AsyncSession
+    from app.services.crawl_service import _BoundedSeenSet, _RedisSeenSet, crawl_college_sync
 
     seen_captured = []
 
-    async def _capture_seen(client, links, college_id, scrape_fn, delay, *, concurrency, seen, ctx):
-        seen_captured.append(seen)
-        if False:
-            yield  # async generator (0 yields)
+    def _capture_seen(*args, seen=None, **kwargs):
+        if seen is not None:
+            seen_captured.append(seen)
+        return iter(())
 
-    college_mock = MagicMock(id=uuid.UUID("00000000-0000-0000-0000-000000000001"))
     with (
         patch(
-            "app.services.crawl_service.get_college_by_external_id",
-            new=AsyncMock(return_value=college_mock),
+            "app.services.crawl.pipeline_sync.get_college_by_external_id_sync",
+            return_value=MagicMock(id=uuid.UUID("00000000-0000-0000-0000-000000000001")),
         ),
         patch(
-            "app.services.crawl_service.get_crawler_async",
+            "app.services.crawl.pipeline_sync.get_crawler",
             return_value=(
-                AsyncMock(return_value=[{"url": "https://example.com/1"}]),
-                AsyncMock(return_value=None),
+                lambda _url: [{"url": "https://example.com/1"}],
+                lambda _url: None,
             ),
         ),
         patch(
-            "app.services.crawl_service._collect_payloads_async",
+            "app.services.crawl.pipeline_sync._collect_payloads_sync",
             side_effect=_capture_seen,
         ),
     ):
-        session = MagicMock(spec=AsyncSession)
-        asyncio.run(crawl_college(session, "engineering"))
+        session = MagicMock()
+        crawl_college_sync(session, "engineering")
 
     assert len(seen_captured) == 1
-    assert isinstance(seen_captured[0], _BoundedSeenSet)
+    assert isinstance(seen_captured[0], _BoundedSeenSet | _RedisSeenSet)
 
 
-def test_crawl_college_sync_and_async_use_same_cap_helper(monkeypatch):
-    import asyncio
-    from unittest.mock import AsyncMock
+def test_crawl_college_sync_uses_cap_helper(monkeypatch):
+    """crawl_college_sync는 _cap_links_for_run을 사용해 링크 수 상한 적용."""
+    from unittest.mock import patch
 
     from app.services import crawl_service as crawl_module
     from app.services.crawl import pipeline_sync as crawl_pipeline_sync
@@ -129,24 +126,6 @@ def test_crawl_college_sync_and_async_use_same_cap_helper(monkeypatch):
 
     monkeypatch.setattr(crawl_module, "_cap_links_for_run", _cap_links_for_run)
     monkeypatch.setattr(crawl_pipeline_sync, "_cap_links_for_run", _cap_links_for_run)
-
-    async def _get_links_async(_client, _url):
-        return [{"url": "https://example.com/1"}]
-
-    with (
-        patch(
-            "app.services.crawl_service.get_college_by_external_id",
-            new=AsyncMock(return_value=MagicMock(id=uuid.uuid4())),
-        ),
-        patch(
-            "app.services.crawl_service.get_crawler_async",
-            return_value=(
-                _get_links_async,
-                AsyncMock(return_value=None),
-            ),
-        ),
-    ):
-        asyncio.run(crawl_module.crawl_college(MagicMock(), "engineering"))
 
     with (
         patch(
@@ -163,10 +142,8 @@ def test_crawl_college_sync_and_async_use_same_cap_helper(monkeypatch):
     ):
         crawl_module.crawl_college_sync(MagicMock(), "engineering")
 
-    assert len(calls) == 2
+    assert len(calls) == 1
     assert calls[0][0] == "engineering"
-    assert calls[1][0] == "engineering"
-    assert calls[0][1] == calls[1][1]
 
 
 def _make_draft(college_id: uuid.UUID, i: int) -> NoticeDraft:
@@ -228,54 +205,6 @@ def test_run_crawl_pipeline_sync_uses_chunk_size_for_flush():
     assert adapter.flush_sizes == [2, 2, 1]
 
 
-def test_run_crawl_pipeline_async_uses_chunk_size_for_flush():
-    import asyncio
-
-    from app.services import crawl_service as crawl_module
-
-    class _Adapter:
-        def __init__(self):
-            self.flush_sizes: list[int] = []
-
-        async def collect_payloads(self, **kwargs):
-            college_id = kwargs["college_id"]
-            for i in range(5):
-                yield _make_draft(college_id, i)
-
-        async def upsert_chunk(self, _session, chunk):
-            self.flush_sizes.append(len(chunk))
-            return [uuid.uuid4() for _ in chunk]
-
-    async def _get_links_async(_client, _url):
-        return [{"url": f"https://example.com/{i}"} for i in range(5)]
-
-    adapter = _Adapter()
-    cfg = crawl_module.CrawlRuntimeConfig(
-        polite_delay_seconds=1.0,
-        page_timeout_seconds=30.0,
-        upsert_chunk_size=2,
-        collect_sync_max_workers=5,
-        collect_in_flight_limit=500,
-        max_links_per_run=50000,
-        collect_async_concurrency=10,
-        crawl_seen_max_size=10000,
-    )
-    total = asyncio.run(
-        crawl_module._run_crawl_pipeline_async(
-            MagicMock(),
-            college_code="engineering",
-            college_id=uuid.uuid4(),
-            list_url="https://example.com/list",
-            get_links_async_fn=_get_links_async,
-            scrape_async_fn=AsyncMock(return_value=None),
-            cfg=cfg,
-            adapter=adapter,
-        )
-    )
-    assert total == 5
-    assert adapter.flush_sizes == [2, 2, 1]
-
-
 def test_sync_adapter_reflects_worker_and_inflight_config(monkeypatch):
     from app.services import crawl_service as crawl_module
     from app.services.crawl import pipeline_sync as crawl_pipeline_sync
@@ -312,97 +241,6 @@ def test_sync_adapter_reflects_worker_and_inflight_config(monkeypatch):
         )
     )
     assert captured == {"max_workers": 7, "in_flight_limit": 321}
-
-
-@pytest.mark.asyncio
-async def test_collect_payloads_async_pending_bounded_by_concurrency():
-    """Async 수집 시 동시 실행 태스크 수가 concurrency를 초과하지 않음 (메모리 상한)."""
-    import asyncio
-    from unittest.mock import AsyncMock, MagicMock
-
-    from app.domain.contracts.crawl_contracts import CrawlLogContext
-    from app.services.crawl_service import _collect_payloads_async
-    from app.services.crawlers.base import ScrapeResult
-
-    concurrency = 2
-    current = [0]
-    max_concurrent = [0]
-
-    async def _slow_fetch(client, post, fn, rate_limiter, sem):
-        current[0] += 1
-        max_concurrent[0] = max(max_concurrent[0], current[0])
-        try:
-            await asyncio.sleep(0.05)
-            return MagicMock(
-                post=post,
-                detail_url=post.get("url", ""),
-                data=ScrapeResult("t", "2024-01-01", "<p>x</p>", [], []),
-                exc=None,
-            )
-        finally:
-            current[0] -= 1
-
-    with patch("app.services.crawl_service._fetch_one_with_retry", side_effect=_slow_fetch):
-        client = MagicMock()
-        links = [{"url": f"https://example.com/{i}", "no": str(i)} for i in range(5)]
-        college_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
-        ctx = CrawlLogContext(college_code="test")
-
-        async for _ in _collect_payloads_async(
-            client,
-            links,
-            college_id,
-            AsyncMock(return_value=None),
-            0.0,
-            concurrency=concurrency,
-            seen=set(),
-            ctx=ctx,
-        ):
-            pass
-        assert max_concurrent[0] <= concurrency
-
-
-def test_async_adapter_reflects_concurrency_config(monkeypatch):
-    import asyncio
-
-    from app.services import crawl_service as crawl_module
-
-    captured: dict[str, int] = {}
-
-    async def _fake_collect(*args, **kwargs):
-        captured["concurrency"] = kwargs["concurrency"]
-        if False:
-            yield _make_draft(uuid.uuid4(), 0)
-
-    monkeypatch.setattr(crawl_module, "_collect_payloads_async", _fake_collect)
-    cfg = crawl_module.CrawlRuntimeConfig(
-        polite_delay_seconds=1.0,
-        page_timeout_seconds=30.0,
-        upsert_chunk_size=50,
-        collect_sync_max_workers=5,
-        collect_in_flight_limit=500,
-        max_links_per_run=50000,
-        collect_async_concurrency=13,
-        crawl_seen_max_size=10000,
-    )
-    adapter = crawl_module._DefaultAsyncCrawlAdapter()
-
-    from app.domain.contracts.crawl_contracts import CrawlLogContext
-
-    async def _run():
-        async for _ in adapter.collect_payloads(
-            client=MagicMock(),
-            links=[],
-            college_id=uuid.uuid4(),
-            scrape_async_fn=AsyncMock(return_value=None),
-            seen=set(),
-            cfg=cfg,
-            ctx=CrawlLogContext(college_code="test"),
-        ):
-            pass
-
-    asyncio.run(_run())
-    assert captured == {"concurrency": 13}
 
 
 def test_redis_seen_set_uses_shared_sync_client(monkeypatch):
@@ -519,55 +357,6 @@ def test_scrape_one_sync_keyboard_interrupt_propagates():
         _scrape_one_sync(post, scrape_raise)
 
 
-@pytest.mark.asyncio
-async def test_fetch_one_async_returns_exception_in_tuple_on_exception():
-    """_fetch_one_async: 일반 Exception 발생 시 ScrapeAttemptResult.exc로 반환된다."""
-    from unittest.mock import AsyncMock, MagicMock
-
-    from app.services.crawl_service import _fetch_one_async
-
-    post = {"url": "https://example.com/1"}
-    client = MagicMock()
-    rate_limiter = MagicMock()
-    rate_limiter.wait_async = AsyncMock(return_value=None)
-    sem = MagicMock()
-    sem.__aenter__ = AsyncMock(return_value=None)
-    sem.__aexit__ = AsyncMock(return_value=None)
-
-    async def scrape_raise(_client, url):
-        raise RuntimeError("fetch failed")
-
-    result = await _fetch_one_async(client, post, scrape_raise, rate_limiter, sem)
-    assert result.detail_url == "https://example.com/1"
-    assert result.data is None
-    assert result.exc is not None
-    assert isinstance(result.exc, RuntimeError)
-    assert str(result.exc) == "fetch failed"
-
-
-@pytest.mark.asyncio
-async def test_fetch_one_async_cancelled_error_propagates():
-    """_fetch_one_async: asyncio.CancelledError가 전파된다."""
-    import asyncio
-    from unittest.mock import AsyncMock, MagicMock
-
-    from app.services.crawl_service import _fetch_one_async
-
-    post = {"url": "https://example.com/1"}
-    client = MagicMock()
-    rate_limiter = MagicMock()
-    rate_limiter.wait_async = AsyncMock(return_value=None)
-    sem = MagicMock()
-    sem.__aenter__ = AsyncMock(return_value=None)
-    sem.__aexit__ = AsyncMock(return_value=None)
-
-    async def scrape_raise(_client, url):
-        raise asyncio.CancelledError()
-
-    with pytest.raises(asyncio.CancelledError):
-        await _fetch_one_async(client, post, scrape_raise, rate_limiter, sem)
-
-
 def test_collect_payloads_sync_applies_rate_limit_in_worker_thread(monkeypatch):
     import threading
 
@@ -616,11 +405,12 @@ def test_scrape_one_sync_with_sem_retries_request_exception_and_succeeds(monkeyp
     import threading
 
     from app.services import crawl_service as crawl_module
+    from app.services.crawl import collect_sync as crawl_collect_sync
     from app.services.crawlers.base import ScrapeResult
     from requests.exceptions import RequestException
     from tenacity import wait_none
 
-    monkeypatch.setattr(crawl_module, "_crawl_retry_wait", wait_none())
+    monkeypatch.setattr(crawl_collect_sync, "_crawl_retry_wait", wait_none())
     calls = {"scrape": 0, "wait": 0}
 
     class _FakeLimiter:
@@ -650,10 +440,11 @@ def test_scrape_one_sync_with_sem_retries_request_exception_until_limit(monkeypa
     import threading
 
     from app.services import crawl_service as crawl_module
+    from app.services.crawl import collect_sync as crawl_collect_sync
     from requests.exceptions import RequestException
     from tenacity import wait_none
 
-    monkeypatch.setattr(crawl_module, "_crawl_retry_wait", wait_none())
+    monkeypatch.setattr(crawl_collect_sync, "_crawl_retry_wait", wait_none())
     calls = {"scrape": 0, "wait": 0}
 
     class _FakeLimiter:
@@ -682,10 +473,11 @@ def test_retry_policy_404_skippable_no_retry(monkeypatch):
     import threading
 
     from app.services import crawl_service as crawl_module
+    from app.services.crawl import collect_sync as crawl_collect_sync
     from requests.exceptions import HTTPError
     from tenacity import wait_none
 
-    monkeypatch.setattr(crawl_module, "_crawl_retry_wait", wait_none())
+    monkeypatch.setattr(crawl_collect_sync, "_crawl_retry_wait", wait_none())
     calls = {"scrape": 0}
 
     class _FakeLimiter:
@@ -714,11 +506,12 @@ def test_retry_policy_429_retried(monkeypatch):
     import threading
 
     from app.services import crawl_service as crawl_module
+    from app.services.crawl import collect_sync as crawl_collect_sync
     from app.services.crawlers.base import ScrapeResult
     from requests.exceptions import HTTPError
     from tenacity import wait_none
 
-    monkeypatch.setattr(crawl_module, "_crawl_retry_wait", wait_none())
+    monkeypatch.setattr(crawl_collect_sync, "_crawl_retry_wait", wait_none())
     calls = {"scrape": 0}
 
     class _FakeLimiter:
