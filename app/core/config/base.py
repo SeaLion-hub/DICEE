@@ -313,6 +313,11 @@ class Settings(BaseSettings):
             host = (parsed.hostname or parsed.netloc or "").lower()
             if not host or "@" in host:
                 host = (parsed.netloc or "").split("@")[-1].split(":")[0].lower()
+            # Railway 내부 호스트(*.railway.internal)는 Railway 네트워크 안에서만 연결 가능하므로,
+            # 이 호스트가 보이면 이미 Railway 위에서 동작 중(배포 환경)으로 간주하고 검사 생략.
+            if host.endswith(".railway.internal") or host == "railway.internal":
+                return self
+
             # 운영/관리형 DB 호스트 패턴 (서브스트링 일치)
             production_indicators = (
                 "rds.",
