@@ -26,6 +26,23 @@ def test_settings_strips_jwt_secret_on_load(monkeypatch):
     assert s.jwt_secret.get_secret_value() == "my-secret"
 
 
+def test_normalize_ssl_query_for_psycopg_replaces_ssl_with_sslmode(monkeypatch):
+    """동기 엔진용 URL에서 ssl= 파라미터를 psycopg3 호환 sslmode= 로 변환한다."""
+    monkeypatch.setenv("APP_ENTRY", "celery")
+    from app.core.database_sync import _normalize_ssl_query_for_psycopg
+
+    url = "postgresql://u:p@host/db?ssl=require"
+    out = _normalize_ssl_query_for_psycopg(url)
+    assert "sslmode=require" in out
+    assert "ssl=" not in out
+
+    url2 = "postgresql+psycopg://x@y/z?ssl=true&foo=bar"
+    out2 = _normalize_ssl_query_for_psycopg(url2)
+    assert "sslmode=require" in out2
+    assert "foo=bar" in out2
+    assert "ssl=" not in out2
+
+
 def test_sync_database_url_treats_whitespace_as_unset(monkeypatch):
     """DATABASE_URL가 공백 문자열만 있을 때 _sync_database_url이 None을 반환한다."""
     from app.core import config, database_sync

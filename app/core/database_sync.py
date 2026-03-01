@@ -6,6 +6,7 @@ FastAPI 웹은 asyncpg, 워커는 이 모듈만 사용해 "Too many connections"
 import logging
 from collections.abc import Generator
 from contextlib import contextmanager
+from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
@@ -17,19 +18,39 @@ logger = logging.getLogger(__name__)
 sync_engine = None
 sync_session_factory = None
 
+_SSL_TO_SSLMODE = {"true": "require", "require": "require", "1": "require", "false": "disable", "disable": "disable", "0": "disable"}
+
+
+def _normalize_ssl_query_for_psycopg(url_str: str) -> str:
+    """psycopg3는 'ssl' 옵션을 인식하지 않음. 쿼리에서 ssl=... → sslmode=... 로 변환."""
+    parsed = urlparse(url_str)
+    if not parsed.query:
+        return url_str
+    q = parse_qs(parsed.query, keep_blank_values=True)
+    if "ssl" not in q:
+        return url_str
+    ssl_val = (q["ssl"][0] or "").strip().lower()
+    if "sslmode" not in q:
+        q["sslmode"] = [_SSL_TO_SSLMODE.get(ssl_val, "require")]
+    del q["ssl"]
+    new_query = urlencode([(k, v[0]) for k, v in q.items()], doseq=False)
+    return urlunparse((parsed.scheme, parsed.netloc, parsed.path, parsed.params, new_query, parsed.fragment))
+
 
 def _sync_database_url() -> str | None:
-    """asyncpg URL을 동기 드라이버(psycopg3)용으로 변환. plain postgresql:// → +psycopg (psycopg2 미설치 시)."""
+    """asyncpg URL을 동기 드라이버(psycopg3)용으로 변환. plain postgresql:// → +psycopg. ssl → sslmode 정규화."""
     raw = (settings.db.database_url or "").strip()
     if not raw:
         return None
     if "postgresql+asyncpg" in raw:
-        return raw.replace("postgresql+asyncpg", "postgresql+psycopg", 1)
-    if raw.startswith("postgresql://") and "postgresql+" not in raw:
-        return raw.replace("postgresql://", "postgresql+psycopg://", 1)
-    if "postgresql+psycopg" in raw:
-        return raw
-    return raw
+        url = raw.replace("postgresql+asyncpg", "postgresql+psycopg", 1)
+    elif raw.startswith("postgresql://") and "postgresql+" not in raw:
+        url = raw.replace("postgresql://", "postgresql+psycopg://", 1)
+    elif "postgresql+psycopg" in raw:
+        url = raw
+    else:
+        url = raw
+    return _normalize_ssl_query_for_psycopg(url)
 
 
 def init_sync_db() -> None:
