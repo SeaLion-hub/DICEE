@@ -8,7 +8,12 @@ import httpx
 from bs4 import BeautifulSoup, Tag
 from requests.exceptions import RequestException
 
-from app.core.crawl_http import HtmlTooLargeError, fetch_html, fetch_html_async
+from app.core.crawl_http import (
+    HtmlTooLargeError,
+    fetch_html,
+    fetch_html_async,
+    fetch_html_detail_cached,
+)
 from app.services.crawlers.base import ScrapeResult
 from app.services.crawlers.typing_helpers import ensure_str_attr
 
@@ -89,7 +94,7 @@ def get_glc_links(url):
 # ================================================================================
 def scrape_glc_detail(url):
     try:
-        html = fetch_html(url)
+        html = fetch_html_detail_cached(url)
         soup = BeautifulSoup(html, "html.parser")
 
         # 1. 제목 추출

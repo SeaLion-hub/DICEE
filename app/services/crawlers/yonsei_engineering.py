@@ -8,7 +8,12 @@ from bs4 import BeautifulSoup, Comment, NavigableString, Tag
 from bs4.element import PageElement
 from requests.exceptions import RequestException
 
-from app.core.crawl_http import HtmlTooLargeError, fetch_html, fetch_html_async
+from app.core.crawl_http import (
+    HtmlTooLargeError,
+    fetch_html,
+    fetch_html_async,
+    fetch_html_detail_cached,
+)
 from app.services.crawlers.base import ScrapeResult
 from app.services.crawlers.typing_helpers import ensure_str_attr
 
@@ -68,7 +73,7 @@ def finalize_text(text):
 def scrape_yonsei_engineering_precise(url):
     try:
         try:
-            text = fetch_html(url, timeout=10)
+            text = fetch_html_detail_cached(url, timeout=10)
         except HtmlTooLargeError as e:
             logger.warning("scrape_yonsei_engineering_precise body too large url=%s: %s", url, e)
             raise

@@ -9,7 +9,12 @@ from bs4 import BeautifulSoup, Comment, Tag
 from bs4.element import PageElement
 from requests.exceptions import RequestException
 
-from app.core.crawl_http import HtmlTooLargeError, fetch_html, fetch_html_async
+from app.core.crawl_http import (
+    HtmlTooLargeError,
+    fetch_html,
+    fetch_html_async,
+    fetch_html_detail_cached,
+)
 from app.services.crawlers.base import ScrapeResult
 from app.services.crawlers.typing_helpers import ensure_str_attr
 
@@ -136,7 +141,7 @@ def get_medicine_notice_links(list_url):
 def scrape_medicine_detail(url):
     try:
         try:
-            text = fetch_html(url, timeout=10)
+            text = fetch_html_detail_cached(url, timeout=10)
         except HtmlTooLargeError as e:
             logger.warning("scrape_medicine_detail body too large url=%s: %s", url, e)
             raise RequestException from e

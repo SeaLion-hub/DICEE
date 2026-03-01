@@ -2,15 +2,19 @@
 크롤러 공통 HTTP 래퍼. OOM 방지: Content-Length fail-fast + 무조건 stream chunking.
 악의적 서버가 Content-Length를 속여도 누적 바이트 캡으로 방어.
 동기(워커용) fetch_html, 비동기(웹용) fetch_html_async.
+상세 페이지 read-through 캐시: fetch_html_detail_cached (목록은 미캐시).
 """
 
+import hashlib
 import logging
 from typing import Any
 
 import httpx
 import requests
 
+from app.core.config import settings
 from app.core.crawler_config import CRAWLER_HEADERS
+from app.core.redis import get_shared_sync_redis_client
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +76,65 @@ def fetch_html(
         resp.close()
 
     return b"".join(chunks).decode(encoding, errors="replace")
+
+
+def _detail_cache_key(url: str, encoding: str) -> str:
+    """캐시 키: prefix + hash(url|encoding). URL 길이 제한 회피."""
+    raw = f"{url}|{encoding}"
+    h = hashlib.sha256(raw.encode("utf-8", errors="replace")).hexdigest()
+    prefix = getattr(settings, "crawl_detail_cache_key_prefix", "dicee:crawl:detail:")
+    return f"{prefix.rstrip(':')}:{h}"
+
+
+def fetch_html_detail_cached(
+    url: str,
+    *,
+    max_bytes: int = DEFAULT_MAX_HTML_BYTES,
+    timeout: int = DEFAULT_TIMEOUT,
+    headers: dict[str, Any] | None = None,
+    encoding: str = "utf-8",
+) -> str:
+    """
+    상세 페이지용 read-through 캐시. hit 시 즉시 반환, miss 시 fetch 후 setex.
+    Redis 장애/미설정 시 fail-open(fetch_html 호출). 목록 페이지에는 사용하지 말 것.
+    """
+    enabled = getattr(settings, "crawl_detail_cache_enabled", False)
+    client = get_shared_sync_redis_client()
+    if not enabled or client is None:
+        return fetch_html(
+            url,
+            max_bytes=max_bytes,
+            timeout=timeout,
+            headers=headers,
+            encoding=encoding,
+        )
+    key = _detail_cache_key(url, encoding)
+    ttl = getattr(settings, "crawl_detail_cache_ttl_seconds", 300)
+    try:
+        cached = client.get(key)
+        if cached is not None:
+            return str(cached)
+    except Exception as e:
+        logger.debug("crawl detail cache get failed: key=%s error=%s", key[:80], e)
+        return fetch_html(
+            url,
+            max_bytes=max_bytes,
+            timeout=timeout,
+            headers=headers,
+            encoding=encoding,
+        )
+    html = fetch_html(
+        url,
+        max_bytes=max_bytes,
+        timeout=timeout,
+        headers=headers,
+        encoding=encoding,
+    )
+    try:
+        client.setex(key, ttl, html)
+    except Exception as e:
+        logger.debug("crawl detail cache set failed: key=%s error=%s", key[:80], e)
+    return html
 
 
 async def fetch_html_async(

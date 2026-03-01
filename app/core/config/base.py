@@ -179,6 +179,11 @@ class Settings(BaseSettings):
     read_cache_lock_ttl_seconds: int = Field(10, ge=2, le=120)
     read_cache_wait_for_fresh_ms: int = Field(1000, ge=0, le=5000)
 
+    # Crawl detail page read-through cache (scrape_*_detail only; list not cached)
+    crawl_detail_cache_enabled: bool = Field(False, description="Enable read-through cache for detail HTML")
+    crawl_detail_cache_ttl_seconds: int = Field(300, ge=60, le=3600)
+    crawl_detail_cache_key_prefix: str = Field("dicee:crawl:detail:")
+
     # Degraded mode
     degraded_failure_threshold: int = Field(3, ge=1, le=20)
     degraded_recovery_success_count: int = Field(5, ge=1, le=50)
