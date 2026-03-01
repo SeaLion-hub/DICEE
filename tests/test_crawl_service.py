@@ -14,7 +14,7 @@ def test_run_crawl_job_sync_rollback_then_failed_on_commit_failure():
     동일 세션으로 FAILED 기록 시도 → 예외 재발생.
     PendingRollbackError 방지 및 FAILED 기록은 컴포지트 핸들러(동일 세션 우선 → Redis fallback)로 수행.
     """
-    from app.services.crawl_service import handle_crawl_failure_composite, run_crawl_job_sync
+    from app.services.crawl.entrypoints import handle_crawl_failure_composite, run_crawl_job_sync
 
     run_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
     college = MagicMock()
@@ -78,7 +78,8 @@ def test_crawl_college_sync_uses_seen_set():
     """crawl_college_sync는 seen으로 _BoundedSeenSet 또는 _RedisSeenSet 사용 (멀티 워커 중복 방지)."""
     from unittest.mock import MagicMock, patch
 
-    from app.services.crawl_service import _BoundedSeenSet, _RedisSeenSet, crawl_college_sync
+    from app.services.crawl.runtime import _BoundedSeenSet, _RedisSeenSet
+    from app.services.crawl.pipeline_sync import crawl_college_sync
 
     seen_captured = []
 
@@ -115,8 +116,8 @@ def test_crawl_college_sync_uses_cap_helper(monkeypatch):
     """crawl_college_sync는 _cap_links_for_run을 사용해 링크 수 상한 적용."""
     from unittest.mock import patch
 
-    from app.services import crawl_service as crawl_module
     from app.services.crawl import pipeline_sync as crawl_pipeline_sync
+    from app.services.crawl.pipeline_sync import crawl_college_sync
 
     calls: list[tuple[str, int]] = []
 
@@ -124,23 +125,22 @@ def test_crawl_college_sync_uses_cap_helper(monkeypatch):
         calls.append((college_code, max_links))
         return []
 
-    monkeypatch.setattr(crawl_module, "_cap_links_for_run", _cap_links_for_run)
     monkeypatch.setattr(crawl_pipeline_sync, "_cap_links_for_run", _cap_links_for_run)
 
     with (
         patch(
-            "app.services.crawl_service.get_college_by_external_id_sync",
+            "app.services.crawl.pipeline_sync.get_college_by_external_id_sync",
             return_value=MagicMock(id=uuid.uuid4()),
         ),
         patch(
-            "app.services.crawl_service.get_crawler",
+            "app.services.crawl.pipeline_sync.get_crawler",
             return_value=(
                 lambda _url: [{"url": "https://example.com/1"}],
                 lambda _url: None,
             ),
         ),
     ):
-        crawl_module.crawl_college_sync(MagicMock(), "engineering")
+        crawl_college_sync(MagicMock(), "engineering")
 
     assert len(calls) == 1
     assert calls[0][0] == "engineering"
@@ -162,7 +162,8 @@ def _make_draft(college_id: uuid.UUID, i: int) -> NoticeDraft:
 
 
 def test_run_crawl_pipeline_sync_uses_chunk_size_for_flush():
-    from app.services import crawl_service as crawl_module
+    from app.services.crawl.pipeline_sync import _run_crawl_pipeline_sync
+    from app.services.crawl.runtime import CrawlRuntimeConfig
 
     class _Adapter:
         def __init__(self):
@@ -178,7 +179,7 @@ def test_run_crawl_pipeline_sync_uses_chunk_size_for_flush():
             return [uuid.uuid4() for _ in chunk]
 
     adapter = _Adapter()
-    cfg = crawl_module.CrawlRuntimeConfig(
+    cfg = CrawlRuntimeConfig(
         polite_delay_seconds=1.0,
         page_timeout_seconds=30.0,
         upsert_chunk_size=2,
@@ -188,7 +189,7 @@ def test_run_crawl_pipeline_sync_uses_chunk_size_for_flush():
         collect_async_concurrency=10,
         crawl_seen_max_size=10000,
     )
-    total, ids = crawl_module._run_crawl_pipeline_sync(
+    total, ids = _run_crawl_pipeline_sync(
         MagicMock(),
         college_code="engineering",
         college_id=uuid.uuid4(),
@@ -206,8 +207,9 @@ def test_run_crawl_pipeline_sync_uses_chunk_size_for_flush():
 
 
 def test_sync_adapter_reflects_worker_and_inflight_config(monkeypatch):
-    from app.services import crawl_service as crawl_module
     from app.services.crawl import pipeline_sync as crawl_pipeline_sync
+    from app.services.crawl.pipeline_sync import _DefaultSyncCrawlAdapter
+    from app.services.crawl.runtime import CrawlRuntimeConfig
 
     captured: dict[str, int] = {}
 
@@ -217,7 +219,7 @@ def test_sync_adapter_reflects_worker_and_inflight_config(monkeypatch):
         return iter(())
 
     monkeypatch.setattr(crawl_pipeline_sync, "_collect_payloads_sync", _fake_collect)
-    cfg = crawl_module.CrawlRuntimeConfig(
+    cfg = CrawlRuntimeConfig(
         polite_delay_seconds=1.0,
         page_timeout_seconds=30.0,
         upsert_chunk_size=50,
@@ -229,7 +231,7 @@ def test_sync_adapter_reflects_worker_and_inflight_config(monkeypatch):
     )
     from app.domain.contracts.crawl_contracts import CrawlLogContext
 
-    adapter = crawl_module._DefaultSyncCrawlAdapter()
+    adapter = _DefaultSyncCrawlAdapter()
     list(
         adapter.collect_payloads(
             links=[],
@@ -244,8 +246,8 @@ def test_sync_adapter_reflects_worker_and_inflight_config(monkeypatch):
 
 
 def test_redis_seen_set_uses_shared_sync_client(monkeypatch):
-    from app.services import crawl_service as crawl_module
     from app.services.crawl import runtime as crawl_runtime
+    from app.services.crawl.runtime import _RedisSeenSet
 
     class _FakePipe:
         def __init__(self):
@@ -281,7 +283,7 @@ def test_redis_seen_set_uses_shared_sync_client(monkeypatch):
 
     monkeypatch.setattr(crawl_runtime, "get_shared_sync_redis_client", _shared_client)
 
-    seen = crawl_module._RedisSeenSet(
+    seen = _RedisSeenSet(
         uuid.UUID("00000000-0000-0000-0000-000000000001"),
         "redis://localhost/0",
         required=True,
@@ -297,8 +299,12 @@ def test_redis_seen_set_uses_shared_sync_client(monkeypatch):
 def test_record_crawl_failure_fallback_uses_shared_sync_client(monkeypatch):
     from unittest.mock import MagicMock
 
-    from app.services import crawl_service as crawl_module
     from app.services.crawl import failure as crawl_failure
+    from app.services.crawl.failure import (
+        CRAWL_FAILURE_REDIS_KEY_PREFIX,
+        CRAWL_FAILURE_REDIS_TTL_SECONDS,
+        _record_crawl_failure_fallback,
+    )
 
     class _FakeClient:
         def __init__(self):
@@ -313,7 +319,7 @@ def test_record_crawl_failure_fallback_uses_shared_sync_client(monkeypatch):
     monkeypatch.setattr(crawl_failure, "settings", mock_settings)
     monkeypatch.setattr(crawl_failure, "get_shared_sync_redis_client", lambda: fake_client)
 
-    crawl_module._record_crawl_failure_fallback(
+    _record_crawl_failure_fallback(
         uuid.UUID("00000000-0000-0000-0000-000000000001"),
         "task-1",
         "engineering",
@@ -322,14 +328,14 @@ def test_record_crawl_failure_fallback_uses_shared_sync_client(monkeypatch):
 
     assert len(fake_client.calls) == 1
     key, payload, ttl = fake_client.calls[0]
-    assert key.startswith(crawl_module.CRAWL_FAILURE_REDIS_KEY_PREFIX)
+    assert key.startswith(CRAWL_FAILURE_REDIS_KEY_PREFIX)
     assert "engineering" in payload
-    assert ttl == crawl_module.CRAWL_FAILURE_REDIS_TTL_SECONDS
+    assert ttl == CRAWL_FAILURE_REDIS_TTL_SECONDS
 
 
 def test_scrape_one_sync_returns_exception_in_tuple_on_value_error():
     """_scrape_one_sync: ValueError 발생 시 ScrapeAttemptResult.exc에 담겨 반환된다."""
-    from app.services.crawl_service import _scrape_one_sync
+    from app.services.crawl.collect_sync import _scrape_one_sync
 
     post = {"url": "https://example.com/1", "no": "ext-1"}
 
@@ -346,7 +352,7 @@ def test_scrape_one_sync_returns_exception_in_tuple_on_value_error():
 
 def test_scrape_one_sync_keyboard_interrupt_propagates():
     """_scrape_one_sync: KeyboardInterrupt 발생 시 메인 스레드에서 함수 밖으로 전파된다."""
-    from app.services.crawl_service import _scrape_one_sync
+    from app.services.crawl.collect_sync import _scrape_one_sync
 
     post = {"url": "https://example.com/1"}
 
@@ -360,8 +366,8 @@ def test_scrape_one_sync_keyboard_interrupt_propagates():
 def test_collect_payloads_sync_applies_rate_limit_in_worker_thread(monkeypatch):
     import threading
 
-    from app.services import crawl_service as crawl_module
     from app.services.crawl import collect_sync as crawl_collect_sync
+    from app.services.crawl.collect_sync import _collect_payloads_sync
     from app.services.crawlers.base import ScrapeResult
 
     events: list[tuple[str, str]] = []
@@ -383,7 +389,7 @@ def test_collect_payloads_sync_applies_rate_limit_in_worker_thread(monkeypatch):
 
     links = [{"no": "1", "url": "https://example.com/post/1", "title": "title"}]
     payloads = list(
-        crawl_module._collect_payloads_sync(
+        _collect_payloads_sync(
             links,
             uuid.uuid4(),
             _scrape,
@@ -401,11 +407,89 @@ def test_collect_payloads_sync_applies_rate_limit_in_worker_thread(monkeypatch):
     assert events[0][1] != "MainThread"
 
 
+def test_collect_payloads_sync_pre_dedup_reduces_scrape_calls():
+    """post[\"no\"] 기준 pre-dedup + in_flight: 동일 no 두 링크 시 scrape_fn 1회만 호출."""
+    from app.services.crawl.collect_sync import _collect_payloads_sync
+    from app.services.crawlers.base import ScrapeResult
+
+    from app.domain.contracts.crawl_contracts import CrawlLogContext
+
+    scrape_calls: list[str] = []
+
+    def _scrape(url: str):
+        scrape_calls.append(url)
+        return ScrapeResult("t", "2024-01-01", "<p>x</p>", [], [])
+
+    links = [
+        {"no": "same-id", "url": "https://example.com/1"},
+        {"no": "same-id", "url": "https://example.com/2"},
+    ]
+    seen: set[str] = set()
+    payloads = list(
+        _collect_payloads_sync(
+            links,
+            uuid.uuid4(),
+            _scrape,
+            0.0,
+            max_workers=2,
+            in_flight_limit=2,
+            seen=seen,
+            ctx=CrawlLogContext(college_code="test"),
+        )
+    )
+    assert len(scrape_calls) == 1, "pre-dedup + in_flight: second link with same no should not be fetched"
+    assert len(payloads) == 1
+
+
+def test_collect_payloads_sync_pre_dedup_many_duplicates_no_recursion():
+    """대량 연속 중복 시 재귀 대신 반복으로 처리해 RecursionError가 나지 않음."""
+    from app.services.crawl.collect_sync import _collect_payloads_sync
+    from app.services.crawlers.base import ScrapeResult
+
+    from app.domain.contracts.crawl_contracts import CrawlLogContext
+
+    scrape_calls: list[str] = []
+
+    def _scrape(url: str):
+        scrape_calls.append(url)
+        return ScrapeResult("t", "2024-01-01", "<p>x</p>", [], [])
+
+    n = 1500
+    links = [{"no": "dup", "url": f"https://example.com/{i}"} for i in range(n)]
+    seen: set[str] = {"dup"}
+    payloads = list(
+        _collect_payloads_sync(
+            links,
+            uuid.uuid4(),
+            _scrape,
+            0.0,
+            max_workers=2,
+            in_flight_limit=2,
+            seen=seen,
+            ctx=CrawlLogContext(college_code="test"),
+        )
+    )
+    assert len(scrape_calls) == 0
+    assert len(payloads) == 0
+
+
+def test_retry_reason_from_exc_requests_timeout_is_timeout():
+    """requests.exceptions.Timeout은 retry reason이 timeout으로 집계됨."""
+    from requests.exceptions import Timeout as RequestsTimeout
+
+    from app.core.metrics import RETRY_REASON_TIMEOUT
+    from app.services.crawl.collect_sync import _retry_reason_from_exc
+
+    exc = RequestsTimeout("read timed out")
+    assert _retry_reason_from_exc(exc) == RETRY_REASON_TIMEOUT
+
+
 def test_scrape_one_sync_with_sem_retries_request_exception_and_succeeds(monkeypatch):
     import threading
 
-    from app.services import crawl_service as crawl_module
     from app.services.crawl import collect_sync as crawl_collect_sync
+    from app.services.crawl.collect_sync import _scrape_one_sync_with_sem
+    from app.services.crawl.runtime import CRAWL_RETRY_MAX_ATTEMPTS
     from app.services.crawlers.base import ScrapeResult
     from requests.exceptions import RequestException
     from tenacity import wait_none
@@ -424,7 +508,7 @@ def test_scrape_one_sync_with_sem_retries_request_exception_and_succeeds(monkeyp
         return ScrapeResult("ok", "2024.01.01", "<p>ok</p>", [], [])
 
     post = {"url": "https://example.com/post/1"}
-    result = crawl_module._scrape_one_sync_with_sem(
+    result = _scrape_one_sync_with_sem(
         post,
         _scrape,
         _FakeLimiter(),
@@ -439,8 +523,9 @@ def test_scrape_one_sync_with_sem_retries_request_exception_and_succeeds(monkeyp
 def test_scrape_one_sync_with_sem_retries_request_exception_until_limit(monkeypatch):
     import threading
 
-    from app.services import crawl_service as crawl_module
     from app.services.crawl import collect_sync as crawl_collect_sync
+    from app.services.crawl.collect_sync import _scrape_one_sync_with_sem
+    from app.services.crawl.runtime import CRAWL_RETRY_MAX_ATTEMPTS
     from requests.exceptions import RequestException
     from tenacity import wait_none
 
@@ -456,7 +541,7 @@ def test_scrape_one_sync_with_sem_retries_request_exception_until_limit(monkeypa
         raise RequestException("network down")
 
     post = {"url": "https://example.com/post/1"}
-    result = crawl_module._scrape_one_sync_with_sem(
+    result = _scrape_one_sync_with_sem(
         post,
         _scrape,
         _FakeLimiter(),
@@ -464,16 +549,16 @@ def test_scrape_one_sync_with_sem_retries_request_exception_until_limit(monkeypa
     )
     assert result.data is None
     assert isinstance(result.exc, RequestException)
-    assert calls["scrape"] == crawl_module.CRAWL_RETRY_MAX_ATTEMPTS
-    assert calls["wait"] == crawl_module.CRAWL_RETRY_MAX_ATTEMPTS
+    assert calls["scrape"] == CRAWL_RETRY_MAX_ATTEMPTS
+    assert calls["wait"] == CRAWL_RETRY_MAX_ATTEMPTS
 
 
 def test_retry_policy_404_skippable_no_retry(monkeypatch):
     """404/410은 스킵: 0회 추가 재시도. scrape 1회만 호출 후 결과 반환."""
     import threading
 
-    from app.services import crawl_service as crawl_module
     from app.services.crawl import collect_sync as crawl_collect_sync
+    from app.services.crawl.collect_sync import _get_http_status_code, _scrape_one_sync_with_sem
     from requests.exceptions import HTTPError
     from tenacity import wait_none
 
@@ -490,14 +575,14 @@ def test_retry_policy_404_skippable_no_retry(monkeypatch):
         raise HTTPError("404", response=resp)
 
     post = {"url": "https://example.com/post/1"}
-    result = crawl_module._scrape_one_sync_with_sem(
+    result = _scrape_one_sync_with_sem(
         post,
         _scrape,
         _FakeLimiter(),
         threading.BoundedSemaphore(1),
     )
     assert result.exc is not None
-    assert crawl_module._get_http_status_code(result.exc) == 404
+    assert _get_http_status_code(result.exc) == 404
     assert calls["scrape"] == 1
 
 
@@ -505,8 +590,8 @@ def test_retry_policy_429_retried(monkeypatch):
     """429는 재시도 대상. 지정 횟수까지 재시도 후 성공 시 결과 반환."""
     import threading
 
-    from app.services import crawl_service as crawl_module
     from app.services.crawl import collect_sync as crawl_collect_sync
+    from app.services.crawl.collect_sync import _scrape_one_sync_with_sem
     from app.services.crawlers.base import ScrapeResult
     from requests.exceptions import HTTPError
     from tenacity import wait_none
@@ -526,7 +611,7 @@ def test_retry_policy_429_retried(monkeypatch):
         return ScrapeResult("ok", "2024.01.01", "<p>ok</p>", [], [])
 
     post = {"url": "https://example.com/post/1"}
-    result = crawl_module._scrape_one_sync_with_sem(
+    result = _scrape_one_sync_with_sem(
         post,
         _scrape,
         _FakeLimiter(),
@@ -545,7 +630,7 @@ def test_process_scrape_result_parser_threshold_aborts():
         CrawlErrorTracker,
         CrawlThresholdExceeded,
     )
-    from app.services.crawl_service import _process_scrape_result
+    from app.services.crawl.collect_sync import _process_scrape_result
 
     college_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
     ctx = CrawlLogContext(college_code="test")
@@ -569,3 +654,77 @@ def test_process_scrape_result_parser_threshold_aborts():
             got_threshold = raise_exc
             break
     assert got_threshold is not None, "parser threshold (ratio or consecutive) must trigger CrawlThresholdExceeded"
+
+
+def test_process_scrape_result_increments_threshold_metric_on_trigger(monkeypatch):
+    """CrawlThresholdExceeded 반환 직전에 CRAWL_PARSE_THRESHOLD_TRIGGER_TOTAL 1회 증가."""
+    from app.core.metrics import CRAWL_PARSE_THRESHOLD_TRIGGER_TOTAL, increment
+    from app.domain.contracts.crawl_contracts import CrawlLogContext
+    from app.services.crawl_policy import (
+        PARSER_CONSECUTIVE_FAILURES_THRESHOLD,
+        CrawlErrorTracker,
+        CrawlThresholdExceeded,
+    )
+    from app.services.crawl.collect_sync import _process_scrape_result
+
+    college_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+    ctx = CrawlLogContext(college_code="test")
+    seen = set()
+    tracker = CrawlErrorTracker()
+    increment_calls: list = []
+
+    def _capture_increment(name: str, value: int = 1, labels: dict | None = None) -> None:
+        increment_calls.append((name, value, labels))
+
+    monkeypatch.setattr("app.services.crawl.collect_sync.increment", _capture_increment)
+    for i in range(PARSER_CONSECUTIVE_FAILURES_THRESHOLD + 2):
+        payload, raise_exc = _process_scrape_result(
+            {"url": "https://example.com/1", "no": f"n{i}"},
+            "https://example.com/1",
+            None,
+            ValueError("parse failed"),
+            college_id,
+            seen,
+            tracker,
+            ctx,
+        )
+        if raise_exc is not None:
+            break
+    threshold_increments = [c for c in increment_calls if c[0] == CRAWL_PARSE_THRESHOLD_TRIGGER_TOTAL]
+    assert len(threshold_increments) == 1
+    assert threshold_increments[0][1] == 1
+
+
+def test_process_scrape_result_increments_drop_metric_with_reason(monkeypatch):
+    """중복 드롭 시 CRAWL_DROP_TOTAL에 reason=duplicate 기록."""
+    from app.core.metrics import CRAWL_DROP_TOTAL, DROP_REASON_DUPLICATE
+    from app.domain.contracts.crawl_contracts import CrawlLogContext
+    from app.services.crawlers.base import ScrapeResult
+    from app.services.crawl.collect_sync import _process_scrape_result
+    from app.services.crawl_policy import CrawlErrorTracker
+
+    college_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+    ctx = CrawlLogContext(college_code="test")
+    seen: set[str] = {"already-seen"}
+    tracker = CrawlErrorTracker()
+    increment_calls: list = []
+
+    def _capture_increment(name: str, value: int = 1, labels: dict | None = None) -> None:
+        increment_calls.append((name, value, labels))
+
+    monkeypatch.setattr("app.services.crawl.collect_sync.increment", _capture_increment)
+    data = ScrapeResult("title", "2024-01-01", "<p>body</p>", [], [])
+    payload, raise_exc = _process_scrape_result(
+        {"no": "already-seen", "url": "https://example.com/1"},
+        "https://example.com/1",
+        data,
+        None,
+        college_id,
+        seen,
+        tracker,
+        ctx,
+    )
+    assert payload is None
+    assert raise_exc is None
+    drop_duplicate = [c for c in increment_calls if c[0] == CRAWL_DROP_TOTAL and (c[2] or {}).get("reason") == DROP_REASON_DUPLICATE]
+    assert len(drop_duplicate) == 1
