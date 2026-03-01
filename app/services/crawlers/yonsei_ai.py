@@ -14,10 +14,19 @@ from app.core.crawl_http import (
     fetch_html_async,
     fetch_html_detail_cached,
 )
+from app.core.crawler_config import CrawlerModuleSpec
 from app.services.crawlers.base import ScrapeResult
 from app.services.crawlers.typing_helpers import ensure_str_attr
 
 logger = logging.getLogger(__name__)
+
+CRAWLER_SPEC = CrawlerModuleSpec(
+    college_code="ai",
+    display_name="인공지능융합대학",
+    list_url="https://computing.yonsei.ac.kr/bbs/board.php?bo_table=sub4_4",
+    get_links="get_computing_notice_links",
+    scrape_detail="scrape_computing_detail",
+)
 
 # ==============================================================================
 # [1] 상세 페이지 크롤링 엔진 (주석 타격 + 표 보존 + 날짜 통일)

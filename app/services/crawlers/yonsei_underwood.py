@@ -14,10 +14,19 @@ from app.core.crawl_http import (
     fetch_html_async,
     fetch_html_detail_cached,
 )
+from app.core.crawler_config import CrawlerModuleSpec
 from app.services.crawlers.base import ScrapeResult
 from app.services.crawlers.typing_helpers import ensure_str_attr
 
 logger = logging.getLogger(__name__)
+
+CRAWLER_SPEC = CrawlerModuleSpec(
+    college_code="underwood",
+    display_name="언더우드국제대학",
+    list_url="https://uic.yonsei.ac.kr/main/news.php?mid=m06_01_02",
+    get_links="get_uic_links",
+    scrape_detail="scrape_uic_detail",
+)
 
 
 # ================================================================================

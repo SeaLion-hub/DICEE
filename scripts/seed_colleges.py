@@ -36,6 +36,7 @@ from sqlalchemy.engine import make_url
 
 from app.core import database
 from app.core.config import settings
+from app.core.crawler_config import get_seed_colleges_from_crawlers
 from app.models.college import College
 
 logger = logging.getLogger("seed_colleges")
@@ -47,15 +48,13 @@ class CollegeSeed:
     external_id: str
 
 
-COLLEGES_DATA: tuple[CollegeSeed, ...] = (
-    CollegeSeed(name="공과대학", external_id="engineering"),
-    CollegeSeed(name="이과대학", external_id="science"),
-    CollegeSeed(name="의과대학", external_id="medicine"),
-    CollegeSeed(name="인공지능융합대학", external_id="ai"),
-    CollegeSeed(name="글로벌인재대학", external_id="glc"),
-    CollegeSeed(name="언더우드국제대학", external_id="underwood"),
-    CollegeSeed(name="경영대학", external_id="business"),
-)
+def _colleges_data() -> tuple[CollegeSeed, ...]:
+    """크롤러 스펙에서 시드 소스 생성 (한 곳 수정으로 crawler 등록 + seed 동기화)."""
+    rows = get_seed_colleges_from_crawlers()
+    return tuple(CollegeSeed(name=name, external_id=external_id) for name, external_id in rows)
+
+
+COLLEGES_DATA: tuple[CollegeSeed, ...] = _colleges_data()
 
 
 def _mask_db_url(raw: str | None) -> str:

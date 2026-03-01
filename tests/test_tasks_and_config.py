@@ -197,17 +197,20 @@ def test_validate_crawler_contract_fails_when_sync_callable_missing(monkeypatch)
 
         # scrape_detail 누락
 
-    monkeypatch.setattr(
-        crawler_config,
-        "CRAWLER_CONFIG",
-        {
-            "dummy_module": {
-                "url": "https://example.com",
-                "get_links": "get_links",
-                "scrape_detail": "scrape_detail",
-            }
-        },
-    )
+    def _fake_registry():
+        return (
+            {"dummy": "dummy_module"},
+            {
+                "dummy_module": {
+                    "name": "Dummy",
+                    "url": "https://example.com",
+                    "get_links": "get_links",
+                    "scrape_detail": "scrape_detail",
+                }
+            },
+        )
+
+    monkeypatch.setattr(crawler_config, "_ensure_registry", _fake_registry)
     monkeypatch.setattr(
         crawler_config.importlib,
         "import_module",
@@ -216,6 +219,16 @@ def test_validate_crawler_contract_fails_when_sync_callable_missing(monkeypatch)
 
     with pytest.raises(ValueError, match="missing required callables"):
         crawler_config.validate_crawler_contract()
+
+
+def test_seed_colleges_match_crawler_registry_sorted():
+    """자동 수집된 크롤러와 seed 소스가 일치하고, college_code 기준 정렬(deterministic)."""
+    from app.core.crawler_config import COLLEGE_CODE_TO_MODULE, get_seed_colleges_from_crawlers
+
+    seed_list = get_seed_colleges_from_crawlers()
+    expected_codes = sorted(COLLEGE_CODE_TO_MODULE.keys())
+    assert [code for _, code in seed_list] == expected_codes
+    assert len(seed_list) == len(COLLEGE_CODE_TO_MODULE)
 
 
 def test_production_local_spool_fail_fast_without_ephemeral_override():

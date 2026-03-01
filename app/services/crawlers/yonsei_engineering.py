@@ -14,10 +14,19 @@ from app.core.crawl_http import (
     fetch_html_async,
     fetch_html_detail_cached,
 )
+from app.core.crawler_config import CrawlerModuleSpec
 from app.services.crawlers.base import ScrapeResult
 from app.services.crawlers.typing_helpers import ensure_str_attr
 
 logger = logging.getLogger(__name__)
+
+CRAWLER_SPEC = CrawlerModuleSpec(
+    college_code="engineering",
+    display_name="공과대학",
+    list_url="https://engineering.yonsei.ac.kr/engineering/board/notice.do?mode=list&articleLimit=10",
+    get_links="get_notice_links",
+    scrape_detail="scrape_yonsei_engineering_precise",
+)
 
 
 # --------------------------------------------------------------------------------

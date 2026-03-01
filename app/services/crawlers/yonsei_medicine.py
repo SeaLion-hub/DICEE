@@ -15,10 +15,19 @@ from app.core.crawl_http import (
     fetch_html_async,
     fetch_html_detail_cached,
 )
+from app.core.crawler_config import CrawlerModuleSpec
 from app.services.crawlers.base import ScrapeResult
 from app.services.crawlers.typing_helpers import ensure_str_attr
 
 logger = logging.getLogger(__name__)
+
+CRAWLER_SPEC = CrawlerModuleSpec(
+    college_code="medicine",
+    display_name="의과대학",
+    list_url="https://medicine.yonsei.ac.kr/medicine/news/notice.do",
+    get_links="get_medicine_notice_links",
+    scrape_detail="scrape_medicine_detail",
+)
 
 # ==============================================================================
 # [1] 유틸리티 함수

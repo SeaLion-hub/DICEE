@@ -3,14 +3,27 @@
 CAUTIONS: 코드를 수정하지 않고 config만 수정하여 대응 가능하도록 설계.
 college.external_id(또는 college_code) -> config 키(모듈명) 매핑. 디스패처에서 사용.
 레지스트리 패턴: CrawlerSpec 등록 → get_crawler(module_name)으로 (get_links_fn, scrape_fn) 반환.
-신규 대학: 모듈 추가 + 스펙 등록(COLLEGE_CODE_TO_MODULE, CRAWLER_CONFIG) + validate_crawler_contract 통과.
+Wave 6: 각 크롤러 모듈에 CRAWLER_SPEC 상수 두고 pkgutil로 자동 수집. 수집 결과는 college_code 기준 정렬(deterministic).
 크롤러 모듈은 지연 임포트(순환 임포트 회피).
 """
 
 import importlib
+import pkgutil
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import urlparse
+
+
+@dataclass(frozen=True)
+class CrawlerModuleSpec:
+    """크롤러 모듈이 자기기술로 노출하는 스펙. college_code·display_name·list_url·get_links·scrape_detail 필수."""
+
+    college_code: str
+    display_name: str
+    list_url: str
+    get_links: str
+    scrape_detail: str
 
 
 @dataclass(frozen=True)
@@ -25,6 +38,7 @@ class CrawlerSpec:
     type: str = ""
     selectors: dict[str, Any] | None = None
 
+
 # 데이터센터 IP·WAF 차단 완화: 실제 Chrome 브라우저 User-Agent 사용. Python 기본 UA 사용 금지.
 CRAWLER_HEADERS = {
     "User-Agent": (
@@ -35,65 +49,106 @@ CRAWLER_HEADERS = {
     "Accept-Language": "ko-KR,ko;q=0.9,en;q=0.8",
 }
 
-# College.external_id 값 -> CRAWLER_CONFIG 키(모듈명). 시드/DB와 맞추면 됨.
-COLLEGE_CODE_TO_MODULE: dict[str, str] = {
-    "engineering": "yonsei_engineering",
-    "science": "yonsei_science",
-    "medicine": "yonsei_medicine",
-    "ai": "yonsei_ai",
-    "glc": "yonsei_glc",
-    "underwood": "yonsei_underwood",
-    "business": "yonsei_business",
-}
+def _discover_crawler_specs() -> tuple[dict[str, str], dict[str, dict[str, Any]]]:
+    """
+    app.services.crawlers 패키지에서 CRAWLER_SPEC을 가진 모듈을 수집.
+    college_code 기준 정렬(deterministic). 중복 college_code·URL 비정상·callable 누락 시 fail-fast.
+    """
+    import app.services.crawlers as crawlers_pkg
 
-# college별 "모듈명" = 파일명(import 경로와 일치). 예: from app.services.crawlers import yonsei_engineering
-CRAWLER_CONFIG: dict[str, dict[str, Any]] = {
-    "yonsei_engineering": {
-        "name": "공과대학",
-        "url": "https://engineering.yonsei.ac.kr/engineering/board/notice.do?mode=list&articleLimit=10",
-        "get_links": "get_notice_links",
-        "scrape_detail": "scrape_yonsei_engineering_precise",
-        "type": "TYPE_A_LIST_NUM",
-        "selectors": {"row": "tbody tr", "link": "a"},
-    },
-    # 나머지 단과대: url·get_links·scrape_detail은 크롤러 모듈과 일치.
-    "yonsei_science": {
-        "name": "이과대학",
-        "url": "http://science.yonsei.ac.kr/community/notice",
-        "get_links": "get_science_links",
-        "scrape_detail": "scrape_science_detail",
-    },
-    "yonsei_medicine": {
-        "name": "의과대학",
-        "url": "https://medicine.yonsei.ac.kr/medicine/news/notice.do",
-        "get_links": "get_medicine_notice_links",
-        "scrape_detail": "scrape_medicine_detail",
-    },
-    "yonsei_ai": {
-        "name": "인공지능융합대학",
-        "url": "https://computing.yonsei.ac.kr/bbs/board.php?bo_table=sub4_4",
-        "get_links": "get_computing_notice_links",
-        "scrape_detail": "scrape_computing_detail",
-    },
-    "yonsei_glc": {
-        "name": "글로벌인재대학",
-        "url": "https://glc.yonsei.ac.kr/notice/?mod=list",
-        "get_links": "get_glc_links",
-        "scrape_detail": "scrape_glc_detail",
-    },
-    "yonsei_underwood": {
-        "name": "언더우드국제대학",
-        "url": "https://uic.yonsei.ac.kr/main/news.php?mid=m06_01_02",
-        "get_links": "get_uic_links",
-        "scrape_detail": "scrape_uic_detail",
-    },
-    "yonsei_business": {
-        "name": "경영대학",
-        "url": "https://ysb.yonsei.ac.kr/board.asp?mid=m06_01",
-        "get_links": "get_business_notice_links",
-        "scrape_detail": "scrape_business_detail",
-    },
-}
+    seen_codes: set[str] = set()
+    specs: list[tuple[str, CrawlerModuleSpec]] = []
+
+    for importer, modname, ispkg in pkgutil.iter_modules(crawlers_pkg.__path__, prefix=""):
+        if ispkg or modname in ("base", "typing_helpers"):
+            continue
+        fullname = f"app.services.crawlers.{modname}"
+        try:
+            mod = importlib.import_module(fullname)
+        except Exception as e:
+            raise ValueError(
+                f"Crawler module import failed: {fullname}. Fix or remove."
+            ) from e
+        spec = getattr(mod, "CRAWLER_SPEC", None)
+        if not isinstance(spec, CrawlerModuleSpec):
+            continue
+        if spec.college_code in seen_codes:
+            raise ValueError(
+                f"Duplicate college_code: {spec.college_code} (module {modname}). "
+                "Ensure each crawler has a unique college_code."
+            )
+        seen_codes.add(spec.college_code)
+        if not (spec.list_url or "").strip():
+            raise ValueError(
+                f"Crawler {modname} CRAWLER_SPEC.list_url is empty. Set a valid list URL."
+            )
+        try:
+            parsed = urlparse(spec.list_url)
+            if not parsed.scheme or not parsed.netloc:
+                raise ValueError("URL missing scheme or netloc")
+        except Exception as e:
+            raise ValueError(
+                f"Crawler {modname} CRAWLER_SPEC.list_url invalid: {spec.list_url}"
+            ) from e
+        get_links = (spec.get_links or "").strip() or "get_notice_links"
+        scrape_detail = (spec.scrape_detail or "").strip() or "scrape_detail"
+        if not callable(getattr(mod, get_links, None)):
+            raise ValueError(
+                f"Crawler module {modname} missing callable: {get_links}. "
+                f"Add {get_links} to {fullname}."
+            )
+        if not callable(getattr(mod, scrape_detail, None)):
+            raise ValueError(
+                f"Crawler module {modname} missing callable: {scrape_detail}. "
+                f"Add {scrape_detail} to {fullname}."
+            )
+        specs.append((modname, spec))
+
+    specs.sort(key=lambda x: x[1].college_code)
+    college_to_module: dict[str, str] = {}
+    config: dict[str, dict[str, Any]] = {}
+    for modname, spec in specs:
+        college_to_module[spec.college_code] = modname
+        config[modname] = {
+            "name": spec.display_name,
+            "url": spec.list_url,
+            "get_links": spec.get_links,
+            "scrape_detail": spec.scrape_detail,
+        }
+    return (college_to_module, config)
+
+
+_registry: tuple[dict[str, str], dict[str, dict[str, Any]]] | None = None
+
+
+def _ensure_registry() -> tuple[dict[str, str], dict[str, dict[str, Any]]]:
+    """지연 초기화: 첫 접근 시 discovery 실행(순환 임포트 회피)."""
+    global _registry
+    if _registry is None:
+        _registry = _discover_crawler_specs()
+    return _registry
+
+
+def __getattr__(name: str) -> Any:
+    """COLLEGE_CODE_TO_MODULE, CRAWLER_CONFIG 첫 접근 시 discovery 실행 후 반환."""
+    if name == "COLLEGE_CODE_TO_MODULE":
+        code_to_mod, _ = _ensure_registry()
+        globals()["COLLEGE_CODE_TO_MODULE"] = code_to_mod
+        return code_to_mod
+    if name == "CRAWLER_CONFIG":
+        _, config = _ensure_registry()
+        globals()["CRAWLER_CONFIG"] = config
+        return config
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def get_seed_colleges_from_crawlers() -> list[tuple[str, str]]:
+    """자동 수집된 크롤러 스펙에서 (display_name, college_code) 목록 반환. college_code 기준 정렬(deterministic)."""
+    code_to_mod, config = _ensure_registry()
+    return [
+        (config[modname]["name"], college_code)
+        for college_code, modname in sorted(code_to_mod.items(), key=lambda x: x[0])
+    ]
 
 
 def _crawler_callable_names(config: dict[str, Any]) -> tuple[str, str]:
@@ -104,7 +159,8 @@ def _crawler_callable_names(config: dict[str, Any]) -> tuple[str, str]:
 
 def get_crawler_spec(module_name: str) -> CrawlerSpec | None:
     """모듈명으로 CrawlerSpec 조회. 없으면 None."""
-    config = CRAWLER_CONFIG.get(module_name)
+    _, config_dict = _ensure_registry()
+    config = config_dict.get(module_name)
     if not config:
         return None
     return CrawlerSpec(
@@ -126,15 +182,15 @@ def get_crawler(module_name: str) -> tuple[Callable[..., list], Callable[..., tu
     spec = get_crawler_spec(module_name)
     if spec is None:
         raise ValueError(f"No crawler config for module: {module_name}")
-    config = CRAWLER_CONFIG[module_name]
+    _, config_dict = _ensure_registry()
+    config = config_dict[module_name]
     get_links_name, scrape_name = _crawler_callable_names(config)
     mod = importlib.import_module(f"app.services.crawlers.{module_name}")
     get_links_fn = getattr(mod, get_links_name, None)
     scrape_fn = getattr(mod, scrape_name, None)
     if not get_links_fn or not scrape_fn:
         missing = [
-            n for n in (get_links_name, scrape_name)
-            if not (getattr(mod, n, None) and callable(getattr(mod, n, None)))
+            n for n in (get_links_name, scrape_name) if not (getattr(mod, n, None) and callable(getattr(mod, n, None)))
         ]
         raise ValueError(
             f"Module {module_name} missing required callables: {', '.join(missing)}. "
@@ -148,7 +204,8 @@ def validate_crawler_contract() -> None:
     CRAWLER_CONFIG에 등록된 모든 모듈이 sync 크롤러 함수(get_links, scrape_detail)를 갖는지 검증한다.
     누락 시 부팅 단계에서 fail-fast. (sync-only 계약.)
     """
-    for module_name, config in CRAWLER_CONFIG.items():
+    _, config_dict = _ensure_registry()
+    for module_name, config in config_dict.items():
         try:
             mod = importlib.import_module(f"app.services.crawlers.{module_name}")
         except Exception as e:

@@ -14,10 +14,19 @@ from app.core.crawl_http import (
     fetch_html_async,
     fetch_html_detail_cached,
 )
+from app.core.crawler_config import CrawlerModuleSpec
 from app.services.crawlers.base import ScrapeResult
 from app.services.crawlers.typing_helpers import ensure_str_attr
 
 logger = logging.getLogger(__name__)
+
+CRAWLER_SPEC = CrawlerModuleSpec(
+    college_code="business",
+    display_name="경영대학",
+    list_url="https://ysb.yonsei.ac.kr/board.asp?mid=m06_01",
+    get_links="get_business_notice_links",
+    scrape_detail="scrape_business_detail",
+)
 
 # ==============================================================================
 # [1] 유틸리티 함수
