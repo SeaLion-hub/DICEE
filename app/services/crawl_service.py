@@ -4,6 +4,16 @@ HTTP 미의존. 비동기(웹)·동기(워커) 세션 모두 지원.
 
 트랜잭션 경계: DB 트랜잭션(시작/커밋/롤백)은 이 오케스트레이터 레이어에서만 통제한다.
 Repository·파서는 이미 열린 세션으로 쿼리만 수행하며, 세션 생명주기는 호출자(오케스트레이터)가 소유한다.
+
+동시성·메모리:
+- Sync: ThreadPoolExecutor(max_workers) + BoundedSemaphore(in_flight_limit). pending futures는 완료 즉시 pop하여
+  in-flight 상한을 유지하고 메모리 무한 증가를 방지한다.
+- Async: Semaphore(concurrency) + asyncio.wait(FIRST_COMPLETED). pending 태스크 수는 항상 <= concurrency.
+
+Chunk flush 및 commit 정책:
+- Sync: 청크가 upsert_chunk_size에 도달할 때마다 _finalize_chunk_sync → upsert → (on_chunk_processed 사용 시)
+  session.commit() + expunge_all() 후 콜백 호출. 미사용 시 notice_ids_to_process에만 누적, 호출자가 한 번에 commit.
+- Async: 호출자 commit 전략. collect 단계는 세션 없이 payload만 yield; 호출자가 청크 모아 commit.
 """
 
 import asyncio
@@ -28,7 +38,7 @@ from tenacity import (
     AsyncRetrying,
     RetryError,
     Retrying,
-    retry_if_exception_type,
+    retry_if_exception,
     stop_after_attempt,
     wait_exponential_jitter,
 )
@@ -43,7 +53,15 @@ from app.core.crawl_rate_limit import (
 )
 from app.core.crawler_config import COLLEGE_CODE_TO_MODULE, CRAWLER_CONFIG, get_crawler, get_crawler_async
 from app.core.redis import get_shared_sync_redis_client
-from app.domain.contracts.crawl_contracts import CrawlLogContext, LinkItem, NoticeDraft
+from app.domain.contracts.crawl_contracts import (
+    CrawlLogContext,
+    CrawlPhase,
+    EVENT_LIST_FETCH_FAILED,
+    EVENT_PARSE_FAILED,
+    EVENT_UPSERT_FAILED,
+    LinkItem,
+    NoticeDraft,
+)
 from app.repositories.college_repository import (
     get_by_external_id as get_college_by_external_id,
 )
@@ -63,6 +81,10 @@ from app.services.crawl_payload import _external_id_from_url, build_notice_paylo
 from app.services.crawl_policy import (
     CrawlErrorTracker,
     CrawlThresholdExceeded,
+    HTTP_RETRY_STATUS_CODES,
+    HTTP_RETRY_STATUS_MAX_5XX,
+    HTTP_RETRY_STATUS_MIN_5XX,
+    HTTP_SKIP_STATUS_CODES,
 )
 from app.services.crawlers.base import ScrapeResult
 
@@ -466,8 +488,8 @@ def _scrape_one_sync(post: LinkItem, scrape_fn: Callable) -> ScrapeAttemptResult
         return ScrapeAttemptResult(post=post, detail_url=detail_url, data=None, exc=e)
 
 
-# 네트워크/타임아웃 예외 (sync: RequestException, async: httpx.HTTPError/TimeoutException)
-_NETWORK_EXC_TYPES = (
+# 네트워크/타임아웃 예외 (HTTP 상태 제외). 재시도 정책은 _is_retryable/_is_skippable 기반.
+_BASE_NETWORK_EXC_TYPES = (
     TimeoutError,
     OSError,
     ConnectionError,
@@ -475,6 +497,45 @@ _NETWORK_EXC_TYPES = (
     httpx.HTTPError,
     httpx.TimeoutException,
 )
+
+
+def _get_http_status_code(exc: BaseException) -> int | None:
+    """HTTP 응답 예외(httpx.HTTPStatusError, requests.HTTPError)에서 status_code 추출."""
+    if hasattr(exc, "response") and exc.response is not None:
+        if hasattr(exc.response, "status_code"):
+            return int(exc.response.status_code)
+    return None
+
+
+def _is_skippable(exc: BaseException) -> bool:
+    """404/410 등 재시도 불필요: 스킵 처리."""
+    code = _get_http_status_code(exc)
+    return code in HTTP_SKIP_STATUS_CODES if code is not None else False
+
+
+def _is_retryable(exc: BaseException) -> bool:
+    """408/429/5xx 또는 연결/타임아웃 예외: 재시도 대상. 스킵 가능(404/410)은 False."""
+    code = _get_http_status_code(exc)
+    if code is not None:
+        if code in HTTP_SKIP_STATUS_CODES:
+            return False
+        if code in HTTP_RETRY_STATUS_CODES or HTTP_RETRY_STATUS_MIN_5XX <= code <= HTTP_RETRY_STATUS_MAX_5XX:
+            return True
+        return False
+    return isinstance(exc, _BASE_NETWORK_EXC_TYPES)
+
+
+def _is_fatal(exc: BaseException) -> bool:
+    """재시도/스킵 외 치명 오류(예: 400, 403): 대학 작업 즉시 실패."""
+    code = _get_http_status_code(exc)
+    if code is not None:
+        skip_or_retry = (
+            code in HTTP_SKIP_STATUS_CODES
+            or code in HTTP_RETRY_STATUS_CODES
+            or (HTTP_RETRY_STATUS_MIN_5XX <= code <= HTTP_RETRY_STATUS_MAX_5XX)
+        )
+        return not skip_or_retry
+    return False
 
 
 async def _fetch_one_async(
@@ -502,17 +563,21 @@ async def _fetch_one_with_retry(
     rate_limiter,
     sem: asyncio.Semaphore,
 ) -> ScrapeAttemptResult:
-    """한 건 비동기 스크랩 + 네트워크/타임아웃 시 tenacity 재시도. 재시도 소진 시 마지막 결과 반환."""
+    """한 건 비동기 스크랩. 404/410 스킵(0회 재시도), 408/429/5xx·연결오류 재시도, 그 외 치명은 즉시 반환."""
     last_result: ScrapeAttemptResult | None = None
     async for attempt in AsyncRetrying(
         stop=stop_after_attempt(CRAWL_RETRY_MAX_ATTEMPTS),
         wait=_crawl_retry_wait,
-        retry=retry_if_exception_type(_NETWORK_EXC_TYPES),
+        retry=retry_if_exception(_is_retryable),
         reraise=False,
     ):
         with attempt:
             last_result = await _fetch_one_async(client, post, scrape_async_fn, rate_limiter, sem)
-            if last_result.exc is not None and isinstance(last_result.exc, _NETWORK_EXC_TYPES):
+            if last_result.exc is None:
+                return last_result
+            if _is_skippable(last_result.exc):
+                return last_result
+            if _is_retryable(last_result.exc):
                 raise last_result.exc
             return last_result
     if last_result is not None:
@@ -540,9 +605,18 @@ def _process_scrape_result(
     if external_id:
         log_extra["external_id"] = external_id
     if exc is not None:
-        if isinstance(exc, _NETWORK_EXC_TYPES):
+        if _is_skippable(exc):
             logger.warning(
-                "scrape failed (timeout/network): url=%s error=%s",
+                "scrape skipped (http %s): url=%s",
+                _get_http_status_code(exc),
+                detail_url[:200] if detail_url else "",
+                extra=log_extra,
+            )
+            tracker.record_network_or_skip()
+            return (None, None)
+        if _is_retryable(exc):
+            logger.warning(
+                "scrape failed (timeout/network/retryable): url=%s error=%s",
                 detail_url[:200] if detail_url else "",
                 exc,
                 exc_info=True,
@@ -550,6 +624,14 @@ def _process_scrape_result(
             )
             tracker.record_network_or_skip()
             return (None, None)
+        if _is_fatal(exc):
+            logger.warning(
+                "scrape fatal (http %s): url=%s",
+                _get_http_status_code(exc),
+                detail_url[:200] if detail_url else "",
+                extra=log_extra,
+            )
+            return (None, exc)
         if isinstance(exc, HtmlTooLargeError):
             logger.warning(
                 "scrape skipped (body too large): url=%s %s",
@@ -617,13 +699,17 @@ def _scrape_one_sync_with_sem(
             for attempt in Retrying(
                 stop=stop_after_attempt(CRAWL_RETRY_MAX_ATTEMPTS),
                 wait=_crawl_retry_wait,
-                retry=retry_if_exception_type(_NETWORK_EXC_TYPES),
+                retry=retry_if_exception(_is_retryable),
                 reraise=False,
             ):
                 with attempt:
                     rate_limiter.wait_sync(host)
                     last_result = _scrape_one_sync(post, scrape_fn)
-                    if last_result.exc is not None and isinstance(last_result.exc, _NETWORK_EXC_TYPES):
+                    if last_result.exc is None:
+                        return last_result
+                    if _is_skippable(last_result.exc):
+                        return last_result
+                    if _is_retryable(last_result.exc):
                         raise last_result.exc
                     return last_result
         except RetryError:
@@ -674,7 +760,7 @@ def _collect_payloads_sync(
 
         while futures:
             for fut in as_completed(set(futures.keys())):
-                futures.pop(fut)
+                futures.pop(fut)  # 완료 즉시 제거 → in-flight 상한·메모리 상한 유지
                 try:
                     result = fut.result()
                 except Exception as e:
@@ -755,7 +841,7 @@ async def _collect_payloads_async(
                     if remaining:
                         pending.add(_task(remaining.popleft()))
                     continue
-                if result.exc is not None and isinstance(result.exc, _NETWORK_EXC_TYPES):
+                if result.exc is not None and (_is_skippable(result.exc) or _is_retryable(result.exc)):
                     tracker.record_attempt()
                     tracker.record_network_or_skip()
                     if remaining:
@@ -810,6 +896,52 @@ def _finalize_chunk_sync(
     return len(ids)
 
 
+def _finalize_chunk_sync_with_phase_log(
+    session: Session,
+    adapter: _SyncCrawlAdapter,
+    chunk: list[NoticeDraft],
+    ctx: CrawlLogContext,
+    *,
+    on_chunk_processed: Callable[[list[uuid.UUID]], None] | None,
+    notice_ids_to_process: list[uuid.UUID],
+) -> int:
+    """청크 upsert 실행. 실패 시 event_code=EVENT_UPSERT_FAILED, phase=upsert 로그 후 재발생.
+    메트릭: chunk_size·elapsed_sec 로깅."""
+    import time
+
+    chunk_size = len(chunk)
+    t0 = time.perf_counter()
+    try:
+        n = _finalize_chunk_sync(
+            session,
+            adapter,
+            chunk,
+            on_chunk_processed=on_chunk_processed,
+            notice_ids_to_process=notice_ids_to_process,
+        )
+        elapsed = time.perf_counter() - t0
+        logger.debug(
+            "crawl upsert chunk college_code=%s chunk_size=%d elapsed_sec=%.3f",
+            ctx.college_code,
+            chunk_size,
+            elapsed,
+            extra={**ctx.extra_for_log(), "chunk_size": chunk_size, "elapsed_sec": round(elapsed, 3)},
+        )
+        return n
+    except Exception as e:
+        from app.core.logging_context import set_request_context
+
+        set_request_context(event_code=EVENT_UPSERT_FAILED)
+        log_extra = {
+            **ctx.extra_for_log(),
+            "phase": CrawlPhase.UPSERT.value,
+            "event_code": EVENT_UPSERT_FAILED,
+            "chunk_size": chunk_size,
+        }
+        logger.warning("crawl upsert failed: %s", e, exc_info=True, extra=log_extra)
+        raise
+
+
 def _run_crawl_pipeline_sync(
     session: Session,
     *,
@@ -824,7 +956,21 @@ def _run_crawl_pipeline_sync(
     cfg: CrawlRuntimeConfig,
     adapter: _SyncCrawlAdapter,
 ) -> tuple[int, list[uuid.UUID]]:
-    links_raw = get_links_fn(list_url)
+    try:
+        links_raw = get_links_fn(list_url)
+    except Exception as e:
+        from app.core.logging_context import set_request_context
+
+        set_request_context(event_code=EVENT_LIST_FETCH_FAILED)
+        log_extra = {
+            "college_code": college_code,
+            "run_id": str(run_id) if run_id else "",
+            "task_id": task_id or "",
+            "phase": CrawlPhase.LIST.value,
+            "event_code": EVENT_LIST_FETCH_FAILED,
+        }
+        logger.warning("crawl list fetch failed: %s", e, exc_info=True, extra=log_extra)
+        raise
     links = _cap_links_for_run(cast(list[LinkItem], links_raw), college_code, cfg.max_links_per_run)
     total_links = len(links)
     if not links:
@@ -847,31 +993,45 @@ def _run_crawl_pipeline_sync(
     total_upserted = 0
     chunk: list[NoticeDraft] = []
     try:
-        for payload in adapter.collect_payloads(
-            links=links,
-            college_id=college_id,
-            scrape_fn=scrape_fn,
-            seen=seen,
-            cfg=cfg,
-            ctx=ctx,
-        ):
-            chunk.append(payload)
-            if len(chunk) >= cfg.upsert_chunk_size:
-                total_upserted += _finalize_chunk_sync(
+        try:
+            for payload in adapter.collect_payloads(
+                links=links,
+                college_id=college_id,
+                scrape_fn=scrape_fn,
+                seen=seen,
+                cfg=cfg,
+                ctx=ctx,
+            ):
+                chunk.append(payload)
+                if len(chunk) >= cfg.upsert_chunk_size:
+                    total_upserted += _finalize_chunk_sync_with_phase_log(
+                        session,
+                        adapter,
+                        chunk,
+                        ctx,
+                        on_chunk_processed=on_chunk_processed,
+                        notice_ids_to_process=notice_ids_to_process,
+                    )
+            if chunk:
+                total_upserted += _finalize_chunk_sync_with_phase_log(
                     session,
                     adapter,
                     chunk,
+                    ctx,
                     on_chunk_processed=on_chunk_processed,
                     notice_ids_to_process=notice_ids_to_process,
                 )
-        if chunk:
-            total_upserted += _finalize_chunk_sync(
-                session,
-                adapter,
-                chunk,
-                on_chunk_processed=on_chunk_processed,
-                notice_ids_to_process=notice_ids_to_process,
-            )
+        except Exception as e:
+            from app.core.logging_context import set_request_context
+
+            set_request_context(event_code=EVENT_PARSE_FAILED)
+            log_extra = {
+                **ctx.extra_for_log(),
+                "phase": CrawlPhase.SCRAPE.value,
+                "event_code": EVENT_PARSE_FAILED,
+            }
+            logger.warning("crawl scrape/parse failed: %s", e, exc_info=True, extra=log_extra)
+            raise
     finally:
         if isinstance(seen, _RedisSeenSet):
             seen.close()
@@ -934,9 +1094,12 @@ def _record_crawl_failure_fallback(
     task_id: str,
     college_code: str,
     error_message: str,
+    *,
+    reason_code: str = "unknown",
 ) -> None:
     """
     DB 장애 시 실패 컨텍스트를 Redis에 기록해 중앙에서 추적 가능하게 함.
+    reason_code: EVENT_LIST_FETCH_FAILED, EVENT_PARSE_FAILED, EVENT_UPSERT_FAILED 등.
     Redis 미설정/장애 시 로그만 남기고 반환(예외 전파하지 않음).
     """
     raw_url = (settings.redis.redis_url or "").strip()
@@ -958,6 +1121,7 @@ def _record_crawl_failure_fallback(
             "task_id": task_id,
             "college_code": college_code,
             "error_message": error_message[:2000],
+            "reason_code": reason_code,
             "recorded_at": datetime.now(UTC).isoformat(),
         }
         client.set(key, json.dumps(payload), ex=CRAWL_FAILURE_REDIS_TTL_SECONDS)
@@ -1033,5 +1197,8 @@ def run_crawl_job_sync(
                 record_err,
                 exc_info=True,
             )
-            _record_crawl_failure_fallback(run_id, task_id, college_code, error_msg)
+            from app.core.logging_context import get_request_context
+
+            reason = (get_request_context().get("event_code") or "").strip() or "unknown"
+            _record_crawl_failure_fallback(run_id, task_id, college_code, error_msg, reason_code=reason)
         raise

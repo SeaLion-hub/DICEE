@@ -312,6 +312,54 @@ def test_sync_adapter_reflects_worker_and_inflight_config(monkeypatch):
     assert captured == {"max_workers": 7, "in_flight_limit": 321}
 
 
+@pytest.mark.asyncio
+async def test_collect_payloads_async_pending_bounded_by_concurrency():
+    """Async 수집 시 동시 실행 태스크 수가 concurrency를 초과하지 않음 (메모리 상한)."""
+    import asyncio
+    from unittest.mock import AsyncMock, MagicMock
+
+    from app.domain.contracts.crawl_contracts import CrawlLogContext
+    from app.services.crawl_service import _collect_payloads_async
+    from app.services.crawlers.base import ScrapeResult
+
+    concurrency = 2
+    current = [0]
+    max_concurrent = [0]
+
+    async def _slow_fetch(client, post, fn, rate_limiter, sem):
+        current[0] += 1
+        max_concurrent[0] = max(max_concurrent[0], current[0])
+        try:
+            await asyncio.sleep(0.05)
+            return MagicMock(
+                post=post,
+                detail_url=post.get("url", ""),
+                data=ScrapeResult("t", "2024-01-01", "<p>x</p>", [], []),
+                exc=None,
+            )
+        finally:
+            current[0] -= 1
+
+    with patch("app.services.crawl_service._fetch_one_with_retry", side_effect=_slow_fetch):
+        client = MagicMock()
+        links = [{"url": f"https://example.com/{i}", "no": str(i)} for i in range(5)]
+        college_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+        ctx = CrawlLogContext(college_code="test")
+
+        async for _ in _collect_payloads_async(
+            client,
+            links,
+            college_id,
+            AsyncMock(return_value=None),
+            0.0,
+            concurrency=concurrency,
+            seen=set(),
+            ctx=ctx,
+        ):
+            pass
+        assert max_concurrent[0] <= concurrency
+
+
 def test_async_adapter_reflects_concurrency_config(monkeypatch):
     import asyncio
 
@@ -619,3 +667,100 @@ def test_scrape_one_sync_with_sem_retries_request_exception_until_limit(monkeypa
     assert isinstance(result.exc, RequestException)
     assert calls["scrape"] == crawl_module.CRAWL_RETRY_MAX_ATTEMPTS
     assert calls["wait"] == crawl_module.CRAWL_RETRY_MAX_ATTEMPTS
+
+
+def test_retry_policy_404_skippable_no_retry(monkeypatch):
+    """404/410은 스킵: 0회 추가 재시도. scrape 1회만 호출 후 결과 반환."""
+    import threading
+
+    from app.services import crawl_service as crawl_module
+    from requests.exceptions import HTTPError
+    from tenacity import wait_none
+
+    monkeypatch.setattr(crawl_module, "_crawl_retry_wait", wait_none())
+    calls = {"scrape": 0}
+
+    class _FakeLimiter:
+        def wait_sync(self, host: str) -> None:
+            pass
+
+    def _scrape(_url: str):
+        calls["scrape"] += 1
+        resp = type("R", (), {"status_code": 404})()
+        raise HTTPError("404", response=resp)
+
+    post = {"url": "https://example.com/post/1"}
+    result = crawl_module._scrape_one_sync_with_sem(
+        post,
+        _scrape,
+        _FakeLimiter(),
+        threading.BoundedSemaphore(1),
+    )
+    assert result.exc is not None
+    assert crawl_module._get_http_status_code(result.exc) == 404
+    assert calls["scrape"] == 1
+
+
+def test_retry_policy_429_retried(monkeypatch):
+    """429는 재시도 대상. 지정 횟수까지 재시도 후 성공 시 결과 반환."""
+    import threading
+
+    from app.services import crawl_service as crawl_module
+    from app.services.crawlers.base import ScrapeResult
+    from requests.exceptions import HTTPError
+    from tenacity import wait_none
+
+    monkeypatch.setattr(crawl_module, "_crawl_retry_wait", wait_none())
+    calls = {"scrape": 0}
+
+    class _FakeLimiter:
+        def wait_sync(self, host: str) -> None:
+            pass
+
+    def _scrape(_url: str):
+        calls["scrape"] += 1
+        if calls["scrape"] < 2:
+            resp = type("R", (), {"status_code": 429})()
+            raise HTTPError("429", response=resp)
+        return ScrapeResult("ok", "2024.01.01", "<p>ok</p>", [], [])
+
+    post = {"url": "https://example.com/post/1"}
+    result = crawl_module._scrape_one_sync_with_sem(
+        post,
+        _scrape,
+        _FakeLimiter(),
+        threading.BoundedSemaphore(1),
+    )
+    assert result.exc is None
+    assert result.data is not None
+    assert calls["scrape"] == 2
+
+
+def test_process_scrape_result_parser_threshold_aborts():
+    """파서 실패 임계치(비율 또는 연속) 초과 시 CrawlThresholdExceeded 반환(대학 단위 중단)."""
+    from app.domain.contracts.crawl_contracts import CrawlLogContext
+    from app.services.crawl_policy import CrawlErrorTracker, CrawlThresholdExceeded, PARSER_CONSECUTIVE_FAILURES_THRESHOLD
+    from app.services.crawl_service import _process_scrape_result
+
+    college_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+    ctx = CrawlLogContext(college_code="test")
+    tracker = CrawlErrorTracker()
+    seen = set()
+    got_threshold = None
+
+    for i in range(PARSER_CONSECUTIVE_FAILURES_THRESHOLD + 2):
+        payload, raise_exc = _process_scrape_result(
+            {"url": "https://example.com/1", "no": f"n{i}"},
+            "https://example.com/1",
+            None,
+            ValueError("parse failed"),
+            college_id,
+            seen,
+            tracker,
+            ctx,
+        )
+        if raise_exc is not None:
+            assert isinstance(raise_exc, CrawlThresholdExceeded)
+            got_threshold = raise_exc
+            break
+    assert got_threshold is not None, "parser threshold (ratio or consecutive) must trigger CrawlThresholdExceeded"

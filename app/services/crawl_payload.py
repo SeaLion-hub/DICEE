@@ -79,6 +79,33 @@ def _url_path_only_for_hash(url: str) -> str:
         return url or ""
 
 
+def _is_valid_url_scheme(url: str) -> bool:
+    """http/https만 허용. 빈 문자열·비정상 scheme 제외."""
+    if not url or not isinstance(url, str):
+        return False
+    url = url.strip()
+    if not url:
+        return False
+    try:
+        p = urlparse(url)
+        return (p.scheme or "").lower() in ("http", "https")
+    except (ValueError, AttributeError):
+        return False
+
+
+def _filter_valid_urls(items: list[dict]) -> list[dict]:
+    """이미지/첨부 dict 목록에서 url·src가 유효한 항목만 유지. 빈 문자열·비정상 scheme 제거."""
+    out = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        url = item.get("url") or item.get("src") or ""
+        if not _is_valid_url_scheme(url):
+            continue
+        out.append(item)
+    return out
+
+
 def _external_id_from_url(url: str, ctx: CrawlLogContext | None = None) -> str:
     """URL에서 external_id 추출 (no가 없을 때 사용). path 또는 articleNo 등. 해시 fallback 시 path만 사용."""
     try:
@@ -91,7 +118,7 @@ def _external_id_from_url(url: str, ctx: CrawlLogContext | None = None) -> str:
         if segment and segment.isalnum():
             return segment
         path_only = _url_path_only_for_hash(url)
-        return hashlib.sha256(path_only.encode()).hexdigest()[:32]
+        return hashlib.sha256(path_only.encode()).hexdigest().lower()[:32]
     except (ValueError, KeyError, AttributeError, IndexError) as e:
         logger.warning(
             "_external_id_from_url fallback to hash: url=%s error=%s",
@@ -101,7 +128,7 @@ def _external_id_from_url(url: str, ctx: CrawlLogContext | None = None) -> str:
         )
         _capture_crawl_sentry_exception("crawl_payload:external_id_fallback", e, ctx=ctx)
         path_only = _url_path_only_for_hash(url)
-        return hashlib.sha256(path_only.encode()).hexdigest()[:32]
+        return hashlib.sha256(path_only.encode()).hexdigest().lower()[:32]
 
 
 def _content_hash_from_title_and_html(
@@ -215,6 +242,11 @@ def build_notice_payload(
         return None
     external_id_value = external_id or post.get("no") or _external_id_from_url(detail_url, ctx=ctx)
     att_dicts = _attachments_to_dicts(attachments or [])
+    images_filtered = _filter_valid_urls(images or [])
+    att_dicts = [
+        a for a in att_dicts
+        if "url" not in a or _is_valid_url_scheme(a.get("url") or "")
+    ]
     content_hash = _content_hash_from_title_and_html(
         title,
         html_content,
@@ -229,13 +261,22 @@ def build_notice_payload(
         external_id=external_id_value,
         content_hash=content_hash,
     )
+    if content_url is None or (isinstance(content_url, str) and not content_url.strip()):
+        if ctx:
+            logger.debug(
+                "content_url empty (backfill candidate): college_id=%s external_id=%s url=%s",
+                college_id,
+                external_id_value,
+                detail_url[:200] if detail_url else "",
+                extra=ctx.extra_for_log(),
+            )
     return NoticeDraft(
         college_id=college_id,
         external_id=external_id_value,
         title=title,
         url=detail_url or None,
-        content_url=content_url,
-        images=images,
+        content_url=content_url or None,
+        images=images_filtered,
         attachments=att_dicts,
         content_hash=content_hash,
         published_at=published_at,

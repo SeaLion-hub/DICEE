@@ -393,8 +393,12 @@ class Settings(BaseSettings):
         policy = (self.content_upload_failure_policy or "").strip().lower()
         backend = (self.content_spool_backend or "").strip().lower()
 
-        if policy == "allow_none":
-            missing.append("CONTENT_UPLOAD_FAILURE_POLICY must be 'fail' in production")
+        # Production: treat unset or default as 'fail' so deploy works without CONTENT_UPLOAD_FAILURE_POLICY.
+        if policy in ("", "allow_none"):
+            object.__setattr__(self, "content_upload_failure_policy", "fail")
+            policy = "fail"
+        elif policy != "fail":
+            missing.append("CONTENT_UPLOAD_FAILURE_POLICY must be 'fail' in production (or unset)")
 
         if policy == "fail" and backend == "local" and not self.content_spool_allow_ephemeral:
             missing.append(

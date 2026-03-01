@@ -6,7 +6,22 @@ import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
+from enum import Enum
 from typing import Any, NotRequired, Protocol, TypedDict
+
+
+class CrawlPhase(str, Enum):
+    """크롤 실행 단계. 실패 시 로그/Sentry에서 구분용."""
+
+    LIST = "list"
+    SCRAPE = "scrape"
+    UPSERT = "upsert"
+
+
+# 관측성: 단계별 event_code. 로깅·Sentry 태그 통일.
+EVENT_LIST_FETCH_FAILED = "CRAWL_LIST_FETCH_FAILED"
+EVENT_PARSE_FAILED = "CRAWL_PARSE_FAILED"
+EVENT_UPSERT_FAILED = "CRAWL_UPSERT_FAILED"
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
@@ -36,17 +51,21 @@ class NoticeDraft:
 
 @dataclass(frozen=True)
 class CrawlLogContext:
-    """크롤/파싱 실패 로그·Sentry용 컨텍스트. college_code/run_id/task_id를 한 객체로 전달해 시그니처 안정화."""
+    """크롤/파싱 실패 로그·Sentry용 컨텍스트. college_code/run_id/task_id/phase를 한 객체로 전달."""
 
     college_code: str
     run_id: uuid.UUID | None = None
     task_id: str | None = None
+    phase: CrawlPhase | None = None
+    event_code: str = ""
 
     def extra_for_log(self) -> dict[str, str]:
         """로그 extra·Sentry 태그용 dict. 빈 값은 빈 문자열로 통일."""
         out: dict[str, str] = {"college_code": self.college_code}
         out["run_id"] = str(self.run_id) if self.run_id else ""
         out["task_id"] = self.task_id or ""
+        out["phase"] = self.phase.value if self.phase is not None else ""
+        out["event_code"] = self.event_code or ""
         return out
 
 

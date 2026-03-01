@@ -4,12 +4,13 @@
 본문은 notice_contents.content_url로 S3 등에 분리 저장.
 """
 
+import base64
 import uuid
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import select, tuple_, update
+from sqlalchemy import and_, or_, select, tuple_, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session, defer, selectinload
@@ -18,6 +19,9 @@ from app.domain.contracts.crawl_contracts import NoticeDraft
 from app.models.notice import Notice
 from app.models.notice_content import NoticeContent
 
+# 단일 execute당 최대 행 수. 락/WAL·데드락 리스크 완화용.
+BULK_UPSERT_BATCH_SIZE = 500
+
 # 목록 조회 시 Heavy column 지연 로딩 (메모리·대역폭 방지). 5단계 목록 API에서 필수.
 NOTICE_LIST_DEFER_OPTIONS = (
     defer(Notice.images),
@@ -25,32 +29,109 @@ NOTICE_LIST_DEFER_OPTIONS = (
 )
 
 
+def _decode_cursor(cursor: str | None) -> tuple[datetime | None, datetime | None, uuid.UUID | None] | None:
+    """cursor 문자열을 (published_at, created_at, id)로 복원. 실패 시 None."""
+    if not cursor or not cursor.strip():
+        return None
+    try:
+        raw = base64.b64decode(cursor.encode()).decode()
+        parts = raw.split("|")
+        if len(parts) != 3:
+            return None
+        pub_s, created_s, id_s = parts[0], parts[1], parts[2]
+        pub = datetime.fromisoformat(pub_s) if pub_s else None
+        created = datetime.fromisoformat(created_s) if created_s else None
+        nid = uuid.UUID(id_s) if id_s else None
+        return (pub, created, nid)
+    except (ValueError, AttributeError):
+        return None
+
+
+def _encode_cursor(published_at: datetime | None, created_at: datetime | None, notice_id: uuid.UUID) -> str:
+    """다음 페이지용 cursor 인코딩. (published_at, created_at, id) -> base64."""
+    pub_s = published_at.isoformat() if published_at else ""
+    created_s = created_at.isoformat() if created_at else ""
+    return base64.b64encode(f"{pub_s}|{created_s}|{notice_id}".encode()).decode()
+
+
 async def list_notices_paginated(
     session: AsyncSession,
     *,
     limit: int = 20,
     offset: int = 0,
+    cursor: str | None = None,
     college_id: uuid.UUID | None = None,
     load_college: bool = True,
-) -> list[Notice]:
+) -> tuple[list[Notice], str | None]:
     """
     공지 목록 페이지네이션 조회. N+1 방지: NOTICE_LIST_DEFER_OPTIONS + 필요 시 selectinload(Notice.college).
+    cursor가 있으면 keyset(커서) 기반으로 다음 페이지 조회(offset 무시); 없으면 offset/limit 사용. 반환 (rows, next_cursor).
     5단계 목록 API에서 사용. deleted_at IS NULL만 반환.
     """
-    stmt = (
-        select(Notice)
-        .where(Notice.deleted_at.is_(None))
-        .options(*NOTICE_LIST_DEFER_OPTIONS)
-        .order_by(Notice.published_at.desc().nulls_last(), Notice.created_at.desc())
-        .limit(limit)
-        .offset(offset)
+    order = (
+        Notice.published_at.desc().nulls_last(),
+        Notice.created_at.desc(),
+        Notice.id.desc(),
     )
+    decoded = _decode_cursor(cursor) if cursor else None
+    keyset_cond = None
+    if decoded is not None:
+        pub, created, nid = decoded
+        if pub is not None and nid is not None:
+            if created is not None:
+                keyset_cond = or_(
+                    Notice.published_at < pub,
+                    and_(
+                        Notice.published_at == pub,
+                        Notice.created_at < created,
+                    ),
+                    and_(
+                        Notice.published_at == pub,
+                        Notice.created_at == created,
+                        Notice.id < nid,
+                    ),
+                )
+            else:
+                keyset_cond = or_(
+                    Notice.published_at < pub,
+                    and_(Notice.published_at == pub, Notice.id < nid),
+                )
+        elif pub is None and nid is not None:
+            keyset_cond = Notice.published_at.isnot(None)
+
+    if keyset_cond is not None:
+        stmt = (
+            select(Notice)
+            .where(Notice.deleted_at.is_(None), keyset_cond)
+            .options(*NOTICE_LIST_DEFER_OPTIONS)
+            .order_by(*order)
+            .limit(limit + 1)
+        )
+    else:
+        stmt = (
+            select(Notice)
+            .where(Notice.deleted_at.is_(None))
+            .options(*NOTICE_LIST_DEFER_OPTIONS)
+            .order_by(*order)
+            .limit(limit)
+            .offset(offset)
+        )
+
     if load_college:
         stmt = stmt.options(selectinload(Notice.college))
     if college_id is not None:
         stmt = stmt.where(Notice.college_id == college_id)
+
     result = await session.execute(stmt)
-    return list(result.scalars().unique().all())
+    rows = list(result.scalars().unique().all())
+
+    next_cursor: str | None = None
+    if keyset_cond is not None and len(rows) > limit:
+        rows = rows[:limit]
+        last = rows[-1]
+        next_cursor = _encode_cursor(last.published_at, last.created_at, last.id)
+
+    return (rows, next_cursor)
 
 
 async def get_notice_by_id_with_relations(
@@ -239,6 +320,17 @@ def _build_bulk_upsert_stmt(notices: list[dict[str, Any]]) -> tuple[Any, list[di
     return stmt, sorted_notices
 
 
+def _build_upsert_stmt_for_rows(notice_rows: list[dict[str, Any]]) -> Any:
+    """배치 단위 upsert용 Insert statement. notice_rows는 이미 (college_id, external_id) 정렬된 일부."""
+    base = insert(Notice).values(notice_rows)
+    return base.on_conflict_do_update(
+        index_elements=["college_id", "external_id"],
+        index_where=Notice.deleted_at.is_(None),
+        set_=_notice_upsert_set_excluded(base),
+        where=Notice.content_hash.is_distinct_from(base.excluded.content_hash),
+    ).returning(Notice.id, Notice.college_id, Notice.external_id)
+
+
 def _build_notice_contents_upsert_payloads(
     payloads: list[dict[str, Any]],
     key_to_id: dict[tuple[uuid.UUID, str], uuid.UUID],
@@ -297,24 +389,29 @@ async def upsert_notices_bulk(
     notices: Sequence[NoticeDraft],
 ) -> list[uuid.UUID]:
     """
-    여러 공지를 한 트랜잭션으로 bulk upsert.
+    여러 공지를 한 트랜잭션으로 bulk upsert. 500행 단위 배치로 execute하여 락/WAL 부담 완화.
     payload에 content_url이 있으면 notice_contents도 upsert.
     content_hash가 실제로 변한 행만 업데이트하고, RETURNING id로 신규/변경 공지 ID만 반환 (AI 큐 대상).
     """
     if not notices:
         return []
     notices_dicts = [_draft_to_notice_dict(d) for d in notices]
-    stmt, sorted_notices = _build_bulk_upsert_stmt(notices_dicts)
-    result = await session.execute(stmt)
-    rows = result.all()
-    await session.flush()
+    sorted_notices = sorted(
+        notices_dicts,
+        key=lambda x: (str(x.get("college_id", "")), str(x.get("external_id", ""))),
+    )
     key_to_id: dict[tuple[uuid.UUID, str], uuid.UUID] = {}
     ids: list[uuid.UUID] = []
-    for row in rows:
-        nid, cid, eid = row[0], row[1], row[2]
-        key_to_id[(cid, eid)] = nid
-        ids.append(nid)
-    # RETURNING에 없는(동일 content_hash) 행도 notice_id 조회해 본문 백필 가능하도록 보완.
+    for i in range(0, len(sorted_notices), BULK_UPSERT_BATCH_SIZE):
+        batch = sorted_notices[i : i + BULK_UPSERT_BATCH_SIZE]
+        notice_rows = [_notice_values_no_content(p) for p in batch]
+        stmt = _build_upsert_stmt_for_rows(notice_rows)
+        result = await session.execute(stmt)
+        for row in result.all():
+            nid, cid, eid = row[0], row[1], row[2]
+            key_to_id[(cid, eid)] = nid
+            ids.append(nid)
+        await session.flush()
     await _fill_key_to_id_from_notices(session, sorted_notices, key_to_id)
     await _upsert_notice_contents_bulk_from_payloads(session, sorted_notices, key_to_id)
     return ids
@@ -325,23 +422,29 @@ def upsert_notices_bulk_sync(
     notices: Sequence[NoticeDraft],
 ) -> list[uuid.UUID]:
     """
-    동기 bulk upsert (Celery 워커용).
+    동기 bulk upsert (Celery 워커용). 500행 단위 배치로 execute하여 락/WAL 부담 완화.
     payload에 content_url이 있으면 notice_contents도 upsert.
     content_hash가 실제로 변한 행만 업데이트, RETURNING id로 신규/변경 공지 ID만 반환.
     """
     if not notices:
         return []
     notices_dicts = [_draft_to_notice_dict(d) for d in notices]
-    stmt, sorted_notices = _build_bulk_upsert_stmt(notices_dicts)
-    result = session.execute(stmt)
-    rows = result.all()
-    session.flush()
+    sorted_notices = sorted(
+        notices_dicts,
+        key=lambda x: (str(x.get("college_id", "")), str(x.get("external_id", ""))),
+    )
     key_to_id: dict[tuple[uuid.UUID, str], uuid.UUID] = {}
     ids: list[uuid.UUID] = []
-    for row in rows:
-        nid, cid, eid = row[0], row[1], row[2]
-        key_to_id[(cid, eid)] = nid
-        ids.append(nid)
+    for i in range(0, len(sorted_notices), BULK_UPSERT_BATCH_SIZE):
+        batch = sorted_notices[i : i + BULK_UPSERT_BATCH_SIZE]
+        notice_rows = [_notice_values_no_content(p) for p in batch]
+        stmt = _build_upsert_stmt_for_rows(notice_rows)
+        result = session.execute(stmt)
+        for row in result.all():
+            nid, cid, eid = row[0], row[1], row[2]
+            key_to_id[(cid, eid)] = nid
+            ids.append(nid)
+        session.flush()
     _fill_key_to_id_from_notices_sync(session, sorted_notices, key_to_id)
     _upsert_notice_contents_bulk_from_payloads_sync(session, sorted_notices, key_to_id)
     return ids
@@ -352,10 +455,11 @@ def _upsert_notice_contents_bulk_from_payloads_sync(
     payloads: list[dict[str, Any]],
     key_to_id: dict[tuple[uuid.UUID, str], uuid.UUID],
 ) -> None:
-    """payloads와 key_to_id로 notice_contents bulk upsert (동기)."""
+    """payloads와 key_to_id로 notice_contents bulk upsert (동기). notice_id 순 정렬로 락 순서 통일."""
     to_insert = _build_notice_contents_upsert_payloads(payloads, key_to_id)
     if not to_insert:
         return
+    to_insert = sorted(to_insert, key=lambda x: x["notice_id"])
     ins = insert(NoticeContent).values(to_insert)
     stmt = ins.on_conflict_do_update(
         index_elements=["notice_id"],
@@ -370,10 +474,11 @@ async def _upsert_notice_contents_bulk_from_payloads(
     payloads: list[dict[str, Any]],
     key_to_id: dict[tuple[uuid.UUID, str], uuid.UUID],
 ) -> None:
-    """payloads와 key_to_id로 notice_contents bulk upsert (비동기)."""
+    """payloads와 key_to_id로 notice_contents bulk upsert (비동기). notice_id 순 정렬로 락 순서 통일."""
     to_insert = _build_notice_contents_upsert_payloads(payloads, key_to_id)
     if not to_insert:
         return
+    to_insert = sorted(to_insert, key=lambda x: x["notice_id"])
     ins = insert(NoticeContent).values(to_insert)
     stmt = ins.on_conflict_do_update(
         index_elements=["notice_id"],

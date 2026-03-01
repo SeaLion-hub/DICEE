@@ -1,8 +1,14 @@
-"""크롤 정책: 파서 실패 임계치·예외·에러 카운트 캡슐화. Orchestration에서 import해 사용."""
+"""크롤 정책: 파서 실패 임계치·예외·에러 카운트·HTTP 재시도/스킵 정책 캡슐화. Orchestration에서 import해 사용."""
 
 # 파서/구조 예외 임계치: 초과 시 태스크 실패(raise). 정책 B.
 PARSER_FAILURE_RATIO_THRESHOLD = 0.3  # 시도 대비 파서 실패 비율 상한
 PARSER_CONSECUTIVE_FAILURES_THRESHOLD = 5  # 연속 파서 실패 횟수 상한
+
+# HTTP 상태코드별 분류: 상세/목록 페이지 공통. 404/410 스킵(0회 추가 재시도), 408/429/5xx 재시도.
+HTTP_SKIP_STATUS_CODES = (404, 410)
+HTTP_RETRY_STATUS_CODES = (408, 429)  # 5xx는 아래 구간으로 처리
+HTTP_RETRY_STATUS_MIN_5XX = 500
+HTTP_RETRY_STATUS_MAX_5XX = 599
 
 
 class CrawlErrorTracker:
