@@ -17,8 +17,10 @@ from app.core.config import settings
 from app.core.database import get_db
 from app.core.deps import get_google_key_fetcher, get_httpx_client, get_redis_blocklist
 from app.core.ip_hmac import compute_ip_hmac
+from app.core.logging_context import set_request_context
 from app.core.network import get_client_ip
 from app.core.redis import BlocklistUnavailableError, add_access_to_blocklist
+from app.core.user_id_hmac import compute_user_id_hash
 from app.schemas.auth import RefreshTokenPayload, TokenPayload, TokenResponse
 from app.services.auth_service import (
     AuthError,
@@ -106,7 +108,7 @@ async def get_current_user_id(
     credentials: HTTPAuthorizationCredentials | None = Depends(security),
     redis_blocklist=Depends(get_redis_blocklist),
 ):
-    """Authorization Bearer에서 Access JWT 검증 후 user_id(UUID) 반환. Blocklist·Redis 장애 정책 적용."""
+    """Authorization Bearer에서 Access JWT 검증 후 user_id(UUID) 반환. Blocklist·Redis 장애 정책 적용. 인증 성공 시 user_id_hash·Sentry user 설정."""
     import uuid as uuid_mod
 
     if not credentials:
@@ -117,7 +119,16 @@ async def get_current_user_id(
             redis_blocklist,
             fail_closed=settings.redis.redis_blocklist_fail_closed,
         )
-        return uuid_mod.UUID(payload["sub"])
+        user_id = uuid_mod.UUID(payload["sub"])
+        try:
+            user_id_hash = compute_user_id_hash(user_id)
+            set_request_context(user_id_hash=user_id_hash)
+            import sentry_sdk
+
+            sentry_sdk.set_user({"id": user_id_hash})
+        except Exception:
+            logger.debug("user_id_hash/Sentry set_user failed; continuing.", exc_info=True)
+        return user_id
     except (AuthError, ValueError):
         raise HTTPException(status_code=401, detail="Invalid or expired token") from None
 
@@ -126,7 +137,7 @@ async def get_current_user_id_and_jti(
     credentials: HTTPAuthorizationCredentials | None = Depends(security),
     redis_blocklist=Depends(get_redis_blocklist),
 ):
-    """Access JWT 검증 후 (user_id UUID, jti) 반환. 로그아웃 시 Blocklist 등록용."""
+    """Access JWT 검증 후 (user_id UUID, jti) 반환. 로그아웃 시 Blocklist 등록용. 인증 성공 시 user_id_hash·Sentry user 설정."""
     import uuid as uuid_mod
 
     if not credentials:
@@ -137,7 +148,16 @@ async def get_current_user_id_and_jti(
             redis_blocklist,
             fail_closed=settings.redis.redis_blocklist_fail_closed,
         )
-        return uuid_mod.UUID(payload["sub"]), payload.get("jti")
+        user_id = uuid_mod.UUID(payload["sub"])
+        try:
+            user_id_hash = compute_user_id_hash(user_id)
+            set_request_context(user_id_hash=user_id_hash)
+            import sentry_sdk
+
+            sentry_sdk.set_user({"id": user_id_hash})
+        except Exception:
+            logger.debug("user_id_hash/Sentry set_user failed; continuing.", exc_info=True)
+        return user_id, payload.get("jti")
     except (AuthError, ValueError):
         raise HTTPException(status_code=401, detail="Invalid or expired token") from None
 

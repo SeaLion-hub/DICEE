@@ -1,6 +1,7 @@
 """
 요청별 로그 컨텍스트. contextvars로 request_id, endpoint, user_id_hash, event_code를 보관하고
 Filter로 레코드에 주입해 전 구간 일관된 구조화 로그를 만든다.
+환경별 로그 구분: development일 때 [DEV] 접두사로 로컬/운영 구분.
 """
 
 import contextvars
@@ -56,4 +57,27 @@ class LoggingContextFilter(logging.Filter):
             record.user_id_hash = _user_id_hash.get(None) or ""
         if not hasattr(record, "event_code"):
             record.event_code = _event_code.get(None) or ""
+        return True
+
+
+class DevelopmentLogFilter(logging.Filter):
+    """
+    development 환경에서만 로그 메시지 앞에 [DEV] 접두사 추가.
+    로컬과 베타/프로덕션 로그를 한눈에 구분하기 위함.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            from app.core.config import settings
+        except Exception:
+            return True
+        env = (settings.environment or "").strip().lower()
+        if env != "development":
+            return True
+        try:
+            record.msg = "[DEV] " + record.getMessage()
+            record.args = ()
+        except Exception:
+            record.msg = "[DEV] " + str(record.msg)
+            record.args = ()
         return True

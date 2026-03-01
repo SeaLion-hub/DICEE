@@ -85,7 +85,7 @@ def test_crawl_college_uses_bounded_seen_set():
 
     seen_captured = []
 
-    async def _capture_seen(client, links, college_id, scrape_fn, delay, *, concurrency, seen):
+    async def _capture_seen(client, links, college_id, scrape_fn, delay, *, concurrency, seen, ctx):
         seen_captured.append(seen)
         if False:
             yield  # async generator (0 yields)
@@ -296,6 +296,8 @@ def test_sync_adapter_reflects_worker_and_inflight_config(monkeypatch):
         collect_async_concurrency=10,
         crawl_seen_max_size=10000,
     )
+    from app.domain.contracts.crawl_contracts import CrawlLogContext
+
     adapter = crawl_module._DefaultSyncCrawlAdapter()
     list(
         adapter.collect_payloads(
@@ -304,6 +306,7 @@ def test_sync_adapter_reflects_worker_and_inflight_config(monkeypatch):
             scrape_fn=lambda _url: None,
             seen=set(),
             cfg=cfg,
+            ctx=CrawlLogContext(college_code="test"),
         )
     )
     assert captured == {"max_workers": 7, "in_flight_limit": 321}
@@ -334,6 +337,8 @@ def test_async_adapter_reflects_concurrency_config(monkeypatch):
     )
     adapter = crawl_module._DefaultAsyncCrawlAdapter()
 
+    from app.domain.contracts.crawl_contracts import CrawlLogContext
+
     async def _run():
         async for _ in adapter.collect_payloads(
             client=MagicMock(),
@@ -342,6 +347,7 @@ def test_async_adapter_reflects_concurrency_config(monkeypatch):
             scrape_async_fn=AsyncMock(return_value=None),
             seen=set(),
             cfg=cfg,
+            ctx=CrawlLogContext(college_code="test"),
         ):
             pass
 
@@ -528,6 +534,8 @@ def test_collect_payloads_sync_applies_rate_limit_in_worker_thread(monkeypatch):
         events.append(("scrape", threading.current_thread().name))
         return ScrapeResult("title", "2024.01.01", "<p>body</p>", [], [])
 
+    from app.domain.contracts.crawl_contracts import CrawlLogContext
+
     links = [{"no": "1", "url": "https://example.com/post/1", "title": "title"}]
     payloads = list(
         crawl_module._collect_payloads_sync(
@@ -538,6 +546,7 @@ def test_collect_payloads_sync_applies_rate_limit_in_worker_thread(monkeypatch):
             max_workers=1,
             in_flight_limit=1,
             seen=set(),
+            ctx=CrawlLogContext(college_code="test"),
         )
     )
 

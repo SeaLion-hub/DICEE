@@ -43,7 +43,7 @@ from app.core.crawl_rate_limit import (
 )
 from app.core.crawler_config import COLLEGE_CODE_TO_MODULE, CRAWLER_CONFIG, get_crawler, get_crawler_async
 from app.core.redis import get_shared_sync_redis_client
-from app.domain.contracts.crawl_contracts import LinkItem, NoticeDraft
+from app.domain.contracts.crawl_contracts import CrawlLogContext, LinkItem, NoticeDraft
 from app.repositories.college_repository import (
     get_by_external_id as get_college_by_external_id,
 )
@@ -291,6 +291,7 @@ class _SyncCrawlAdapter(Protocol):
         scrape_fn: Callable,
         seen: _SeenSet,
         cfg: CrawlRuntimeConfig,
+        ctx: CrawlLogContext,
     ) -> Iterator[NoticeDraft]: ...
 
     def upsert_chunk(self, session: Session, chunk: list[NoticeDraft]) -> list[uuid.UUID]: ...
@@ -306,6 +307,7 @@ class _AsyncCrawlAdapter(Protocol):
         scrape_async_fn: Callable,
         seen: _BoundedSeenSet,
         cfg: CrawlRuntimeConfig,
+        ctx: CrawlLogContext,
     ) -> AsyncIterator[NoticeDraft]: ...
 
     async def upsert_chunk(
@@ -324,6 +326,7 @@ class _DefaultSyncCrawlAdapter:
         scrape_fn: Callable,
         seen: _SeenSet,
         cfg: CrawlRuntimeConfig,
+        ctx: CrawlLogContext,
     ) -> Iterator[NoticeDraft]:
         return _collect_payloads_sync(
             links,
@@ -333,6 +336,7 @@ class _DefaultSyncCrawlAdapter:
             seen=seen,
             max_workers=cfg.collect_sync_max_workers,
             in_flight_limit=cfg.collect_in_flight_limit,
+            ctx=ctx,
         )
 
     def upsert_chunk(self, session: Session, chunk: list[NoticeDraft]) -> list[uuid.UUID]:
@@ -349,6 +353,7 @@ class _DefaultAsyncCrawlAdapter:
         scrape_async_fn: Callable,
         seen: _BoundedSeenSet,
         cfg: CrawlRuntimeConfig,
+        ctx: CrawlLogContext,
     ) -> AsyncIterator[NoticeDraft]:
         async for payload in _collect_payloads_async(
             client,
@@ -358,6 +363,7 @@ class _DefaultAsyncCrawlAdapter:
             cfg.polite_delay_seconds,
             seen=seen,
             concurrency=cfg.collect_async_concurrency,
+            ctx=ctx,
         ):
             yield payload
 
@@ -390,6 +396,7 @@ async def _run_crawl_pipeline_async(
     cfg: CrawlRuntimeConfig,
     adapter: _AsyncCrawlAdapter,
 ) -> int:
+    ctx = CrawlLogContext(college_code=college_code)
     seen = _init_seen_set_async(cfg.crawl_seen_max_size)
     async with httpx.AsyncClient(timeout=cfg.page_timeout_seconds) as client:
         links_raw = await get_links_async_fn(client, list_url)
@@ -410,6 +417,7 @@ async def _run_crawl_pipeline_async(
             scrape_async_fn=scrape_async_fn,
             seen=seen,
             cfg=cfg,
+            ctx=ctx,
         ):
             chunk.append(payload)
             if len(chunk) >= cfg.upsert_chunk_size:
@@ -520,12 +528,17 @@ def _process_scrape_result(
     college_id: uuid.UUID,
     seen: set[str] | _BoundedSeenSet | _RedisSeenSet,
     tracker: CrawlErrorTracker,
+    ctx: CrawlLogContext,
 ) -> tuple[NoticeDraft | None, CrawlThresholdExceeded | Exception | None]:
     """
     한 건 스크랩 결과 처리. CrawlErrorTracker로 상태 캡슐화. sync/async 공통.
     반환: (NoticeDraft 또는 None, raise할 예외 또는 None).
     """
     tracker.record_attempt()
+    log_extra = {**ctx.extra_for_log(), "url": detail_url[:200] if detail_url else ""}
+    external_id = post.get("no") or _external_id_from_url(detail_url)
+    if external_id:
+        log_extra["external_id"] = external_id
     if exc is not None:
         if isinstance(exc, _NETWORK_EXC_TYPES):
             logger.warning(
@@ -533,6 +546,7 @@ def _process_scrape_result(
                 detail_url[:200] if detail_url else "",
                 exc,
                 exc_info=True,
+                extra=log_extra,
             )
             tracker.record_network_or_skip()
             return (None, None)
@@ -541,6 +555,7 @@ def _process_scrape_result(
                 "scrape skipped (body too large): url=%s %s",
                 detail_url[:200] if detail_url else "",
                 exc,
+                extra=log_extra,
             )
             tracker.record_network_or_skip()
             return (None, None)
@@ -550,6 +565,7 @@ def _process_scrape_result(
                 detail_url[:200] if detail_url else "",
                 exc,
                 exc_info=True,
+                extra=log_extra,
             )
             threshold_exc = tracker.record_parser_failure()
             return (None, threshold_exc)
@@ -577,6 +593,7 @@ def _process_scrape_result(
         attachments,
         body_text_for_hash=body_text_for_hash or None,
         external_id=external_id,
+        ctx=ctx,
     )
     if payload is None:
         return (None, None)
@@ -627,6 +644,7 @@ def _collect_payloads_sync(
     max_workers: int,
     in_flight_limit: int,
     seen: set[str] | _BoundedSeenSet | _RedisSeenSet | None = None,
+    ctx: CrawlLogContext,
 ) -> Iterator[NoticeDraft]:
     """
     동기: Bounded in-flight(K)로 링크 처리. Semaphore + as_completed로 제어 단순화.
@@ -671,6 +689,7 @@ def _collect_payloads_sync(
                     college_id,
                     seen,
                     tracker,
+                    ctx,
                 )
                 if raise_exc is not None:
                     raise raise_exc
@@ -696,6 +715,7 @@ async def _collect_payloads_async(
     *,
     concurrency: int,
     seen: set[str] | _BoundedSeenSet | _RedisSeenSet | None = None,
+    ctx: CrawlLogContext,
 ) -> AsyncIterator[NoticeDraft]:
     """
     비동기: Semaphore(W) + 호스트별 delay로 제한된 병렬 수집. 1 req/s 직렬 완화.
@@ -749,6 +769,7 @@ async def _collect_payloads_async(
                     college_id,
                     seen,
                     tracker,
+                    ctx,
                 )
                 if raise_exc is not None:
                     raise raise_exc
@@ -798,6 +819,7 @@ def _run_crawl_pipeline_sync(
     get_links_fn: Callable,
     scrape_fn: Callable,
     run_id: uuid.UUID | None,
+    task_id: str | None = None,
     on_chunk_processed: Callable[[list[uuid.UUID]], None] | None,
     cfg: CrawlRuntimeConfig,
     adapter: _SyncCrawlAdapter,
@@ -812,6 +834,7 @@ def _run_crawl_pipeline_sync(
         )
         return (0, [])
 
+    ctx = CrawlLogContext(college_code=college_code, run_id=run_id, task_id=task_id)
     raw_redis = (settings.redis.redis_url or "").strip()
     crawl_seen_required = settings.redis.redis_crawl_seen_required
     seen = _init_seen_set_sync(
@@ -830,6 +853,7 @@ def _run_crawl_pipeline_sync(
             scrape_fn=scrape_fn,
             seen=seen,
             cfg=cfg,
+            ctx=ctx,
         ):
             chunk.append(payload)
             if len(chunk) >= cfg.upsert_chunk_size:
@@ -868,6 +892,7 @@ def crawl_college_sync(
     college_code: str,
     *,
     run_id: uuid.UUID | None = None,
+    task_id: str | None = None,
     on_chunk_processed: Callable[[list[uuid.UUID]], None] | None = None,
 ) -> tuple[int, list[uuid.UUID]]:
     """
@@ -893,6 +918,7 @@ def crawl_college_sync(
         get_links_fn=get_links_fn,
         scrape_fn=scrape_fn,
         run_id=run_id,
+        task_id=task_id,
         on_chunk_processed=on_chunk_processed,
         cfg=cfg,
         adapter=_DefaultSyncCrawlAdapter(),
@@ -973,6 +999,7 @@ def run_crawl_job_sync(
             session,
             college_code,
             run_id=run_id,
+            task_id=task_id,
             on_chunk_processed=on_chunk_processed,
         )
         update_crawl_run_sync(

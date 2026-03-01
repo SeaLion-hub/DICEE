@@ -87,10 +87,16 @@ def _on_worker_init(**kwargs):
 
 @app.on_after_configure.connect
 def _on_after_configure(**kwargs):
-    """프로덕션 워커: API와 동일한 예외/로그 마스킹 필터 등록(스택·예외 메시지 원천 차단)."""
-    if (settings.environment or "").strip().lower() == "production":
+    """프로덕션 워커: API와 동일한 예외/로그 마스킹 필터 등록. development: [DEV] 접두사."""
+    root = logging.getLogger()
+    env = (settings.environment or "").strip().lower()
+    if env == "production":
         from app.core.logging_safety import ProductionExceptionFilter
 
-        root = logging.getLogger()
         if not any(isinstance(f, ProductionExceptionFilter) for f in root.filters):
             root.addFilter(ProductionExceptionFilter())
+    elif env == "development":
+        from app.core.logging_context import DevelopmentLogFilter
+
+        if not any(isinstance(f, DevelopmentLogFilter) for f in root.filters):
+            root.addFilter(DevelopmentLogFilter())

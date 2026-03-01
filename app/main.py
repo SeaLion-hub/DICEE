@@ -50,9 +50,12 @@ async def lifespan(app: FastAPI):
     init_sentry()
     warn_trusted_proxy_configuration()
     # 요청별 로그 컨텍스트(request_id, endpoint 등) 주입
-    from app.core.logging_context import LoggingContextFilter
+    from app.core.logging_context import DevelopmentLogFilter, LoggingContextFilter
 
     logging.getLogger().addFilter(LoggingContextFilter())
+    # development일 때 [DEV] 접두사로 로컬/운영 로그 구분
+    if (settings.environment or "").strip().lower() == "development":
+        logging.getLogger().addFilter(DevelopmentLogFilter())
     # 프로덕션: 예외 traceback 로그 누출 원천 차단(프레임워크 레벨)
     if (settings.environment or "").strip().lower() == "production":
         from app.core.logging_safety import ProductionExceptionFilter

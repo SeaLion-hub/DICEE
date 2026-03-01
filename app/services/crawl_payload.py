@@ -14,7 +14,7 @@ from urllib.parse import parse_qs, urlparse, urlunparse
 from bs4 import BeautifulSoup
 
 from app.core.storage import upload_notice_html
-from app.domain.contracts.crawl_contracts import LinkItem, NoticeDraft
+from app.domain.contracts.crawl_contracts import CrawlLogContext, LinkItem, NoticeDraft
 
 logger = logging.getLogger(__name__)
 
@@ -34,28 +34,40 @@ def _should_send_crawl_sentry(signature: str) -> bool:
     return True
 
 
-def _capture_crawl_sentry_exception(signature: str, exc: BaseException) -> None:
-    """크롤 파싱 경로 전용: TTL 디듀프 후 capture_exception. 동일 시그니처 60초 1회만 전송."""
+def _capture_crawl_sentry_exception(
+    signature: str, exc: BaseException, ctx: CrawlLogContext | None = None
+) -> None:
+    """크롤 파싱 경로 전용: TTL 디듀프 후 capture_exception. ctx 있으면 college_code/run_id/task_id 태그 설정. Fail-open."""
     if not _should_send_crawl_sentry(signature):
         return
     try:
         import sentry_sdk
 
+        if ctx:
+            for k, v in ctx.extra_for_log().items():
+                if v:
+                    sentry_sdk.set_tag(k, v)
         sentry_sdk.capture_exception(exc)
     except (OSError, Exception) as sentry_err:
-        logger.warning("Sentry capture_exception failed: %s", sentry_err)
+        logger.warning("Sentry capture_exception failed (fail-open): %s", sentry_err)
 
 
-def _capture_crawl_sentry_message(signature: str, message: str, level: str = "warning") -> None:
-    """크롤 파싱 경로 전용: TTL 디듀프 후 capture_message. 동일 시그니처 60초 1회만 전송."""
+def _capture_crawl_sentry_message(
+    signature: str, message: str, level: str = "warning", ctx: CrawlLogContext | None = None
+) -> None:
+    """크롤 파싱 경로 전용: TTL 디듀프 후 capture_message. ctx 있으면 college_code/run_id/task_id 태그 설정. Fail-open."""
     if not _should_send_crawl_sentry(signature):
         return
     try:
         import sentry_sdk
 
+        if ctx:
+            for k, v in ctx.extra_for_log().items():
+                if v:
+                    sentry_sdk.set_tag(k, v)
         sentry_sdk.capture_message(message, level=level)
     except (OSError, Exception) as sentry_err:
-        logger.warning("Sentry capture_message failed: %s", sentry_err)
+        logger.warning("Sentry capture_message failed (fail-open): %s", sentry_err)
 
 
 def _url_path_only_for_hash(url: str) -> str:
@@ -67,7 +79,7 @@ def _url_path_only_for_hash(url: str) -> str:
         return url or ""
 
 
-def _external_id_from_url(url: str) -> str:
+def _external_id_from_url(url: str, ctx: CrawlLogContext | None = None) -> str:
     """URL에서 external_id 추출 (no가 없을 때 사용). path 또는 articleNo 등. 해시 fallback 시 path만 사용."""
     try:
         p = urlparse(url)
@@ -85,8 +97,9 @@ def _external_id_from_url(url: str) -> str:
             "_external_id_from_url fallback to hash: url=%s error=%s",
             url[:200] if url else "",
             e,
+            extra=ctx.extra_for_log() if ctx else {},
         )
-        _capture_crawl_sentry_exception("crawl_payload:external_id_fallback", e)
+        _capture_crawl_sentry_exception("crawl_payload:external_id_fallback", e, ctx=ctx)
         path_only = _url_path_only_for_hash(url)
         return hashlib.sha256(path_only.encode()).hexdigest()[:32]
 
@@ -118,7 +131,7 @@ def _content_hash_from_title_and_html(
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
-def _parse_published_at(date_str: str | None) -> datetime | None:
+def _parse_published_at(date_str: str | None, ctx: CrawlLogContext | None = None) -> datetime | None:
     """YYYY.MM.DD 등 문자열을 timezone-aware datetime으로. 실패 시 None."""
     if not date_str:
         return None
@@ -130,11 +143,13 @@ def _parse_published_at(date_str: str | None) -> datetime | None:
         logger.warning(
             "_parse_published_at no match (format change?): date_str=%r",
             date_str[:100] if date_str else None,
+            extra=ctx.extra_for_log() if ctx else {},
         )
         _capture_crawl_sentry_message(
             "crawl_payload:parse_published_at_no_match",
             "_parse_published_at no match (format change?)",
             level="warning",
+            ctx=ctx,
         )
     except (ValueError, AttributeError, TypeError) as e:
         logger.warning(
@@ -142,8 +157,9 @@ def _parse_published_at(date_str: str | None) -> datetime | None:
             date_str[:100] if date_str else None,
             e,
             exc_info=True,
+            extra=ctx.extra_for_log() if ctx else {},
         )
-        _capture_crawl_sentry_exception("crawl_payload:parse_published_at_exception", e)
+        _capture_crawl_sentry_exception("crawl_payload:parse_published_at_exception", e, ctx=ctx)
     return None
 
 
@@ -171,6 +187,7 @@ def build_notice_payload(
     attachments: list | None,
     body_text_for_hash: str | None = None,
     external_id: str | None = None,
+    ctx: CrawlLogContext | None = None,
 ) -> NoticeDraft | None:
     """
     한 건 공지 스크랩 결과 → upsert용 NoticeDraft. 스킵 시 None(로깅 후 반환).
@@ -196,7 +213,7 @@ def build_notice_payload(
             title[:80] if title else "",
         )
         return None
-    external_id_value = external_id or post.get("no") or _external_id_from_url(detail_url)
+    external_id_value = external_id or post.get("no") or _external_id_from_url(detail_url, ctx=ctx)
     att_dicts = _attachments_to_dicts(attachments or [])
     content_hash = _content_hash_from_title_and_html(
         title,
@@ -205,7 +222,7 @@ def build_notice_payload(
         attachments=attachments or [],
         images=images or [],
     )
-    published_at = _parse_published_at(date_str)
+    published_at = _parse_published_at(date_str, ctx=ctx)
     content_url = upload_notice_html(
         html_content,
         college_id=college_id,

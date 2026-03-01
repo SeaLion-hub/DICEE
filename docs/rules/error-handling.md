@@ -4,6 +4,12 @@
 
 ---
 
+## API 에러 응답 포맷
+
+- 모든 API 에러 응답은 **동일 필드** 사용: `detail`(문자열), `code`, `request_id`(있을 때), `errors`(validation 시). 전역 핸들러는 `app/core/exception_handlers.py`의 `_error_content`·`_normalize_detail`로 통일. `HTTPException.detail`이 dict/list여도 클라이언트에는 항상 문자열 `detail`로 내려감.
+
+---
+
 ## 원칙
 
 - **비즈니스 예외** → Router 또는 전역 Exception Handler에서 `HTTPException`으로 변환. Service에서는 `HTTPException`을 raise하지 않는다.

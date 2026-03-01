@@ -58,7 +58,7 @@ TRIGGER_LOCK_HEARTBEAT_INTERVAL_SECONDS = 60
 
 
 def _set_task_context(task_id: str | None, college_code: str | None = None):
-    """Sentry·로그인 컨텍스트. task_id·college_code로 4차 분류 등 식별."""
+    """Sentry·로그인 컨텍스트. task_id·college_code로 4차 분류 등 식별. Fail-open: Sentry 예외 시 로그만 하고 계속."""
     try:
         import sentry_sdk
 
@@ -66,8 +66,8 @@ def _set_task_context(task_id: str | None, college_code: str | None = None):
             sentry_sdk.set_tag("celery.task_id", task_id)
         if college_code:
             sentry_sdk.set_tag("college_code", college_code)
-    except ImportError:
-        pass
+    except Exception:
+        logger.debug("Sentry set_tag failed (task context); continuing.", exc_info=True)
 
 
 def _heartbeat_loop(

@@ -2,6 +2,7 @@
 
 import logging
 from typing import Literal
+from urllib.parse import urlparse
 
 from pydantic import AliasChoices, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -182,6 +183,10 @@ class Settings(BaseSettings):
     ip_hmac_key: SecretStr = SecretStr("")
     ip_hmac_key_version: str = "v1"
 
+    # User ID HMAC (로깅·Sentry용 해시, 재식별 리스크 감소)
+    user_id_hmac_key: SecretStr = SecretStr("")
+    user_id_hmac_key_version: str = "v1"
+
     # CORS
     allowed_origins: str = ""
 
@@ -290,6 +295,43 @@ class Settings(BaseSettings):
             )
         finally:
             _legacy_guard_allow.value = False
+
+    @model_validator(mode="after")
+    def block_dev_using_production_db(self) -> "Settings":
+        """development 환경에서 운영 DB 호스트로 접속하려 하면 기동 시 에러. 실수로 로컬에서 운영 DB 붙는 것 방지."""
+        if (self.environment or "").strip().lower() != "development":
+            return self
+        raw = (self.database_url or "").strip()
+        if not raw:
+            return self
+        try:
+            # postgres:// vs postgresql:// 호환
+            url = raw.replace("postgres://", "postgresql://", 1) if raw.startswith("postgres://") else raw
+            parsed = urlparse(url)
+            host = (parsed.hostname or parsed.netloc or "").lower()
+            if not host or "@" in host:
+                host = (parsed.netloc or "").split("@")[-1].split(":")[0].lower()
+            # 운영/관리형 DB 호스트 패턴 (서브스트링 일치)
+            production_indicators = (
+                "rds.",
+                ".rds.",
+                "railway",
+                ".railway",
+                "supabase",
+                "neon.tech",
+                ".neon.",
+            )
+            for indicator in production_indicators:
+                if indicator in host:
+                    raise ValueError(
+                        f"ENVIRONMENT=development but DATABASE_URL host looks like production ({indicator!r} in {host!r}). "
+                        "Use a local DB or set ENVIRONMENT=production for production DB."
+                    )
+        except ValueError:
+            raise
+        except Exception:
+            pass
+        return self
 
     @model_validator(mode="after")
     def fail_fast_s3_bucket_when_s3(self) -> "Settings":

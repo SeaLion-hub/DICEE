@@ -35,6 +35,22 @@ class NoticeDraft:
 
 
 @dataclass(frozen=True)
+class CrawlLogContext:
+    """크롤/파싱 실패 로그·Sentry용 컨텍스트. college_code/run_id/task_id를 한 객체로 전달해 시그니처 안정화."""
+
+    college_code: str
+    run_id: uuid.UUID | None = None
+    task_id: str | None = None
+
+    def extra_for_log(self) -> dict[str, str]:
+        """로그 extra·Sentry 태그용 dict. 빈 값은 빈 문자열로 통일."""
+        out: dict[str, str] = {"college_code": self.college_code}
+        out["run_id"] = str(self.run_id) if self.run_id else ""
+        out["task_id"] = self.task_id or ""
+        return out
+
+
+@dataclass(frozen=True)
 class CrawlRunRow:
     """최근 크롤 실행 1건. Repository가 Entity에서 채우는 순수 데이터(datetime 그대로)."""
 

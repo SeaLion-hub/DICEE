@@ -1,5 +1,6 @@
 """X-Request-ID 미들웨어. 요청마다 ID 설정. Sentry·로그 상관용."""
 
+import logging
 import re
 import uuid
 
@@ -7,6 +8,8 @@ from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.core.logging_context import set_request_context
+
+logger = logging.getLogger(__name__)
 
 # P2: 길이·문자셋 제한. 초과/비허용 문자면 클라이언트 값 무시하고 새 UUID 사용.
 _REQUEST_ID_MAX_LEN = 128
@@ -31,13 +34,18 @@ class RequestIDMiddleware(BaseHTTPMiddleware):
         request_id = _sanitize_request_id(raw)
         request.state.request_id = request_id
         endpoint = getattr(request.url, "path", "") or ""
-        set_request_context(request_id=request_id, endpoint=endpoint)
+        set_request_context(
+            request_id=request_id,
+            endpoint=endpoint,
+            user_id_hash="",
+            event_code="",
+        )
         try:
             import sentry_sdk
 
             sentry_sdk.set_tag("request_id", request_id)
-        except ImportError:
-            pass
+        except Exception:
+            logger.debug("Sentry set_tag failed (request_id); continuing.", exc_info=True)
         response = await call_next(request)
         response.headers["X-Request-ID"] = request_id
         return response
