@@ -93,9 +93,7 @@ def test_post_refresh_rollback_on_unexpected_exception(client: TestClient) -> No
     async def _get_db():
         yield session
 
-    _, refresh_token = create_jwt_pair(
-        user_id=uuid.UUID("00000000-0000-7000-8000-000000000001")
-    )
+    _, refresh_token = create_jwt_pair(user_id=uuid.UUID("00000000-0000-7000-8000-000000000001"))
     with patch("app.api.v1.auth.refresh_tokens", new_callable=AsyncMock) as mock_refresh:
         mock_refresh.side_effect = RuntimeError("injected")
         app.dependency_overrides[get_db] = _get_db
@@ -157,14 +155,13 @@ async def test_login_audit_failed_logs_user_id_hash_not_raw_uuid(
     log_text = caplog.text
     assert "00000000-0000-7000-8000-000000000002" not in log_text
     for record in caplog.records:
-        assert "00000000-0000-7000-8000-000000000002" not in (
-            record.message + str(getattr(record, "args", ""))
-        )
+        assert "00000000-0000-7000-8000-000000000002" not in (record.message + str(getattr(record, "args", "")))
 
 
 @pytest.mark.asyncio
 async def test_oauth_state_consume_once_then_fail() -> None:
     """Phase 4: state 1회 소비 후 재사용 시 consume_state False."""
+
     class FakeRedis:
         def __init__(self):
             self._store = {}

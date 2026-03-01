@@ -45,13 +45,11 @@ def before_send_scrub(event: dict, hint: dict) -> dict | None:
             req = event["request"]
             if "headers" in req and isinstance(req["headers"], dict):
                 req["headers"] = {
-                    k: "[REDACTED]" if (k and k.lower() in _SENSITIVE_HEADERS) else v
-                    for k, v in req["headers"].items()
+                    k: "[REDACTED]" if (k and k.lower() in _SENSITIVE_HEADERS) else v for k, v in req["headers"].items()
                 }
             elif "headers" in req and isinstance(req["headers"], list):
                 req["headers"] = [
-                    (k, "[REDACTED]" if (k and k.lower() in _SENSITIVE_HEADERS) else v)
-                    for k, v in req["headers"]
+                    (k, "[REDACTED]" if (k and k.lower() in _SENSITIVE_HEADERS) else v) for k, v in req["headers"]
                 ]
             if "data" in req and req.get("data") not in (None, ""):
                 req["data"] = "[REDACTED]"

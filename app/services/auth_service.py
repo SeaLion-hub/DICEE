@@ -391,9 +391,7 @@ async def google_login(
     else:
         # 설정 생략 시에만 검증 생략. (google_redirect_uris 비어 있음. 키로 범위로부터 설정 무효.)
         normalized = redirect_uri or "http://localhost"
-    token_result = await exchange_google_code(
-        code, normalized, http_client, code_verifier=code_verifier
-    )
+    token_result = await exchange_google_code(code, normalized, http_client, code_verifier=code_verifier)
     id_token = token_result.id_token
 
     claims = await decode_google_id_token(id_token, key_fetcher)

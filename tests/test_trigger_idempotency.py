@@ -104,9 +104,7 @@ def test_idempotency_get_failure_logs_no_key_exposure(caplog):
     client = MagicMock()
     client.get = _idempotency_get_raises
     with caplog.at_level("WARNING"):
-        result = asyncio.run(
-            get_trigger_idempotency_result(client, secret_key, "scope")
-        )
+        result = asyncio.run(get_trigger_idempotency_result(client, secret_key, "scope"))
     assert result is None
     log_text = " ".join(r.message for r in caplog.records)
     assert secret_key not in log_text
@@ -123,11 +121,7 @@ def test_idempotency_set_failure_logs_no_key_exposure(caplog):
     client = MagicMock()
     client.set = _idempotency_set_raises
     with caplog.at_level("WARNING"):
-        asyncio.run(
-            set_trigger_idempotency_result(
-                client, secret_key, "scope", {"status": "ok"}
-            )
-        )
+        asyncio.run(set_trigger_idempotency_result(client, secret_key, "scope", {"status": "ok"}))
     log_text = " ".join(r.message for r in caplog.records)
     assert secret_key not in log_text
     assert "(key=" not in log_text

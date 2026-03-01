@@ -21,6 +21,6 @@ def test_architecture_import_rules_via_import_linter() -> None:
         timeout=60,
         cwd=root,
     )
-    assert result.returncode == 0, (
-        f"lint-imports failed (exit {result.returncode}).\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
-    )
+    assert (
+        result.returncode == 0
+    ), f"lint-imports failed (exit {result.returncode}).\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"

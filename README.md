@@ -1,156 +1,114 @@
-# DICEE
+﻿# DICEE
 
-[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
-[![FastAPI](https://img.shields.io/badge/FastAPI-0.115+-green.svg)](https://fastapi.tiangolo.com/)
-[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-15+-blue.svg)](https://www.postgresql.org/)
-[![License](https://img.shields.io/badge/license-See%20repo-lightgrey)](./)
+DICEE는 대학 공지 데이터를 수집·정규화해, 필요한 정보를 더 빠르게 찾을 수 있게 만드는 공지 인텔리전스 백엔드입니다.
 
-대학교 공지사항의 **분산과 이용자의 번거로움**을 줄이기 위한 서비스.
+현재 상태: **M2 (Intelligence)** — 크롤러 안정화 및 AI 파이프라인 기반을 구축 중입니다.
 
----
+## Key Features
 
-## 목차
+- **공지 통합 수집**: 단과대/학과별로 분산된 공지를 하나의 API로 일관되게 제공합니다.
+- **중복·재처리 최소화**: `content_hash` 기반 변경 감지와 upsert 정책으로 불필요한 재처리를 줄입니다.
+- **운영 안정성 중심 크롤링**: 재시도, 레이트 리밋, 트리거 멱등성, 분산 락, 큐 기반 실행을 기본 설계에 포함합니다.
+- **AI 파이프라인 대응 구조**: `notice_id` 중심 전달 방식으로 구조화 추출·매칭 파이프라인을 확장 가능하게 유지합니다.
+- **보안 우선 내부 제어**: 내부 트리거 헤더 인증, OAuth/JWT 인증, Redis 장애 시 fail-closed 옵션을 제공합니다.
 
-- [아이디어와 맥락](#아이디어와-맥락)
-- [사전 요구 사항 (Prerequisites)](#사전-요구-사항-prerequisites)
-- [기술 스택](#기술-스택)
-- [문서](#문서)
-- [로컬 실행](#로컬-실행)
-- [주요 엔드포인트](#주요-엔드포인트)
-- [참고](#참고)
+## Tech Stack
 
----
+| Category | Stack |
+|---|---|
+| **Frontend** | Next.js (로드맵 기준, Vercel 배포 대상) |
+| **Backend** | FastAPI, SQLAlchemy 2.0, Celery, Pydantic v2, Alembic |
+| **Database** | PostgreSQL, Redis |
+| **Infrastructure** | Docker/Compose, Railway, Vercel, Sentry |
 
-## 아이디어와 맥락
+## Architecture
 
-### 문제
-
-- 대학 공지는 **학과·단과대·중앙** 사이트에 흩어져 있음.
-- 장학·취업·점검 등 **종류가 다양**해, 학생이 매번 여러 곳을 돌아다니며 확인하기 번거로움.
-
-### 목표
-
-- **한곳에서** 공지를 모아 보고,
-- **내 조건**(전공·학년·군필·학점 등)에 맞는 공지만 골라 보여 주는 경험 제공.
-
-### MVP (첫 번째 버전)
-
-- [SeaLion-hub/DICE (test 브랜치)](https://github.com/SeaLion-hub/DICE/tree/test)
-- FastAPI + PostgreSQL + Redis + Apify + Gemini로 구현.
-- 겪었던 구조적 문제: 동기 DB/블로킹 라우트, Raw SQL, 불안정한 AI 파싱, 단일 파일 과다 책임 등.
-
-### 이 레포(DICEE-1)
-
-- 위 MVP를 참고하되 **초석부터 다시 설계**한 재구축 프로젝트.
-- 반영 사항: 비동기 백엔드, ORM, 계층형 구조, Playwright 자체 크롤러, Structured AI 출력, Auth(구글 OAuth + JWT, 다중 제공자 확장 가능), Celery rate limit 등.
-- 배포: 백엔드 **Railway**, 프론트 **Vercel**.
-
-**현재 진행 상황**: 마일스톤 **M2 (Intelligence)** — 크롤러·Celery·Redis·트리거 크롤·분산 락·헬스·Rate limit 구축 중. 단계·마일스톤·구현 현황은 [ROADMAP](docs/ROADMAP.md)·[ROADMAP_PHASES](docs/ROADMAP_PHASES.md) 참고.
-
----
-
-## 사전 요구 사항 (Prerequisites)
-
-| 항목 | 설명 |
-|------|------|
-| **Python** | 3.10 이상 |
-| **PostgreSQL** | 로컬 또는 Railway 등 원격 DB |
-| **Redis** | Celery 워커 사용 시(로드맵 3단계 이후) 필요 |
-| **환경 변수** | `.env` — [.env.example](.env.example) 복사 후 값 채우기. 변수 목록·배포 설정은 [DEPLOYMENT](docs/DEPLOYMENT.md) 참고. |
-
----
-
-## 기술 스택
-
-| 구분 | 내용 |
-|------|------|
-| **Backend** | FastAPI, SQLAlchemy 2.0(비동기), PostgreSQL, Redis, Celery |
-| **Auth** | 구글 OAuth + JWT (다중 제공자 확장 가능) |
-| **Crawler** | requests+BS4(레포 이식), Playwright 필요 시 |
-| **AI** | Gemini Structured Output |
-| **배포** | 백엔드 Railway, 프론트 Vercel(6단계에서 Next.js) |
-
----
-
-## 문서
-
-| 문서 | 설명 |
-|------|------|
-| [docs/ROADMAP.md](docs/ROADMAP.md) | 1~6단계 로드맵, 현재 단계·마일스톤. **확정 사항**(데이터 구조·OAuth·달력 UX 등)은 동 문서 상단 표 참고. |
-| [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | Railway(백엔드)·Vercel(프론트) 배포 설정 |
-| [docs/WORK_LOG.md](docs/WORK_LOG.md) | 작업별 구체적 수정 기록 |
-| [docs/CAUTIONS.md](docs/CAUTIONS.md) | 개발·코딩 시 주의사항 및 체크리스트 |
-
----
-
-## 로컬 실행
-
-### 1. 의존성 및 DB 마이그레이션
-
-```bash
-# 가상환경 생성·활성화 후
-pip install -r requirements.txt
-# .env 설정 후
-alembic upgrade head
+```mermaid
+flowchart LR
+    S[Scraper] --> A[FastAPI]
+    A --> P[(PostgreSQL)]
+    P --> N[Next.js]
+    N -. API 요청 .-> A
 ```
 
-- **DATABASE_URL**: 시스템 환경변수가 .env를 덮어씀. Railway DB만 쓰려면 PowerShell에서 `$env:DATABASE_URL = $null` 후 실행.
+운영 관점에서는 Celery Worker와 Redis Queue가 크롤링 실행을 담당하고, FastAPI는 API 제공 및 오케스트레이션을 담당합니다.
 
-### 2. 백엔드 서버 기동
+## Getting Started (5 minutes)
 
-**Windows**
-
-```bash
-python run.py
-```
-
-(이벤트 루프 정책·psycopg 호환을 위해 `run.py` 사용.)
-
-**Linux / macOS**
+### 1) 저장소 클론
 
 ```bash
-uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+git clone <YOUR_REPO_URL>
+cd DICEE-1
 ```
 
-### 3. Celery 워커 (로컬, 3단계 이후)
+### 2) 환경 변수 파일 생성
 
-Redis 실행 후 **별도 터미널**에서 실행. 진입점: `app.core.celery_app:app` (DEPLOYMENT·worker.py와 동일).
-
-**Windows**
+Linux/macOS:
 
 ```bash
-celery -A app.core.celery_app:app worker -l info -O fair --pool=solo
+cp .env.example .env
 ```
 
-(prefork 풀 미지원이므로 `--pool=solo` 필수.)
-
-**Linux / macOS**
-
-```bash
-celery -A app.core.celery_app:app worker -l info -O fair
-```
-
-**트리거 크롤 테스트 (Windows PowerShell)**  
-PowerShell에서 `curl`은 별칭이므로 `curl.exe` 사용 권장:
+Windows PowerShell:
 
 ```powershell
-curl.exe -X POST "http://localhost:8000/internal/trigger-crawl?college_code=engineering" -H "X-Crawl-Trigger-Secret: YOUR_SECRET"
+Copy-Item .env.example .env
 ```
 
----
+로컬 Docker 실행 기준 권장값:
 
-## 주요 엔드포인트
+- `ENVIRONMENT=development`
+- `APP_ENTRY=api` (`worker`는 Compose에서 자동으로 `APP_ENTRY=celery` 오버라이드)
 
-- `GET /health`: 프로세스 헬스 (DB/Redis 미체크). 플랫폼 프로브용.
-- `GET /ready`: 준비 상태 (DB·Redis blocklist·trigger_lock). 배포·모니터링용.
-- `GET /live`: Liveness.
-- `POST /v1/auth/google`: 구글 OAuth code로 JWT 발급.  
-  필요 환경변수: `DATABASE_URL`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `JWT_SECRET`(또는 RS256 시 `JWT_PRIVATE_KEY_PEM`·`JWT_PUBLIC_KEY_PEM`)
+### 3) Docker Compose로 전체 스택 실행
 
-API 전체 목록·스키마는 실행 후 **Swagger UI** (`/docs`)에서 확인.
+```bash
+docker compose up --build -d
+```
 
----
+실행 구성:
 
-## 참고
+- `db` (PostgreSQL)
+- `redis`
+- `migrate` (`alembic upgrade head` 1회 실행)
+- `api` (`:8000`)
+- `worker` (Celery)
 
-- 이 레포는 위 목표를 위한 **재구축 프로젝트**이며, 첫 번째 버전(MVP) 코드는 [SeaLion-hub/DICE @ test](https://github.com/SeaLion-hub/DICE/tree/test)를 참고함.
+### 4) 헬스체크 확인
+
+```bash
+curl http://localhost:8000/health
+```
+
+예상 응답:
+
+```json
+{"status":"ok"}
+```
+
+### 5) API 문서 확인
+
+- Swagger UI: `http://localhost:8000/docs`
+
+### 자주 쓰는 명령어
+
+```bash
+# 로그 확인
+docker compose logs -f api
+docker compose logs -f worker
+
+# 종료
+docker compose down
+
+# 종료 + 볼륨 삭제
+docker compose down -v
+```
+
+## Project Docs
+
+- [Roadmap](docs/ROADMAP.md)
+- [Phase Playbook](docs/ROADMAP_PHASES.md)
+- [Deployment](docs/DEPLOYMENT.md)
+- [Work Log](docs/WORK_LOG.md)
+- [Cautions](docs/CAUTIONS.md)
