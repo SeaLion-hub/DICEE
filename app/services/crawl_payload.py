@@ -9,6 +9,7 @@ import re
 import time
 import uuid
 from datetime import UTC, datetime
+from typing import Literal
 from urllib.parse import parse_qs, urlparse, urlunparse
 
 from bs4 import BeautifulSoup
@@ -34,10 +35,8 @@ def _should_send_crawl_sentry(signature: str) -> bool:
     return True
 
 
-def _capture_crawl_sentry_exception(
-    signature: str, exc: BaseException, ctx: CrawlLogContext | None = None
-) -> None:
-    """크롤 파싱 경로 전용: TTL 디듀프 후 capture_exception. ctx 있으면 college_code/run_id/task_id 태그 설정. Fail-open."""
+def _capture_crawl_sentry_exception(signature: str, exc: BaseException, ctx: CrawlLogContext | None = None) -> None:
+    """크롤 파싱: TTL 디듀프 후 capture_exception. ctx로 college_code/run_id/task_id 태그. Fail-open."""
     if not _should_send_crawl_sentry(signature):
         return
     try:
@@ -52,10 +51,16 @@ def _capture_crawl_sentry_exception(
         logger.warning("Sentry capture_exception failed (fail-open): %s", sentry_err)
 
 
+_SentryLevel = Literal["fatal", "critical", "error", "warning", "info", "debug"]
+
+
 def _capture_crawl_sentry_message(
-    signature: str, message: str, level: str = "warning", ctx: CrawlLogContext | None = None
+    signature: str,
+    message: str,
+    level: _SentryLevel = "warning",
+    ctx: CrawlLogContext | None = None,
 ) -> None:
-    """크롤 파싱 경로 전용: TTL 디듀프 후 capture_message. ctx 있으면 college_code/run_id/task_id 태그 설정. Fail-open."""
+    """크롤 파싱: TTL 디듀프 후 capture_message. ctx로 college_code/run_id/task_id 태그. Fail-open."""
     if not _should_send_crawl_sentry(signature):
         return
     try:
@@ -243,10 +248,7 @@ def build_notice_payload(
     external_id_value = external_id or post.get("no") or _external_id_from_url(detail_url, ctx=ctx)
     att_dicts = _attachments_to_dicts(attachments or [])
     images_filtered = _filter_valid_urls(images or [])
-    att_dicts = [
-        a for a in att_dicts
-        if "url" not in a or _is_valid_url_scheme(a.get("url") or "")
-    ]
+    att_dicts = [a for a in att_dicts if "url" not in a or _is_valid_url_scheme(a.get("url") or "")]
     content_hash = _content_hash_from_title_and_html(
         title,
         html_content,

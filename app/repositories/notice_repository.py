@@ -64,9 +64,9 @@ async def list_notices_paginated(
     load_college: bool = True,
 ) -> tuple[list[Notice], str | None]:
     """
-    공지 목록 페이지네이션 조회. N+1 방지: NOTICE_LIST_DEFER_OPTIONS + 필요 시 selectinload(Notice.college).
-    cursor가 있으면 keyset(커서) 기반으로 다음 페이지 조회(offset 무시); 없으면 offset/limit 사용. 반환 (rows, next_cursor).
-    5단계 목록 API에서 사용. deleted_at IS NULL만 반환.
+    공지 목록 페이지네이션 조회. N+1 방지: NOTICE_LIST_DEFER_OPTIONS + selectinload(Notice.college).
+    cursor 있으면 keyset 기반 다음 페이지; 없으면 offset/limit. 반환 (rows, next_cursor).
+    5단계 목록 API. deleted_at IS NULL만 반환.
     """
     order = (
         Notice.published_at.desc().nulls_last(),

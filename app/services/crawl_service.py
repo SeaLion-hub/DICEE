@@ -54,11 +54,11 @@ from app.core.crawl_rate_limit import (
 from app.core.crawler_config import COLLEGE_CODE_TO_MODULE, CRAWLER_CONFIG, get_crawler, get_crawler_async
 from app.core.redis import get_shared_sync_redis_client
 from app.domain.contracts.crawl_contracts import (
-    CrawlLogContext,
-    CrawlPhase,
     EVENT_LIST_FETCH_FAILED,
     EVENT_PARSE_FAILED,
     EVENT_UPSERT_FAILED,
+    CrawlLogContext,
+    CrawlPhase,
     LinkItem,
     NoticeDraft,
 )
@@ -79,12 +79,12 @@ from app.repositories.notice_repository import (
 )
 from app.services.crawl_payload import _external_id_from_url, build_notice_payload
 from app.services.crawl_policy import (
-    CrawlErrorTracker,
-    CrawlThresholdExceeded,
     HTTP_RETRY_STATUS_CODES,
     HTTP_RETRY_STATUS_MAX_5XX,
     HTTP_RETRY_STATUS_MIN_5XX,
     HTTP_SKIP_STATUS_CODES,
+    CrawlErrorTracker,
+    CrawlThresholdExceeded,
 )
 from app.services.crawlers.base import ScrapeResult
 
@@ -421,7 +421,19 @@ async def _run_crawl_pipeline_async(
     ctx = CrawlLogContext(college_code=college_code)
     seen = _init_seen_set_async(cfg.crawl_seen_max_size)
     async with httpx.AsyncClient(timeout=cfg.page_timeout_seconds) as client:
-        links_raw = await get_links_async_fn(client, list_url)
+        try:
+            links_raw = await get_links_async_fn(client, list_url)
+        except Exception as e:
+            from app.core.logging_context import set_request_context
+
+            set_request_context(event_code=EVENT_LIST_FETCH_FAILED)
+            log_extra = {
+                "college_code": college_code,
+                "phase": CrawlPhase.LIST.value,
+                "event_code": EVENT_LIST_FETCH_FAILED,
+            }
+            logger.warning("crawl list fetch failed (async): %s", e, exc_info=True, extra=log_extra)
+            raise
         links = _cap_links_for_run(cast(list[LinkItem], links_raw), college_code, cfg.max_links_per_run)
         total_links = len(links)
         if not links:
@@ -841,12 +853,6 @@ async def _collect_payloads_async(
                     if remaining:
                         pending.add(_task(remaining.popleft()))
                     continue
-                if result.exc is not None and (_is_skippable(result.exc) or _is_retryable(result.exc)):
-                    tracker.record_attempt()
-                    tracker.record_network_or_skip()
-                    if remaining:
-                        pending.add(_task(remaining.popleft()))
-                    continue
                 payload, raise_exc = _process_scrape_result(
                     result.post,
                     result.detail_url,
@@ -1151,6 +1157,9 @@ def run_crawl_job_sync(
     반환: (upserted 개수, enqueued_ai 개수).
     트랜잭션 경계: 세션·커밋/롤백은 이 오케스트레이터에서만 통제. Repository는 전달받은 세션으로 쿼리만 수행.
     """
+    from app.core.logging_context import set_request_context
+
+    set_request_context(event_code="")
 
     college = get_college_by_external_id_sync(session, college_code)
     if not college:

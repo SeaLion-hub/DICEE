@@ -19,6 +19,7 @@ from app.core.deps import get_google_key_fetcher, get_httpx_client, get_redis_bl
 from app.core.ip_hmac import compute_ip_hmac
 from app.core.logging_context import set_request_context
 from app.core.network import get_client_ip
+from app.core.oauth_state import consume_state, generate_state, store_state
 from app.core.redis import BlocklistUnavailableError, add_access_to_blocklist
 from app.core.user_id_hmac import compute_user_id_hash
 from app.schemas.auth import RefreshTokenPayload, TokenPayload, TokenResponse
@@ -131,6 +132,11 @@ async def get_current_user_id(
         return user_id
     except (AuthError, ValueError):
         raise HTTPException(status_code=401, detail="Invalid or expired token") from None
+    except BlocklistUnavailableError:
+        raise HTTPException(
+            status_code=503,
+            detail="Authentication service temporarily unavailable",
+        ) from None
 
 
 async def get_current_user_id_and_jti(
@@ -160,6 +166,41 @@ async def get_current_user_id_and_jti(
         return user_id, payload.get("jti")
     except (AuthError, ValueError):
         raise HTTPException(status_code=401, detail="Invalid or expired token") from None
+    except BlocklistUnavailableError:
+        raise HTTPException(
+            status_code=503,
+            detail="Authentication service temporarily unavailable",
+        ) from None
+
+
+@router.get("/google/state")
+async def get_google_auth_state(
+    redis_blocklist=Depends(get_redis_blocklist),
+    client_ip: str = Depends(
+        _auth_rate_limit_dep(
+            "google_state",
+            lambda: settings.auth_google_state_rate_limit_per_minute,
+            "Too many state issuance requests, please try again later.",
+        )
+    ),
+) -> dict[str, str]:
+    """
+    로그인 시작 시 1회용 state 발급. Redis에 저장 후 반환. CSRF 방어용.
+    IP 기반 rate limit 적용. Redis 미설정 시 503.
+    """
+    if redis_blocklist is None:
+        raise HTTPException(
+            status_code=503,
+            detail="State storage temporarily unavailable",
+        )
+    state = generate_state()
+    stored = await store_state(redis_blocklist, state)
+    if not stored:
+        raise HTTPException(
+            status_code=503,
+            detail="State storage temporarily unavailable",
+        )
+    return {"state": state}
 
 
 @router.post("/google", response_model=TokenResponse)
@@ -168,6 +209,7 @@ async def post_google_auth(
     session: AsyncSession = Depends(get_db),
     http_client: httpx.AsyncClient = Depends(get_httpx_client),
     key_fetcher=Depends(get_google_key_fetcher),
+    redis_blocklist=Depends(get_redis_blocklist),
     client_ip: str = Depends(
         _auth_rate_limit_dep(
             "google",
@@ -179,8 +221,26 @@ async def post_google_auth(
     """
     구글 OAuth Authorization Code로 로그인.
     code를 받아 검증 후 Access/Refresh JWT 반환.
-    외부 API 장애(타임아웃 등) → 503, 클라이언트 인증 오류 → 400.
+    production에서는 state 필수(CSRF 방어). 외부 API 장애 → 503, 클라이언트 인증 오류 → 400.
     """
+    is_production = (settings.environment or "").strip().lower() == "production"
+    if is_production and (payload.state is None or not (payload.state or "").strip()):
+        raise HTTPException(
+            status_code=400,
+            detail="state is required in production for CSRF protection",
+        )
+    if payload.state is not None:
+        if redis_blocklist is None:
+            raise HTTPException(
+                status_code=503,
+                detail="State validation temporarily unavailable",
+            )
+        consumed = await consume_state(redis_blocklist, payload.state)
+        if not consumed:
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid or already used state",
+            )
     try:
         result = await google_login(
             session,
@@ -189,6 +249,7 @@ async def post_google_auth(
             http_client=http_client,
             key_fetcher=key_fetcher,
             client_ip=client_ip,
+            code_verifier=payload.code_verifier,
         )
         await session.commit()
         return TokenResponse(
@@ -209,6 +270,9 @@ async def post_google_auth(
             status_code=400,
             detail="Invalid request",
         ) from e
+    except Exception:
+        await session.rollback()
+        raise
 
 
 @router.post("/refresh", response_model=TokenResponse)
@@ -280,6 +344,9 @@ async def post_refresh(
             status_code=401,
             detail="Invalid or expired token",
         ) from e
+    except Exception:
+        await session.rollback()
+        raise
 
 
 @router.post("/logout", status_code=204)

@@ -100,6 +100,7 @@ def test_production_fail_fast_requires_ip_hmac_key():
             "JWT_SECRET": "test-secret",
             "TRUSTED_PROXY_IPS": "10.0.0.1",
             "CRAWL_TRIGGER_SECRET": "test-trigger-secret",
+            "USER_ID_HMAC_KEY": "test-user-hmac",
             "IP_HMAC_KEY": "",
         },
         clear=False,
@@ -125,6 +126,7 @@ def test_production_fail_fast_requires_trusted_proxy_ips():
             "JWT_SECRET": "test-secret",
             "TRUSTED_PROXY_IPS": "",
             "CRAWL_TRIGGER_SECRET": "test-trigger-secret",
+            "USER_ID_HMAC_KEY": "test-user-hmac",
             "IP_HMAC_KEY": "test-ip-hmac-key",
             "CONTENT_UPLOAD_FAILURE_POLICY": "fail",
         },
@@ -218,6 +220,9 @@ def test_validate_crawler_contract_fails_when_async_callable_missing(monkeypatch
 
 
 def test_production_local_spool_fail_fast_without_ephemeral_override():
+    """Production + local spool + ALLOW_EPHEMERAL false: fail-fast. USER_ID_HMAC_KEY 포함해 spool 검증 실패만 보장."""
+    import app.core.config as config_module
+
     with patch.dict(
         "os.environ",
         {
@@ -231,6 +236,7 @@ def test_production_local_spool_fail_fast_without_ephemeral_override():
             "GOOGLE_CLIENT_SECRET": "",
             "TRUSTED_PROXY_IPS": "10.0.0.1",
             "CRAWL_TRIGGER_SECRET": "test-trigger-secret",
+            "USER_ID_HMAC_KEY": "test-user-hmac",
             "IP_HMAC_KEY": "test-ip-hmac-key",
             "CONTENT_UPLOAD_FAILURE_POLICY": "fail",
             "CONTENT_SPOOL_BACKEND": "local",
@@ -238,11 +244,10 @@ def test_production_local_spool_fail_fast_without_ephemeral_override():
         },
         clear=False,
     ):
-        from app.core.config import Settings
-
-        with pytest.raises(ValueError) as exc_info:
-            Settings()
+        with pytest.raises((ValueError, ValidationError)) as exc_info:
+            importlib.reload(config_module)
         assert "CONTENT_SPOOL_ALLOW_EPHEMERAL" in str(exc_info.value)
+    importlib.reload(config_module)
 
 
 def test_production_local_spool_allows_ephemeral_override():
@@ -259,6 +264,7 @@ def test_production_local_spool_allows_ephemeral_override():
             "GOOGLE_CLIENT_SECRET": "",
             "TRUSTED_PROXY_IPS": "10.0.0.1",
             "CRAWL_TRIGGER_SECRET": "test-trigger-secret",
+            "USER_ID_HMAC_KEY": "test-user-hmac",
             "IP_HMAC_KEY": "test-ip-hmac-key",
             "CONTENT_UPLOAD_FAILURE_POLICY": "fail",
             "CONTENT_SPOOL_BACKEND": "local",

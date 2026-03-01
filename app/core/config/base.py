@@ -93,6 +93,7 @@ class Settings(BaseSettings):
     google_redirect_uris: str = ""
 
     auth_google_rate_limit_per_minute: int = Field(28, ge=1, le=1000)
+    auth_google_state_rate_limit_per_minute: int = Field(30, ge=1, le=500)
     auth_refresh_rate_limit_per_minute: int = Field(60, ge=1, le=5000)
     auth_refresh_token_fingerprint_rate_limit_per_minute: int = Field(15, ge=1, le=5000)
 
@@ -334,6 +335,19 @@ class Settings(BaseSettings):
         return self
 
     @model_validator(mode="after")
+    def require_user_id_hmac_key_in_production(self) -> "Settings":
+        """production 환경에서 USER_ID_HMAC_KEY 필수. 로깅·Sentry용 식별자 보안."""
+        if (self.environment or "").strip().lower() != "production":
+            return self
+        raw = (self.user_id_hmac_key.get_secret_value() or "").strip()
+        if not raw:
+            raise ValueError(
+                "USER_ID_HMAC_KEY is required when ENVIRONMENT=production. "
+                "Set a secret value for user_id hashing in logs and Sentry."
+            )
+        return self
+
+    @model_validator(mode="after")
     def fail_fast_s3_bucket_when_s3(self) -> "Settings":
         if (self.content_storage_type or "").strip().lower() == "s3" and not (self.s3_bucket or "").strip():
             raise ValueError(
@@ -400,9 +414,12 @@ class Settings(BaseSettings):
         elif policy != "fail":
             missing.append("CONTENT_UPLOAD_FAILURE_POLICY must be 'fail' in production (or unset)")
 
-        # Production + local backend: allow ephemeral by default so deploy works without CONTENT_SPOOL_* vars.
+        # Production + local backend: require explicit CONTENT_SPOOL_ALLOW_EPHEMERAL=true (fail-fast).
         if policy == "fail" and backend == "local" and not self.content_spool_allow_ephemeral:
-            object.__setattr__(self, "content_spool_allow_ephemeral", True)
+            missing.append(
+                "CONTENT_SPOOL_ALLOW_EPHEMERAL must be 'true' in production when CONTENT_SPOOL_BACKEND=local "
+                "(explicit allow only; do not auto-override)."
+            )
 
         if not self.trusted_proxy_skip_fast and not (self.trusted_proxy_ips or "").strip():
             missing.append("TRUSTED_PROXY_IPS")

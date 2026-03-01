@@ -16,7 +16,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.config.jwt import resolve_jwt_signing_algorithm
 from app.core.ip_hmac import compute_ip_hmac
-from app.core.redis import is_access_blocked
+from app.core.metrics import REFRESH_TOKEN_REUSE_ATTEMPT_TOTAL, increment
+from app.core.redis import BlocklistUnavailableError, is_access_blocked
+from app.core.user_id_hmac import compute_user_id_hash
 from app.domain.contracts.auth_contracts import GoogleTokenResult, TokenResult
 from app.domain.contracts.user_contracts import UserUpsertCmd
 from app.repositories.login_audit_repository import create_login_audit
@@ -45,22 +47,26 @@ async def exchange_google_code(
     code: str,
     redirect_uri: str | None,
     client: httpx.AsyncClient,
+    code_verifier: str | None = None,
 ) -> GoogleTokenResult:
     """
     구글 OAuth Authorization Code를 액세스 토큰으로 교환.
-    네트워크 실패(Timeout, Connect) 시 AuthServiceUnavailableError(503)로 변환.
+    code_verifier가 있으면 PKCE로 전달. 네트워크 실패 시 AuthServiceUnavailableError(503).
     """
     client_secret = settings.google_client_secret.get_secret_value()
+    data: dict[str, str] = {
+        "code": code,
+        "client_id": settings.google_client_id,
+        "client_secret": client_secret,
+        "redirect_uri": redirect_uri or "http://localhost",
+        "grant_type": "authorization_code",
+    }
+    if code_verifier:
+        data["code_verifier"] = code_verifier
     try:
         resp = await client.post(
             "https://oauth2.googleapis.com/token",
-            data={
-                "code": code,
-                "client_id": settings.google_client_id,
-                "client_secret": client_secret,
-                "redirect_uri": redirect_uri or "http://localhost",
-                "grant_type": "authorization_code",
-            },
+            data=data,
             headers={"Content-Type": "application/x-www-form-urlencoded"},
         )
     except (
@@ -227,6 +233,8 @@ async def verify_access_token(
         if payload.get("type") != "access":
             raise AuthError("Invalid token type")
         jti = payload.get("jti")
+        if fail_closed and redis_blocklist_client is None:
+            raise BlocklistUnavailableError("Blocklist required but Redis not configured")
         if redis_blocklist_client is not None and jti:
             blocked = await is_access_blocked(redis_blocklist_client, jti, fail_closed=fail_closed)
             if blocked:
@@ -285,6 +293,12 @@ async def refresh_tokens(
         raise AuthError("Refresh token revoked or invalid")
     new_version = await rotate_refresh_token_version(session, user_id, token_version)
     if new_version is None:
+        user_id_hash = compute_user_id_hash(user_id)
+        logger.warning(
+            "Refresh token reuse attempt (CAS failed)",
+            extra={"event": "refresh_token_reuse", "user_id_hash": user_id_hash},
+        )
+        increment(REFRESH_TOKEN_REUSE_ATTEMPT_TOTAL)
         raise AuthError("Refresh token revoked or invalid")
     access_token, new_refresh_token = create_jwt_pair(user_id, token_version=new_version)
     return TokenResult(
@@ -356,6 +370,7 @@ async def google_login(
     http_client: httpx.AsyncClient,
     key_fetcher: AsyncKeyFetcher,
     client_ip: str | None = None,
+    code_verifier: str | None = None,
 ) -> TokenResult:
     """
     구글 OAuth code로 로그인, redirect_uri allowlist·sub 보존 검증(Fail-fast).
@@ -376,7 +391,9 @@ async def google_login(
     else:
         # 설정 생략 시에만 검증 생략. (google_redirect_uris 비어 있음. 키로 범위로부터 설정 무효.)
         normalized = redirect_uri or "http://localhost"
-    token_result = await exchange_google_code(code, normalized, http_client)
+    token_result = await exchange_google_code(
+        code, normalized, http_client, code_verifier=code_verifier
+    )
     id_token = token_result.id_token
 
     claims = await decode_google_id_token(id_token, key_fetcher)
@@ -407,11 +424,12 @@ async def google_login(
                 provider="google",
             )
         except Exception as e:
+            user_id_hash = compute_user_id_hash(user.id)
             logger.warning(
-                "Login audit failed (user_id=%s): %s",
-                user.id,
+                "Login audit failed: %s",
                 e,
                 exc_info=True,
+                extra={"user_id_hash": user_id_hash},
             )
 
     version = getattr(user, "refresh_token_version", 0)

@@ -125,8 +125,20 @@ async def teardown_state(state: AppState) -> None:
         if state.engine is not None:
             await state.engine.dispose()
 
+    async def close_key_fetcher() -> None:
+        """AsyncKeyFetcher 내부 aiohttp.ClientSession 정리. Unclosed client session 경고 방지."""
+        try:
+            client = getattr(state.google_key_fetcher, "_http_client", None)
+            if client is not None:
+                session = getattr(client, "session", None)
+                if session is not None and hasattr(session, "aclose"):
+                    await session.aclose()
+        except Exception as e:
+            logger.warning("key_fetcher teardown: %s", e, exc_info=True)
+
     tasks = [
         asyncio.wait_for(close_httpx(), TEARDOWN_TIMEOUT_SECONDS),
+        asyncio.wait_for(close_key_fetcher(), TEARDOWN_TIMEOUT_SECONDS),
         asyncio.wait_for(close_redis_blocklist(), TEARDOWN_TIMEOUT_SECONDS),
         asyncio.wait_for(close_redis_trigger_lock(), TEARDOWN_TIMEOUT_SECONDS),
         asyncio.wait_for(dispose_engine(), TEARDOWN_TIMEOUT_SECONDS),

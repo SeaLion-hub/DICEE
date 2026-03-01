@@ -15,7 +15,7 @@ class GoogleTokenResponse(BaseModel):
 
 
 class TokenPayload(BaseModel):
-    """OAuth code 교환 요청. code/redirect_uri 길이·형식 제약. 알 수 없는 필드 거부."""
+    """OAuth code 교환 요청. code/redirect_uri 길이·형식 제약. state·PKCE 지원. 알 수 없는 필드 거부."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -29,6 +29,18 @@ class TokenPayload(BaseModel):
         None,
         max_length=2048,
         description="OAuth redirect_uri (허용 목록과 일치해야 함)",
+    )
+    state: str | None = Field(
+        None,
+        min_length=1,
+        max_length=256,
+        description="CSRF 방어용 1회용 state (GET /auth/google/state로 발급)",
+    )
+    code_verifier: str | None = Field(
+        None,
+        min_length=43,
+        max_length=128,
+        description="PKCE code_verifier (선택)",
     )
 
 

@@ -26,6 +26,7 @@ INTERNAL_AUTH_FAILED_TOTAL = "internal_auth_failed_total"
 INTERNAL_PREAUTH_RATE_LIMITED_TOTAL = "internal_preauth_rate_limited_total"
 CLIENT_IP_RESOLUTION_TOTAL = "client_ip_resolution_total"
 INVALID_XFF_TOTAL = "invalid_xff_total"
+REFRESH_TOKEN_REUSE_ATTEMPT_TOTAL = "refresh_token_reuse_attempt_total"
 
 
 def _make_key(name: str, labels: dict[str, str] | None) -> str:
