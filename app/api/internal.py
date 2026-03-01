@@ -29,7 +29,12 @@ from app.core.internal_auth import (
 )
 from app.core.ip_hmac import compute_ip_hmac
 from app.core.network import get_client_ip
-from app.core.read_cache import get_cached, set_cached
+from app.core.read_cache import (
+    get_cached_with_soft_ttl,
+    release_cached_lock,
+    set_cached_with_soft_ttl,
+    wait_for_cached,
+)
 from app.domain.contracts.internal_contracts import (
     TriggerCrawlCmd,
     TriggerCrawlResult,
@@ -315,33 +320,67 @@ async def get_crawl_stats(
             headers=_rate_limit_headers(),
         )
     state = getattr(request.app.state, "operational_mode", "NORMAL")
-    ttl = getattr(settings, "read_cache_ttl_seconds", 60)
-    cached = await get_cached(redis_client, "crawl_stats", str(limit))
+    key_parts = ("crawl_stats", str(limit))
+    cached, should_refresh, lock_token = await get_cached_with_soft_ttl(redis_client, *key_parts)
+
+    # Fresh hit: 즉시 반환
+    if cached is not None and not should_refresh:
+        metrics.increment(metrics.READ_CACHE_FRESH_HIT_TOTAL)
+        return CrawlStatsResponse.model_validate(cached)
+
+    # Stale + lock 미획득: stale 즉시 반환
+    if cached is not None and should_refresh and lock_token is None:
+        metrics.increment(metrics.READ_CACHE_STALE_HIT_TOTAL)
+        return CrawlStatsResponse.model_validate(cached)
+
+    # Hard miss + lock 미획득: 짧게 wait 후 재조회
+    if cached is None and lock_token is None:
+        metrics.increment(metrics.READ_CACHE_WAIT_TOTAL)
+        wait_ms = getattr(settings, "read_cache_wait_for_fresh_ms", 1000)
+        cached, should_refresh, lock_token = await wait_for_cached(redis_client, wait_ms, *key_parts)
+        if cached is not None:
+            return CrawlStatsResponse.model_validate(cached)
+        if state == "DEGRADED":
+            raise HTTPException(
+                status_code=503,
+                detail="Service degraded; cached data unavailable. Try again later.",
+                headers={"Retry-After": "60"},
+            )
+        # 재조회 후에도 miss면 DB로 (lock 없이 진행)
+        should_refresh = True
+
+    # should_refresh && (lock_token or cached is None): DB 조회 후 갱신
+    if should_refresh and (lock_token is not None or cached is None):
+        metrics.increment(metrics.READ_CACHE_MISS_TOTAL if cached is None else metrics.READ_CACHE_STALE_HIT_TOTAL)
+        metrics.increment(metrics.READ_CACHE_REFRESH_TOTAL)
+        result = await crawl_stats_service.get_crawl_stats(session, limit=limit)
+        response = CrawlStatsResponse(
+            runs=[
+                CrawlRunStatsItem(
+                    college_code=r.college_code,
+                    started_at=r.started_at,
+                    finished_at=r.finished_at,
+                    status=r.status,
+                    notices_upserted=r.notices_upserted,
+                    has_error=r.has_error,
+                )
+                for r in result.runs
+            ],
+            limit=result.limit,
+        )
+        await set_cached_with_soft_ttl(redis_client, *key_parts, value=response.model_dump())
+        if lock_token:
+            await release_cached_lock(redis_client, *key_parts, token=lock_token)
+        return response
+
+    # 타입 만족: cached 있으면 반환 (실제로는 위 분기에서 처리됨)
     if cached is not None:
         return CrawlStatsResponse.model_validate(cached)
-    if state == "DEGRADED":
-        raise HTTPException(
-            status_code=503,
-            detail="Service degraded; cached data unavailable. Try again later.",
-            headers={"Retry-After": "60"},
-        )
-    result = await crawl_stats_service.get_crawl_stats(session, limit=limit)
-    response = CrawlStatsResponse(
-        runs=[
-            CrawlRunStatsItem(
-                college_code=r.college_code,
-                started_at=r.started_at,
-                finished_at=r.finished_at,
-                status=r.status,
-                notices_upserted=r.notices_upserted,
-                has_error=r.has_error,
-            )
-            for r in result.runs
-        ],
-        limit=result.limit,
+    raise HTTPException(
+        status_code=503,
+        detail="Service degraded; cached data unavailable. Try again later.",
+        headers={"Retry-After": "60"},
     )
-    await set_cached(redis_client, ttl, "crawl_stats", str(limit), value=response.model_dump())
-    return response
 
 
 def _metrics_allowed_client_ip(request: Request) -> bool:

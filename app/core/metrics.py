@@ -28,6 +28,13 @@ CLIENT_IP_RESOLUTION_TOTAL = "client_ip_resolution_total"
 INVALID_XFF_TOTAL = "invalid_xff_total"
 REFRESH_TOKEN_REUSE_ATTEMPT_TOTAL = "refresh_token_reuse_attempt_total"
 
+# Read cache (soft TTL + mutex)
+READ_CACHE_FRESH_HIT_TOTAL = "read_cache_fresh_hit_total"
+READ_CACHE_STALE_HIT_TOTAL = "read_cache_stale_hit_total"
+READ_CACHE_MISS_TOTAL = "read_cache_miss_total"
+READ_CACHE_REFRESH_TOTAL = "read_cache_refresh_total"
+READ_CACHE_WAIT_TOTAL = "read_cache_wait_total"
+
 
 def _make_key(name: str, labels: dict[str, str] | None) -> str:
     """Prometheus 스타일의 복합 키 생성: name{k="v",...}"""

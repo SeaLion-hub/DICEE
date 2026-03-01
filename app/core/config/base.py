@@ -175,6 +175,9 @@ class Settings(BaseSettings):
     # Read cache
     read_cache_ttl_seconds: int = Field(60, ge=10, le=3600)
     read_cache_key_prefix: str = Field("read_cache:")
+    read_cache_soft_ttl_seconds: int = Field(20, ge=5, le=3600)
+    read_cache_lock_ttl_seconds: int = Field(10, ge=2, le=120)
+    read_cache_wait_for_fresh_ms: int = Field(1000, ge=0, le=5000)
 
     # Degraded mode
     degraded_failure_threshold: int = Field(3, ge=1, le=20)
@@ -349,6 +352,16 @@ class Settings(BaseSettings):
             raise ValueError(
                 "Production environment requires USER_ID_HMAC_KEY to be set. "
                 "Set USER_ID_HMAC_KEY in .env or Railway Variables."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def read_cache_soft_ttl_lt_hard_ttl(self) -> "Settings":
+        """read_cache: soft_ttl < hard_ttl 강제. wait_for_fresh_ms는 0 허용(즉시 fallback)."""
+        if self.read_cache_soft_ttl_seconds >= self.read_cache_ttl_seconds:
+            raise ValueError(
+                "read_cache_soft_ttl_seconds must be less than read_cache_ttl_seconds. "
+                f"Got soft={self.read_cache_soft_ttl_seconds}, hard={self.read_cache_ttl_seconds}."
             )
         return self
 

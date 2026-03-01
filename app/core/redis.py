@@ -554,64 +554,60 @@ async def set_cache_with_soft_ttl(
         logger.warning("Cache set_with_soft_ttl failed (key=%s): %s", key, e)
 
 
-async def release_cache_lock(client: RedisAsyncio | None, key: str) -> None:
+async def release_cache_lock(client: RedisAsyncio | None, key: str, token: str) -> None:
     """
     Soft TTL 캐시 갱신 후 보유 중인 락을 조기 삭제합니다.
-    get_cache_with_soft_ttl로 락을 획득한 뒤 set_cache_with_soft_ttl로 갱신한 경우,
-    TTL 만료를 기다리지 않고 호출하면 다음 요청이 더 빨리 재갱신할 수 있습니다.
+    lock value가 token과 일치할 때만 삭제(compare-and-del, Lua). 타인 락 삭제 방지.
+    get_cache_with_soft_ttl로 획득한 lock_token을 전달해야 합니다.
     client가 None이면 no-op.
     """
-    if client is None:
+    if client is None or not token:
         return
     lock_key = f"{CACHE_LOCK_KEY_PREFIX}{key}"
     try:
-        await client.delete(lock_key)
+        await cast(Awaitable[Any], client.eval(LUA_RELEASE_IF_OWNER, 1, lock_key, token))
     except Exception as e:
         logger.warning("Cache lock release failed (key=%s): %s", key, e)
 
 
 async def get_cache_with_soft_ttl(
     client: RedisAsyncio | None, key: str, lock_ttl_seconds: int = 10
-) -> tuple[Any | None, bool]:
+) -> tuple[Any | None, bool, str | None]:
     """
     Soft TTL 캐시 조회 및 Mutex Lock 획득 (Cache Stampede 방어).
-    갱신에 성공한 호출자는 set_cache_with_soft_ttl 후
-    release_cache_lock(client, key)를 호출해 락을 조기 해제할 수 있습니다.
+    락 값은 UUID token으로 저장. 갱신 후 release_cache_lock(client, key, token)로 compare-and-del.
 
-    반환값: (캐시된 데이터, DB조회_및_갱신_필요여부)
-    - (data, False): 아주 신선한 캐시, 또는 다른 코루틴이 갱신 중이라 바로 반환해야 하는 약간 오래된 캐시
-    - (data, True): 캐시가 오래되었고, '내가' DB를 조회해서 갱신해야 함 (Lock 획득 성공)
-    - (None, True): 캐시가 아예 없음(Hard Miss). '내가' DB를 조회해야 함. (Lock 획득 성공)
-    - (None, False): 캐시가 아예 없는데 다른 코루틴이 DB 조회 중. (호출부에서 짧은 딜레이 후 재시도해야 함)
+    반환값: (캐시된 데이터, should_refresh, lock_token)
+    - (data, False, None): 신선한 캐시 또는 stale이지만 락 미획득 → 즉시 반환
+    - (data, True, token): stale이고 락 획득 → DB 갱신 후 set + release_cache_lock(key, token)
+    - (None, True, token): Hard Miss, 락 획득 → DB 조회 후 set
+    - (None, False, None): Hard Miss, 락 미획득 → wait 후 재조회
     """
     if client is None:
-        return None, True
+        return None, True, None
 
     try:
         raw = await client.get(key)
         lock_key = f"{CACHE_LOCK_KEY_PREFIX}{key}"
 
         if not raw:
-            # 완전한 Cache Miss (최초 조회 또는 Hard TTL 만료)
-            acquired = await client.set(lock_key, "1", nx=True, ex=lock_ttl_seconds)
-            return None, bool(acquired)
+            token = str(uuid.uuid4())
+            acquired = await client.set(lock_key, token, nx=True, ex=lock_ttl_seconds)
+            return None, bool(acquired), token if acquired else None
 
         payload = json.loads(raw)
         data = payload.get("data")
         soft_ttl = payload.get("soft_ttl", 0)
 
         if time.time() > soft_ttl:
-            # Soft TTL 만료됨 (오래된 데이터). 한 명만 갱신하도록 분산 락(Mutex) 획득 시도
-            acquired = await client.set(lock_key, "1", nx=True, ex=lock_ttl_seconds)
+            token = str(uuid.uuid4())
+            acquired = await client.set(lock_key, token, nx=True, ex=lock_ttl_seconds)
             if acquired:
-                # 락 획득 성공! 이 요청(코루틴)만 DB에 다녀오도록 True 반환
-                return data, True
-            # 락 획득 실패. 다른 누군가가 갱신 중이므로 나는 Stale(오래된) 데이터를 즉시 반환하여 DB 부하를 막음
-            return data, False
+                return data, True, token
+            return data, False, None
 
-        # Soft TTL도 지나지 않은 신선한 데이터
-        return data, False
+        return data, False, None
 
     except Exception as e:
         logger.warning("Cache get_with_soft_ttl failed (key=%s): %s", key, e)
-        return None, True
+        return None, True, None
