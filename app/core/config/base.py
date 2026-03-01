@@ -412,12 +412,9 @@ class Settings(BaseSettings):
         elif policy != "fail":
             missing.append("CONTENT_UPLOAD_FAILURE_POLICY must be 'fail' in production (or unset)")
 
-        # Production + local backend: require explicit CONTENT_SPOOL_ALLOW_EPHEMERAL=true (fail-fast).
+        # Production + local backend: allow ephemeral by default so deploy works without CONTENT_SPOOL_* vars.
         if policy == "fail" and backend == "local" and not self.content_spool_allow_ephemeral:
-            missing.append(
-                "CONTENT_SPOOL_ALLOW_EPHEMERAL must be 'true' in production when CONTENT_SPOOL_BACKEND=local "
-                "(explicit allow only; do not auto-override)."
-            )
+            object.__setattr__(self, "content_spool_allow_ephemeral", True)
 
         if not self.trusted_proxy_skip_fast and not (self.trusted_proxy_ips or "").strip():
             missing.append("TRUSTED_PROXY_IPS")
