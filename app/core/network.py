@@ -3,6 +3,7 @@
 파싱 실패 시 fallback 금지, 400 Bad Request Drop (ADR: trusted-proxy-x-forwarded-for).
 """
 
+import hashlib
 import ipaddress
 import logging
 import random
@@ -44,11 +45,20 @@ def _maybe_log_resolution_sample(*, client_host: str, xff_used: bool) -> None:
     if rate <= 0:
         return
     if random.random() < rate:
-        logger.info(
-            "client_ip_resolution_sample: client_host=%s xff_used=%s",
-            client_host,
-            xff_used,
-        )
+        env = (settings.environment or "").strip().lower()
+        if env == "production":
+            host_safe = hashlib.sha256(client_host.encode()).hexdigest()[:8] if client_host else "n/a"
+            logger.info(
+                "client_ip_resolution_sample: client_host_hash=%s xff_used=%s",
+                host_safe,
+                xff_used,
+            )
+        else:
+            logger.info(
+                "client_ip_resolution_sample: client_host=%s xff_used=%s",
+                client_host,
+                xff_used,
+            )
 
 
 def warn_trusted_proxy_configuration() -> None:
@@ -91,7 +101,8 @@ def _is_private_ip(ip: str) -> bool:
         addr = ipaddress.ip_address(ip.strip())
     except ValueError:
         increment(INVALID_XFF_TOTAL)
-        logger.warning("Invalid IP in X-Forwarded-For: %s", ip[:32] + "..." if len(ip) > 32 else ip)
+        ip_safe = hashlib.sha256(ip.encode()).hexdigest()[:8] if ip else "n/a"
+        logger.warning("Invalid IP in X-Forwarded-For: ip_hash=%s len=%d", ip_safe, len(ip) if ip else 0)
         raise InvalidForwardedHeaderError("Invalid X-Forwarded-For header format") from None
     if addr.is_private or addr.is_loopback:
         return True

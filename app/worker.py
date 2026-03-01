@@ -27,3 +27,5 @@ if settings.sentry_dsn:
         logger.info("Sentry initialized for worker")
     except ImportError:
         logger.error("Sentry is enabled (SENTRY_DSN set) but sentry_sdk is missing. Install sentry-sdk.")
+    except Exception as e:
+        logger.warning("Sentry init failed (worker continues without Sentry): %s", e, exc_info=True)

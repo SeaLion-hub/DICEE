@@ -6,6 +6,8 @@ import uuid
 from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware
 
+from app.core.logging_context import set_request_context
+
 # P2: 길이·문자셋 제한. 초과/비허용 문자면 클라이언트 값 무시하고 새 UUID 사용.
 _REQUEST_ID_MAX_LEN = 128
 _REQUEST_ID_ALLOWED_PATTERN = re.compile(r"^[A-Za-z0-9._:-]+$")
@@ -28,6 +30,8 @@ class RequestIDMiddleware(BaseHTTPMiddleware):
         raw = request.headers.get("X-Request-ID")
         request_id = _sanitize_request_id(raw)
         request.state.request_id = request_id
+        endpoint = getattr(request.url, "path", "") or ""
+        set_request_context(request_id=request_id, endpoint=endpoint)
         try:
             import sentry_sdk
 

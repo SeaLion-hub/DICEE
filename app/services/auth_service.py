@@ -71,10 +71,20 @@ async def exchange_google_code(
         logger.warning("Google token exchange network error: %s", e, exc_info=True)
         raise AuthServiceUnavailableError("Google auth temporarily unavailable") from e
     if resp.status_code != 200:
+        error_code = ""
+        try:
+            data = resp.json()
+            if isinstance(data, dict):
+                error_code = data.get("error", "") or ""
+                desc = data.get("error_description", "")
+                if desc:
+                    error_code = f"{error_code}:{desc[:80]}" if error_code else desc[:80]
+        except Exception:
+            pass
         logger.warning(
-            "Google token exchange failed: status=%s body=%s",
+            "Google token exchange failed: status=%s error=%s",
             resp.status_code,
-            (resp.text[:200] if resp.text else ""),
+            error_code or "(no error code)",
         )
         raise AuthError("Invalid or expired authorization code")
 

@@ -74,7 +74,10 @@ def _auth_rate_limit_dep(
                 detail="Rate limiting is temporarily unavailable. Try again later.",
             ) from None
         if not allowed:
-            ip_hmac_val, ip_hmac_key_version = compute_ip_hmac(client_ip)
+            try:
+                ip_hmac_val, ip_hmac_key_version = compute_ip_hmac(client_ip)
+            except Exception:
+                ip_hmac_val, ip_hmac_key_version = "", "unknown"
             logger.warning(
                 "auth rate limit exceeded",
                 extra={"ip_hmac": ip_hmac_val, "ip_hmac_key_version": ip_hmac_key_version},
@@ -216,7 +219,10 @@ async def post_refresh(
             detail="Rate limiting is temporarily unavailable. Try again later.",
         ) from None
     if not allowed:
-        ip_hmac_val, ip_hmac_key_version = compute_ip_hmac(client_ip)
+        try:
+            ip_hmac_val, ip_hmac_key_version = compute_ip_hmac(client_ip)
+        except Exception:
+            ip_hmac_val, ip_hmac_key_version = "", "unknown"
         logger.warning(
             "auth rate limit exceeded",
             extra={"ip_hmac": ip_hmac_val, "ip_hmac_key_version": ip_hmac_key_version},

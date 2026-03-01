@@ -284,27 +284,16 @@ async def verify_db_connection() -> None:
             else:
                 break
 
-    try:
-        import sentry_sdk
-
-        with sentry_sdk.push_scope() as scope:
-            scope.set_tag("context", "database_connection_check")
-            scope.set_context(
-                "database",
-                {
-                    "url_set": bool((settings.db.database_url or "").strip()),
-                    "retries": retries,
-                },
-            )
-            sentry_sdk.capture_exception(last_exc)
-    except ImportError:
-        pass
-
     logger.critical(
         "Database connection failed after %d attempts: %s.",
         retries,
         last_exc,
         exc_info=True,
+        extra={
+            "context": "database_connection_check",
+            "retries": retries,
+            "url_set": bool((settings.db.database_url or "").strip()),
+        },
     )
     if settings.db.strict_startup_db_check:
         raise RuntimeError(f"Database connection failed after {retries} attempts: {last_exc}") from last_exc

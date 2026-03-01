@@ -22,6 +22,14 @@ from app.core.metrics import (
 
 logger = logging.getLogger(__name__)
 
+
+def _jti_log_safe(jti: str) -> str:
+    """jti를 로그에 남기지 않기 위해 해시 앞 8자만 반환. 추적용으로만 사용."""
+    if not (jti or "").strip():
+        return "n/a"
+    return hashlib.sha256(jti.strip().encode()).hexdigest()[:8]
+
+
 BLOCKLIST_KEY_PREFIX = "dicee:blocklist:access:"
 TRIGGER_IDEMPOTENCY_KEY_PREFIX = "dicee:trigger_idempotency:"
 TRIGGER_IDEMPOTENCY_TTL_SECONDS = 86400  # 24h
@@ -201,7 +209,12 @@ async def add_access_to_blocklist(client: RedisAsyncio | None, jti: str, ttl_sec
         await _add_access_to_blocklist_raw(client, jti, ttl_seconds)
         await _blocklist_circuit._record_success()
     except Exception as e:
-        logger.warning("Blocklist add failed (jti=%s): %s", jti, e, exc_info=True)
+        logger.warning(
+            "Blocklist add failed (jti_hash=%s): %s",
+            _jti_log_safe(jti),
+            e,
+            exc_info=True,
+        )
         await _blocklist_circuit._record_failure()
         raise BlocklistUnavailableError("Blocklist temporarily unavailable") from e
 
@@ -504,7 +517,12 @@ async def is_access_blocked(client: RedisAsyncio | None, jti: str, *, fail_close
         await _blocklist_circuit._record_success()
         return result
     except Exception as e:
-        logger.warning("Blocklist check failed (jti=%s): %s", jti, e, exc_info=True)
+        logger.warning(
+            "Blocklist check failed (jti_hash=%s): %s",
+            _jti_log_safe(jti),
+            e,
+            exc_info=True,
+        )
         await _blocklist_circuit._record_failure()
         return fail_closed
 

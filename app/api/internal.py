@@ -104,7 +104,10 @@ def _log_internal_auth_failure(
         labels={"endpoint": endpoint, "reason": reason},
     )
     client_ip = get_client_ip(request) if request else None
-    ip_hmac_val, ip_hmac_key_version = compute_ip_hmac(client_ip or "")
+    try:
+        ip_hmac_val, ip_hmac_key_version = compute_ip_hmac(client_ip or "")
+    except Exception:
+        ip_hmac_val, ip_hmac_key_version = "", "unknown"
     request_id = getattr(request.state, "request_id", None) if request else None
     extra = {
         "path": endpoint,

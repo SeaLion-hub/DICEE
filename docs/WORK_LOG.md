@@ -4,6 +4,7 @@
 
 - [작성 규칙](#작성-규칙)
 - [작성 형식](#작성-형식)
+- [2026-03-01](#2026-03-01)
 - [2026-02-28](#2026-02-28)
 - [2026-02-27](#2026-02-27)
 - [2026-02-26](#2026-02-26)
@@ -27,6 +28,11 @@
 ## 작성 형식
 
 - `- [단계 또는 영역] 무엇을 했는지 (어떤 파일/기능). 왜 또는 결과 한 줄.`
+
+---
+## 2026-03-01
+
+- [로깅·에러 전송 개선] **(P0)** app/api/internal.py, app/api/v1/auth.py: compute_ip_hmac 호출을 try/except로 감싸 실패 시 ip_hmac="", ip_hmac_key_version="unknown" fallback으로 로깅만 수행(401/429가 500으로 바뀌지 않도록). app/worker.py: Sentry init을 except Exception으로 확장, 실패 시 warning 로그 후 워커 계속 기동. **(P0 민감정보)** app/services/auth_service.py: Google 토큰 교환 실패 로그에서 resp.text 제거, status_code와 error/error_description만 기록. app/core/redis.py: Blocklist add/check 실패 로그에서 jti 대신 _jti_log_safe(jti) 해시 앞 8자만 기록. app/core/network.py: 프로덕션에서 client_ip_resolution_sample은 client_host_hash만, Invalid X-Forwarded-For 로그는 ip_hash+len만 기록. **(P1)** app/core/logging_safety.py: ProductionExceptionFilter에서 exc_info 시 메시지를 "Internal error (예외타입)"으로 완화. app/core/database.py, app/core/lifespan.py: logger.critical + Sentry capture_* 이중 전송 제거, logger.critical만 사용(LoggingIntegration으로 Sentry 전달). app/services/crawl_payload.py: Sentry 전송에 TTL 60초 디듀프(_should_send_crawl_sentry) 적용. app/core/logging_context.py 신설: contextvars로 request_id/endpoint/user_id_hash/event_code, LoggingContextFilter로 레코드 주입. app/middleware/request_id.py: set_request_context(request_id, endpoint) 호출. app/main.py: lifespan에서 LoggingContextFilter 루트 로거 등록. pytest 130 passed, 3 skipped.
 
 ---
 ## 2026-02-28

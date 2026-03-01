@@ -14,9 +14,13 @@ class ProductionExceptionFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
         if (settings.environment or "").strip().lower() != "production":
             return True
-        if getattr(record, "exc_info", None) is not None:
+        exc_info = getattr(record, "exc_info", None)
+        if exc_info is not None:
+            exc_type_name = "Unknown"
+            if exc_info and len(exc_info) >= 1 and exc_info[0] is not None:
+                exc_type_name = getattr(exc_info[0], "__name__", str(exc_info[0]))
             record.exc_info = None
             record.exc_text = None
-            record.msg = "Internal error"
+            record.msg = "Internal error (%s)" % exc_type_name
             record.args = ()
         return True

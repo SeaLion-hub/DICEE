@@ -64,23 +64,16 @@ def check_startup_pool_budget() -> None:
     if not budget_result.within_budget and budget_result.app_budget > 0:
         if settings.db.db_pool_strict_budget:
             raise RuntimeError(budget_result.message)
-        logger.critical("%s", budget_result.message)
-        try:
-            import sentry_sdk
-
-            with sentry_sdk.push_scope() as scope:
-                scope.set_tag("context", "db_capacity")
-                scope.set_context(
-                    "pool_budget",
-                    {
-                        "peak_pool_conn": budget_result.peak_pool_conn,
-                        "app_budget": budget_result.app_budget,
-                        "total_pool_conn": budget_result.total_pool_conn,
-                    },
-                )
-                sentry_sdk.capture_message(budget_result.message, level="error")
-        except ImportError:
-            pass
+        logger.critical(
+            "%s",
+            budget_result.message,
+            extra={
+                "context": "db_capacity",
+                "peak_pool_conn": budget_result.peak_pool_conn,
+                "app_budget": budget_result.app_budget,
+                "total_pool_conn": budget_result.total_pool_conn,
+            },
+        )
 
 
 def check_startup_crawler_contract() -> None:
