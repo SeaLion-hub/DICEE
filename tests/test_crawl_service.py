@@ -35,23 +35,23 @@ def test_run_crawl_job_sync_rollback_then_failed_on_commit_failure():
 
     with (
         patch(
-            "app.services.crawl_service.get_college_by_external_id_sync",
+            "app.services.crawl.failure.get_college_by_external_id_sync",
             return_value=college,
         ),
         patch(
-            "app.services.crawl_service.ensure_crawl_run_task_sync",
+            "app.services.crawl.failure.ensure_crawl_run_task_sync",
             return_value=run_id,
         ),
         patch(
-            "app.services.crawl_service.create_or_update_crawl_run_sync",
+            "app.services.crawl.failure.create_or_update_crawl_run_sync",
             return_value=MagicMock(),
         ),
         patch(
-            "app.services.crawl_service.crawl_college_sync",
+            "app.services.crawl.failure.crawl_college_sync",
             return_value=(3, []),
         ),
         patch(
-            "app.services.crawl_service.update_crawl_run_sync",
+            "app.services.crawl.failure.update_crawl_run_sync",
             return_value=MagicMock(),
         ) as mock_update,
     ):
@@ -119,6 +119,7 @@ def test_crawl_college_sync_and_async_use_same_cap_helper(monkeypatch):
     from unittest.mock import AsyncMock
 
     from app.services import crawl_service as crawl_module
+    from app.services.crawl import pipeline_sync as crawl_pipeline_sync
 
     calls: list[tuple[str, int]] = []
 
@@ -127,6 +128,7 @@ def test_crawl_college_sync_and_async_use_same_cap_helper(monkeypatch):
         return []
 
     monkeypatch.setattr(crawl_module, "_cap_links_for_run", _cap_links_for_run)
+    monkeypatch.setattr(crawl_pipeline_sync, "_cap_links_for_run", _cap_links_for_run)
 
     async def _get_links_async(_client, _url):
         return [{"url": "https://example.com/1"}]
@@ -276,6 +278,7 @@ def test_run_crawl_pipeline_async_uses_chunk_size_for_flush():
 
 def test_sync_adapter_reflects_worker_and_inflight_config(monkeypatch):
     from app.services import crawl_service as crawl_module
+    from app.services.crawl import pipeline_sync as crawl_pipeline_sync
 
     captured: dict[str, int] = {}
 
@@ -284,7 +287,7 @@ def test_sync_adapter_reflects_worker_and_inflight_config(monkeypatch):
         captured["in_flight_limit"] = kwargs["in_flight_limit"]
         return iter(())
 
-    monkeypatch.setattr(crawl_module, "_collect_payloads_sync", _fake_collect)
+    monkeypatch.setattr(crawl_pipeline_sync, "_collect_payloads_sync", _fake_collect)
     cfg = crawl_module.CrawlRuntimeConfig(
         polite_delay_seconds=1.0,
         page_timeout_seconds=30.0,
@@ -404,6 +407,7 @@ def test_async_adapter_reflects_concurrency_config(monkeypatch):
 
 def test_redis_seen_set_uses_shared_sync_client(monkeypatch):
     from app.services import crawl_service as crawl_module
+    from app.services.crawl import runtime as crawl_runtime
 
     class _FakePipe:
         def __init__(self):
@@ -437,7 +441,7 @@ def test_redis_seen_set_uses_shared_sync_client(monkeypatch):
         call_count["count"] += 1
         return fake_client
 
-    monkeypatch.setattr(crawl_module, "get_shared_sync_redis_client", _shared_client)
+    monkeypatch.setattr(crawl_runtime, "get_shared_sync_redis_client", _shared_client)
 
     seen = crawl_module._RedisSeenSet(
         uuid.UUID("00000000-0000-0000-0000-000000000001"),
@@ -453,7 +457,10 @@ def test_redis_seen_set_uses_shared_sync_client(monkeypatch):
 
 
 def test_record_crawl_failure_fallback_uses_shared_sync_client(monkeypatch):
+    from unittest.mock import MagicMock
+
     from app.services import crawl_service as crawl_module
+    from app.services.crawl import failure as crawl_failure
 
     class _FakeClient:
         def __init__(self):
@@ -463,9 +470,10 @@ def test_record_crawl_failure_fallback_uses_shared_sync_client(monkeypatch):
             self.calls.append((key, payload, ex))
 
     fake_client = _FakeClient()
-
-    monkeypatch.setattr(crawl_module.settings, "redis_url", "redis://localhost/0")
-    monkeypatch.setattr(crawl_module, "get_shared_sync_redis_client", lambda: fake_client)
+    mock_settings = MagicMock()
+    mock_settings.redis.redis_url = "redis://localhost/0"
+    monkeypatch.setattr(crawl_failure, "settings", mock_settings)
+    monkeypatch.setattr(crawl_failure, "get_shared_sync_redis_client", lambda: fake_client)
 
     crawl_module._record_crawl_failure_fallback(
         uuid.UUID("00000000-0000-0000-0000-000000000001"),
@@ -564,6 +572,7 @@ def test_collect_payloads_sync_applies_rate_limit_in_worker_thread(monkeypatch):
     import threading
 
     from app.services import crawl_service as crawl_module
+    from app.services.crawl import collect_sync as crawl_collect_sync
     from app.services.crawlers.base import ScrapeResult
 
     events: list[tuple[str, str]] = []
@@ -575,7 +584,7 @@ def test_collect_payloads_sync_applies_rate_limit_in_worker_thread(monkeypatch):
         def close(self) -> None:
             return
 
-    monkeypatch.setattr(crawl_module, "get_host_rate_limiter_sync", lambda _delay: _FakeLimiter())
+    monkeypatch.setattr(crawl_collect_sync, "get_host_rate_limiter_sync", lambda _delay: _FakeLimiter())
 
     def _scrape(_url: str):
         events.append(("scrape", threading.current_thread().name))
