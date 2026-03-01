@@ -89,6 +89,7 @@
 | [DEPLOYMENT](DEPLOYMENT.md) | Railway·Vercel·환경변수·빌드·Redis·DB. |
 | [RELEASE_GATE](RELEASE_GATE.md) | 머지/배포 전 P0·P1 체크 및 Go/No-Go 판정. |
 | [decisions/](decisions/) | ADR (Architecture Decision Record). 예: [데이터베이스 명세서 v7.0](decisions/database-spec.md). |
+| [README](README.md) | 문서 구조·진입점·reports/ 위치 안내. |
 
 ---
 

@@ -38,6 +38,18 @@ alwaysApply: true
 
 ---
 
+## App Lifecycle
+
+- startup/shutdown 이벤트 남용 금지. 공통 리소스(DB/Redis/HTTP client)는 **lifespan** 패턴과 DI로 관리한다. (가능하면 lifespan 우선.)
+
+---
+
+## Next.js
+
+- 프론트엔드(Next.js App Router) 관련 규칙은 **.cursor/rules/nextjs.mdc**를 참조한다.
+
+---
+
 ## 에러 처리 통일
 
 - **Service 레이어**에서는 **커스텀 Exception** 이나 표준 **Exception** 을 발생시킨다. `HTTPException` 을 raise 하지 마라.

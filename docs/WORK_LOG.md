@@ -1,5 +1,13 @@
 # 작업 로그 (WORK_LOG)
 
+## 월별 분리 원칙
+
+- **현재**: 단일 파일(WORK_LOG.md)에 날짜별로 기록. 목차로 연·월·일 구간 이동.
+- **원칙**: 로그가 과도하게 길어지면(예: 1년분 이상) **월별 분리**를 검토한다. 분리 시 `docs/logs/WORK_LOG_YYYY-MM.md` 형식으로 두고, 본 문서에는 "최근 N개월은 본문, 그 이전은 docs/logs/ 참고" 안내를 둔다. **이번 IA 정리에서는 파일 분리까지 수행하지 않고 원칙만 명시.**
+- **문서 이동**: 기준선·리포트(QUALITY_BASELINE, MYPY_BASELINE, auth_baseline, BENCHMARK_INSIGHTS, PLAN_REMEDIATION_68 등)는 [docs/README.md](README.md)에 정리된 대로 `docs/reports/` 이하로 이동됨. 과거 항목에 적힌 경로는 해당 시점 기준.
+
+---
+
 ## 목차
 
 - [작성 규칙](#작성-규칙)

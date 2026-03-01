@@ -48,5 +48,12 @@ htmlcov/
 # Misc
 .DS_Store
 .env
+tmp/
+
+# 벤치마크 인사이트 (참고용, 커밋 제외)
+docs/reports/BENCHMARK_INSIGHTS.md
+tmp_*/
+_tmp*/
 tmp_*.txt
+*.tmp
 storage/

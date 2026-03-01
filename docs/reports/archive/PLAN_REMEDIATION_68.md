@@ -1,6 +1,6 @@
 # 계획 평가 68/100 반영 — 보강 사항 요약
 
-**참고**: 이 문서는 과거 계획 평가(68/100) 반영용 보강 요약이며, **현재 구현 상태·할 일은 [ROADMAP_PHASES](ROADMAP_PHASES.md)·[WORK_LOG](WORK_LOG.md)를 참고**할 것.
+**참고**: 이 문서는 과거 계획 평가(68/100) 반영용 보강 요약이며, **현재 구현 상태·할 일은 [ROADMAP_PHASES](../../ROADMAP_PHASES.md)·[WORK_LOG](../../WORK_LOG.md)를 참고**할 것. 항목별 반영 여부(완료/미적용/유예)는 동일 문서에서 확인하면 추적성이 보강된다.
 
 기존 계획([.cursor/plans](.cursor/plans) 또는 동일 이름 plan)에 아래 내용을 **반드시 반영**할 것. (계획 파일이 사용자 홈에 있어 본 문서로 보강 내용을 정리함.)
 
@@ -91,4 +91,4 @@
 
 ## Go-Live Checklist (참조)
 
-베타 → 프로덕션 전환 시 **부하 테스트·통과 기준·장애 훈련** 시나리오 및 **게이트웨이 타임아웃** 정책은 [DEPLOYMENT.md — Go-Live 검증](DEPLOYMENT.md#go-live-검증-부하-테스트장애-훈련) 섹션을 따른다. 통과 기준: 오류율 &lt; 1%, Auth p95 &lt; 500ms, DB active connection &lt; App_budget × 0.7.
+베타 → 프로덕션 전환 시 **부하 테스트·통과 기준·장애 훈련** 시나리오 및 **게이트웨이 타임아웃** 정책은 [DEPLOYMENT.md — Go-Live 검증](../../DEPLOYMENT.md#go-live-검증-부하-테스트장애-훈련) 섹션을 따른다. 통과 기준: 오류율 &lt; 1%, Auth p95 &lt; 500ms, DB active connection &lt; App_budget × 0.7.

@@ -1,0 +1,37 @@
+---
+description: Next.js 14+ App Router (frontend/**/*.{ts,tsx,js,jsx}). 프론트 생성 시 활성.
+globs:
+  - "frontend/**/*.ts"
+  - "frontend/**/*.tsx"
+  - "frontend/**/*.js"
+  - "frontend/**/*.jsx"
+alwaysApply: false
+---
+
+# Next.js App Router 규칙
+
+**적용 범위**: `frontend/**/*.{ts,tsx,js,jsx}` 만. **`app/**`는 사용하지 않는다** (백엔드 Python `app/`와 충돌). `frontend/` 디렉터리가 생성된 이후에 이 규칙을 적용한다. (workflow.mdc: "프론트 생성 시 nextjs.mdc 활성")
+
+---
+
+## 버전·문법
+
+- **설치된 Next.js 버전의 공식 문서를 우선**한다. "14+ 고정 문법"이 아니라, Route Handler의 `params` 등 문법이 공식 문서에서 바뀌면(예: Promise 형태) 그에 따른다.
+
+---
+
+## Server / Client 경계
+
+- 기본은 **Server Components**. `'use client'`는 **최소 범위**에만 사용한다.
+- 브라우저 API(`window`, `localStorage`, `document`)는 **Client Component** 및 안전한 클라이언트 경계에서만 사용한다.
+- **Hydration Error·Server/Client boundary 혼선**이 가장 큰 비용을 발생시킨다. **Client 경계 시각화**: `'use client'` 컴포넌트는 **`components/client/`** 디렉터리에 두거나 파일명 **`*.client.tsx`**를 권장한다. (기존 구조가 있으면 예외 허용.)
+
+---
+
+## 데이터·라우팅·캐시
+
+- 데이터 패칭은 우선 **서버**에서 수행한다. 필요 시 스트리밍/Suspense.
+- Route Handler(`route.ts`): Web **Request/Response** 규약, HTTP 메서드 명시. 동적 세그먼트 `params`는 **공식 문서 예시**(예: Promise)를 따른다.
+- 변경(mutation) 이후 캐시 무효화는 **`revalidateTag`** / **`revalidatePath`** 를 명시적으로 사용한다.
+- 비밀 값은 **서버 전용 env**에 두고, **`NEXT_PUBLIC_`** 는 공개 가능한 값에만 사용한다.
+- 하이드레이션 불일치가 생길 수 있는 렌더링(시간/랜덤/브라우저 상태 의존)을 초기 SSR 경로에서 직접 출력하지 않는다.
