@@ -1,0 +1,4 @@
+# 기준선 grep 카운트 (Wave 0). 재시도 자동화 시 증감 확인용.
+# 명령: rg -n "AsyncCrawlerStrategy|get_crawler_async|crawl_college\(" app scripts tests
+baseline_count=10
+recorded_at=Wave0

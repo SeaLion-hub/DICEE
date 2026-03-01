@@ -273,9 +273,14 @@ def test_production_requires_state_for_google_auth(client: TestClient) -> None:
 
 
 def test_production_requires_user_id_hmac_key() -> None:
-    """Phase 6: ENVIRONMENT=production이고 필수 변수 누락 시 설정 로드 실패."""
-    with patch.dict(os.environ, {"ENVIRONMENT": "production", "USER_ID_HMAC_KEY": ""}):
+    """ENVIRONMENT=production에서 USER_ID_HMAC_KEY 누락 시 부팅 실패(ValueError). 정확한 실패 원인 검증."""
+    env = {
+        "ENVIRONMENT": "production",
+        "APP_ENTRY": "api",
+        "USER_ID_HMAC_KEY": "",
+    }
+    with patch.dict(os.environ, env, clear=False):
         from app.core.config.base import Settings
 
-        with pytest.raises(ValueError, match="Production environment requires"):
+        with pytest.raises(ValueError, match="Production environment requires USER_ID_HMAC_KEY"):
             Settings()
