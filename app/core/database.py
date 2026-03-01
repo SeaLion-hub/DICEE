@@ -36,12 +36,10 @@ class Propagation(str, Enum):
 class _DbHolder:
     engine: AsyncEngine | None = None
     async_session_maker: async_sessionmaker[AsyncSession] | None = None
+    resolved_max_connections: int | None = None
 
 
 _db_holder = _DbHolder()
-
-# verify_db_connection()에서 조회한 DB max_connections. check_pool_budget 오버라이드용.
-_resolved_max_connections: int | None = None
 
 # 프로파일 R (권장 풀 크기 참고용). 예산 검사는 settings 사용. DEPLOYMENT.md, docs/decisions/database-pool-capacity.md.
 POOL_PROFILE_R = (4, 6, 2, 0)  # (P_async, O_async, P_sync, O_sync)
@@ -152,7 +150,7 @@ def check_pool_budget(effective_max_conn: int | None) -> PoolBudgetResult:
 
 def get_resolved_max_connections() -> int | None:
     """부팅 시 DB에서 조회한 max_connections. 미조회 시 None."""
-    return _resolved_max_connections
+    return _db_holder.resolved_max_connections
 
 
 # SessionScope를 통해서만 set/reset. 직접 _session_context.set/reset 호출 금지.
@@ -218,14 +216,19 @@ def init_db() -> None:
     timeout_ms = settings.db.db_statement_timeout_ms
     connect_args["options"] = f"-c statement_timeout={timeout_ms}"
 
+    pool_kw: dict[str, Any] = {
+        "pool_pre_ping": True,
+        "pool_size": settings.db.db_pool_size_async,
+        "max_overflow": settings.db.db_pool_max_overflow_async,
+        "pool_timeout": settings.db.db_pool_timeout_async,
+        "connect_args": connect_args,
+    }
+    if settings.db.db_pool_recycle_async >= 0:
+        pool_kw["pool_recycle"] = settings.db.db_pool_recycle_async
     _db_holder.engine = create_async_engine(
         _async_database_url(raw_url),
         echo=False,
-        pool_pre_ping=True,
-        pool_size=settings.db.db_pool_size_async,
-        max_overflow=settings.db.db_pool_max_overflow_async,
-        pool_timeout=settings.db.db_pool_timeout_async,
-        connect_args=connect_args,
+        **pool_kw,
     )
     _db_holder.async_session_maker = async_sessionmaker(
         _db_holder.engine,
@@ -241,8 +244,11 @@ def override_db_for_testing(
     async_session_maker_instance: async_sessionmaker[AsyncSession] | None = None,
 ) -> None:
     """테스트용. Holder를 테스트 엔진/세션 팩토리로 교체. pytest-xdist 등 병렬 테스트 격리용."""
+    global _pool_budget_manager
     _db_holder.engine = engine
     _db_holder.async_session_maker = async_session_maker_instance
+    _db_holder.resolved_max_connections = None
+    _pool_budget_manager = None
 
 
 async def verify_db_connection() -> None:
@@ -257,7 +263,6 @@ async def verify_db_connection() -> None:
     retries = max(1, settings.db.db_connect_retries)
     interval = max(0.5, settings.db.db_connect_retry_interval_sec)
 
-    global _resolved_max_connections
     for attempt in range(1, retries + 1):
         try:
             async with maker() as session:
@@ -266,7 +271,7 @@ async def verify_db_connection() -> None:
                     result = await session.execute(text("SELECT current_setting('max_connections')::int"))
                     val = result.scalar_one_or_none()
                     if val is not None:
-                        _resolved_max_connections = int(val)
+                        _db_holder.resolved_max_connections = int(val)
                 except Exception as e:
                     logger.debug("Could not fetch max_connections: %s", e)
             return

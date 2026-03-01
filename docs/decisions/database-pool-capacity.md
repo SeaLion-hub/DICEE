@@ -6,7 +6,7 @@
 
 ## 1. 풀 설정 명시화
 
-* **결정**: Async API 풀과 Celery Sync 풀의 `pool_size`, `max_overflow`, `pool_timeout`(및 Sync의 `pool_recycle`)을 코드에 **명시**하고, 환경 변수로 오버라이드 가능하게 한다.
+* **결정**: Async API 풀과 Celery Sync 풀의 `pool_size`, `max_overflow`, `pool_timeout`(및 Sync·**Async**의 `pool_recycle`)을 코드에 **명시**하고, 환경 변수로 오버라이드 가능하게 한다. Async 풀에도 `pool_recycle`(기본 300초, `DB_POOL_RECYCLE_ASYNC`)을 두어 오래된/끊긴 연결을 주기적으로 정리하고 Hang 완화에 기여한다.
 * **이유**: SQLAlchemy 기본값에 의존하면 프로세스 수 증가 시 **총 연결 수가 예측 불가**해, DB `max_connections` 초과·풀 포화 리스크가 커진다. 명시 시 capacity planning이 가능하다.
 
 ---

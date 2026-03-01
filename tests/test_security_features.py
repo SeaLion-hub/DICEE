@@ -733,7 +733,7 @@ def test_crawl_stats_returns_503_when_client_ip_unresolved(client, monkeypatch):
 
 
 def test_logout_blocklist_unavailable_returns_503(client, monkeypatch):
-    """로그아웃 시 DB commit 후 Blocklist(Redis) 실패하면 503. DB는 이미 확정되어 재시도 시 Blocklist만 재등록."""
+    """로그아웃 시 Redis Blocklist 먼저 시도. Blocklist 실패하면 503 반환하고 DB commit은 호출되지 않음."""
     from unittest.mock import AsyncMock, MagicMock
 
     from app.api.v1.auth import get_current_user_id_and_jti
@@ -745,7 +745,6 @@ def test_logout_blocklist_unavailable_returns_503(client, monkeypatch):
 
     user_id = uuid.uuid4()
     jti = "test-jti"
-    # 이 테스트 전용 호출 로그 — 동일 요청 경로에서 commit 선행 검증용.
     session_call_log: list[str] = []
 
     async def _fake_get_current_user_id_and_jti():
@@ -780,8 +779,8 @@ def test_logout_blocklist_unavailable_returns_503(client, monkeypatch):
         assert response.status_code == 503
         data = response.json()
         assert "retry" in data.get("detail", "").lower()
-        # 트랜잭션 순서: commit이 선행된 뒤 blocklist 실패로 503. 회귀 시 commit 미호출로 로그 비어 있음.
-        assert "commit" in session_call_log, "logout must commit DB before attempting blocklist"
+        # Redis 먼저 순서: blocklist 실패 시 DB 로직(commit) 미호출.
+        assert "commit" not in session_call_log, "logout must not commit DB when blocklist fails first"
     finally:
         app.dependency_overrides.pop(get_current_user_id_and_jti, None)
         app.dependency_overrides.pop(get_redis_blocklist, None)

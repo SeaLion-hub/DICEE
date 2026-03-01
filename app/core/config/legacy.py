@@ -12,6 +12,7 @@ _LEGACY_CONFIG_FIELD_NAMES: frozenset[str] = frozenset(
         "db_pool_size_async",
         "db_pool_max_overflow_async",
         "db_pool_timeout_async",
+        "db_pool_recycle_async",
         "db_statement_timeout_ms",
         "db_pool_size_sync",
         "db_pool_max_overflow_sync",

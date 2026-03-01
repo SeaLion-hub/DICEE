@@ -48,6 +48,7 @@ class Settings(BaseSettings):
     db_pool_size_async: int = Field(4, ge=1, le=20)
     db_pool_max_overflow_async: int = Field(6, ge=0, le=20)
     db_pool_timeout_async: float = Field(5.0, ge=1.0, le=120.0)
+    db_pool_recycle_async: int = Field(300, ge=-1, le=86400)
     db_statement_timeout_ms: int = Field(30000, ge=1000, le=300000)
     db_pool_size_sync: int = Field(2, ge=1, le=10)
     db_pool_max_overflow_sync: int = Field(0, ge=0, le=5)
@@ -265,6 +266,7 @@ class Settings(BaseSettings):
                 db_pool_size_async=self.db_pool_size_async,
                 db_pool_max_overflow_async=self.db_pool_max_overflow_async,
                 db_pool_timeout_async=self.db_pool_timeout_async,
+                db_pool_recycle_async=self.db_pool_recycle_async,
                 db_statement_timeout_ms=self.db_statement_timeout_ms,
                 db_pool_size_sync=self.db_pool_size_sync,
                 db_pool_max_overflow_sync=self.db_pool_max_overflow_sync,

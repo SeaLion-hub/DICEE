@@ -45,6 +45,23 @@ def _rate_limit_headers() -> dict[str, str]:
     return {"Retry-After": str(RATE_LIMIT_RETRY_AFTER_SECONDS)}
 
 
+def _log_auth_rate_limit_exceeded(request: Request, client_ip: str) -> None:
+    """Rate limit 초과 시 IP HMAC·request_id 포함 구조화 로그. 429 발생 전 호출."""
+    try:
+        ip_hmac_val, ip_hmac_key_version = compute_ip_hmac(client_ip)
+    except Exception:
+        ip_hmac_val, ip_hmac_key_version = "", "unknown"
+    request_id = getattr(request.state, "request_id", None)
+    logger.warning(
+        "auth rate limit exceeded",
+        extra={
+            "ip_hmac": ip_hmac_val,
+            "ip_hmac_key_version": ip_hmac_key_version,
+            "request_id": request_id,
+        },
+    )
+
+
 def _auth_rate_limit_dep(
     action: str,
     max_requests_getter: Callable[[], int],
@@ -77,19 +94,7 @@ def _auth_rate_limit_dep(
                 detail="Rate limiting is temporarily unavailable. Try again later.",
             ) from None
         if not allowed:
-            try:
-                ip_hmac_val, ip_hmac_key_version = compute_ip_hmac(client_ip)
-            except Exception:
-                ip_hmac_val, ip_hmac_key_version = "", "unknown"
-            request_id = getattr(request.state, "request_id", None)
-            logger.warning(
-                "auth rate limit exceeded",
-                extra={
-                    "ip_hmac": ip_hmac_val,
-                    "ip_hmac_key_version": ip_hmac_key_version,
-                    "request_id": request_id,
-                },
-            )
+            _log_auth_rate_limit_exceeded(request, client_ip)
             raise HTTPException(
                 status_code=429,
                 detail=too_many_detail + RATE_LIMIT_429_DETAIL_SUFFIX,
@@ -309,19 +314,7 @@ async def post_refresh(
             detail="Rate limiting is temporarily unavailable. Try again later.",
         ) from None
     if not allowed:
-        try:
-            ip_hmac_val, ip_hmac_key_version = compute_ip_hmac(client_ip)
-        except Exception:
-            ip_hmac_val, ip_hmac_key_version = "", "unknown"
-        request_id = getattr(request.state, "request_id", None)
-        logger.warning(
-            "auth rate limit exceeded",
-            extra={
-                "ip_hmac": ip_hmac_val,
-                "ip_hmac_key_version": ip_hmac_key_version,
-                "request_id": request_id,
-            },
-        )
+        _log_auth_rate_limit_exceeded(request, client_ip)
         raise HTTPException(
             status_code=429,
             detail="Too many refresh requests, please try again later." + RATE_LIMIT_429_DETAIL_SUFFIX,
@@ -356,12 +349,10 @@ async def post_logout(
     redis_blocklist=Depends(get_redis_blocklist),
 ) -> None:
     """
-    로그아웃. refresh_token_version 증가 + 현재 Access Token Blocklist 등록(Redis 있을 때).
-    Authorization: Bearer <access_token> 필요. 204 No Content.
+    로그아웃. Redis Blocklist 등록(성공) 후 refresh_token_version 증가 + commit.
+    Redis 먼저 등록해 두어, DB 실패 시에도 Access는 이미 블록됨. Authorization: Bearer <access_token> 필요. 204 No Content.
     """
     user_id, jti = user_id_and_jti
-    await logout_user(session, user_id)
-    await session.commit()
     if redis_blocklist and jti and settings.jwt_access_expire_seconds > 0:
         try:
             await add_access_to_blocklist(redis_blocklist, jti, settings.jwt_access_expire_seconds)
@@ -370,3 +361,9 @@ async def post_logout(
                 status_code=503,
                 detail="Logout could not revoke token on server; please retry later.",
             ) from None
+    try:
+        await logout_user(session, user_id)
+        await session.commit()
+    except Exception:
+        await session.rollback()
+        raise

@@ -9,6 +9,7 @@ class _DatabaseConfig(NamedTuple):
     db_pool_size_async: int
     db_pool_max_overflow_async: int
     db_pool_timeout_async: float
+    db_pool_recycle_async: int
     db_statement_timeout_ms: int
     db_pool_size_sync: int
     db_pool_max_overflow_sync: int

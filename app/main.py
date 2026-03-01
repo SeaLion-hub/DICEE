@@ -52,12 +52,13 @@ async def lifespan(app: FastAPI):
     # 요청별 로그 컨텍스트(request_id, endpoint 등) 주입
     from app.core.logging_context import DevelopmentLogFilter, LoggingContextFilter
 
+    current_env = (settings.environment or "").strip().lower()
     logging.getLogger().addFilter(LoggingContextFilter())
     # development일 때 [DEV] 접두사로 로컬/운영 로그 구분
-    if (settings.environment or "").strip().lower() == "development":
+    if current_env == "development":
         logging.getLogger().addFilter(DevelopmentLogFilter())
     # 프로덕션: 예외 traceback 로그 누출 원천 차단(프레임워크 레벨)
-    if (settings.environment or "").strip().lower() == "production":
+    if current_env == "production":
         from app.core.logging_safety import ProductionExceptionFilter
 
         logging.getLogger().addFilter(ProductionExceptionFilter())
