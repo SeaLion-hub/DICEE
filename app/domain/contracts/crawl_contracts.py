@@ -9,6 +9,9 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, NotRequired, Protocol, TypedDict
 
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import Session
+
 
 class CrawlPhase(str, Enum):
     """크롤 실행 단계. 실패 시 로그/Sentry에서 구분용."""
@@ -23,8 +26,16 @@ EVENT_LIST_FETCH_FAILED = "CRAWL_LIST_FETCH_FAILED"
 EVENT_PARSE_FAILED = "CRAWL_PARSE_FAILED"
 EVENT_UPSERT_FAILED = "CRAWL_UPSERT_FAILED"
 
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import Session
+
+@dataclass(frozen=True)
+class CrawlJobFailed:
+    """크롤 작업 실패 이벤트. failure_publisher로 발행 후 컴포지트 핸들러에서 DB/Redis 처리."""
+
+    run_id: uuid.UUID
+    task_id: str
+    college_code: str
+    error_message: str
+    reason_code: str
 
 
 class LinkItem(TypedDict):

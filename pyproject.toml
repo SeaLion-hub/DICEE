@@ -40,3 +40,20 @@ ignore_missing_imports = true
 # NOTE:
 # Keep `mypy app` baseline green first. Add strictness later with per-module flags
 # (e.g. disallow_untyped_defs) instead of `strict = true` in overrides.
+
+# Import Linter: 계층 규칙 단일 소스. CI 및 test_architecture_imports에서 실행.
+[tool.importlinter]
+root_package = "app"
+
+[[tool.importlinter.contracts]]
+name = "API must not import repositories"
+type = "forbidden"
+source_modules = ["app.api"]
+forbidden_modules = ["app.repositories"]
+allow_indirect_imports = true  # 기존 AST 검사와 동일: 직접 import만 금지 (api -> deps -> repo 허용)
+
+[[tool.importlinter.contracts]]
+name = "Services must not import schemas"
+type = "forbidden"
+source_modules = ["app.services"]
+forbidden_modules = ["app.schemas"]

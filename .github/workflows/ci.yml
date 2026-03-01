@@ -66,10 +66,31 @@ jobs:
         run: alembic upgrade head
 
       - name: Pytest
-        run: pytest tests -v
+        run: pytest tests -v --cov=app --cov-report=term-missing --cov-fail-under=50
+
+      - name: pip-audit (SCA, baseline allowlist)
+        run: |
+          pip install pip-audit
+          pip-audit --desc
+        continue-on-error: true
 
       - name: Baseline summary (optional)
         run: |
           pytest tests -q --tb=no 2>&1 | tee pytest_baseline.txt || true
           echo "Pytest baseline:" >> $GITHUB_STEP_SUMMARY
           cat pytest_baseline.txt >> $GITHUB_STEP_SUMMARY || true
+
+  compose-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create minimal .env for compose
+        run: touch .env
+
+      - name: Docker Compose smoke
+        run: |
+          docker compose up -d --wait
+          docker compose ps
+          docker compose down -v

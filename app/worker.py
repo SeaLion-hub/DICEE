@@ -4,6 +4,7 @@ Celery 워커 진입점. app은 app.core.celery_app에서 로드. 태스크 발�
 """
 
 import logging
+from typing import Any, cast
 
 from app.core.config import settings
 
@@ -25,7 +26,7 @@ if settings.sentry_dsn:
             ],
             traces_sample_rate=0.1,
             environment=settings.environment,
-            before_send=before_send_scrub,
+            before_send=cast(Any, before_send_scrub),
         )
         logger.info("Sentry initialized for worker")
     except ImportError:

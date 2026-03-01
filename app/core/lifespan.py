@@ -5,6 +5,7 @@ shutdown 시 asyncio.gather(..., return_exceptions=True)로 한 리소스 타임
 
 import asyncio
 import logging
+from typing import Any, cast
 
 import httpx
 from pyjwt_key_fetcher import AsyncKeyFetcher
@@ -46,7 +47,7 @@ def init_sentry() -> None:
             ],
             traces_sample_rate=0.1,
             environment=settings.environment,
-            before_send=before_send_scrub,
+            before_send=cast(Any, before_send_scrub),
         )
     except Exception as e:
         logger.warning("Sentry init skipped: %s", e, exc_info=True)

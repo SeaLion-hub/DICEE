@@ -109,7 +109,7 @@ async def get_current_user_id(
     credentials: HTTPAuthorizationCredentials | None = Depends(security),
     redis_blocklist=Depends(get_redis_blocklist),
 ):
-    """Authorization Bearer에서 Access JWT 검증 후 user_id(UUID) 반환. Blocklist·Redis 장애 정책 적용. 인증 성공 시 user_id_hash·Sentry user 설정."""
+    """Bearer Access JWT 검증 후 user_id(UUID) 반환. Blocklist/Redis 장애 정책. 성공 시 user_id_hash·Sentry 설정."""
     import uuid as uuid_mod
 
     if not credentials:
@@ -143,7 +143,7 @@ async def get_current_user_id_and_jti(
     credentials: HTTPAuthorizationCredentials | None = Depends(security),
     redis_blocklist=Depends(get_redis_blocklist),
 ):
-    """Access JWT 검증 후 (user_id UUID, jti) 반환. 로그아웃 시 Blocklist 등록용. 인증 성공 시 user_id_hash·Sentry user 설정."""
+    """Access JWT 검증 후 (user_id UUID, jti) 반환. 로그아웃 Blocklist 등록용. 성공 시 user_id_hash·Sentry 설정."""
     import uuid as uuid_mod
 
     if not credentials:

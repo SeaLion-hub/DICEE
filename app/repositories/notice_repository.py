@@ -266,18 +266,15 @@ def _notice_upsert_set_excluded(stmt: Any) -> dict[str, Any]:
 
 
 def _keys_with_content_but_missing(
-    payloads: list[dict[str, Any]],
+    drafts: Sequence[NoticeDraft],
     key_to_id: dict[tuple[uuid.UUID, str], uuid.UUID],
 ) -> list[tuple[uuid.UUID, str]]:
-    """content_url이 있는 payload 중 key_to_id에 없는 (college_id, external_id) 목록."""
+    """content_url이 있는 draft 중 key_to_id에 없는 (college_id, external_id) 목록."""
     missing: list[tuple[uuid.UUID, str]] = []
-    for p in payloads:
-        if not p.get("content_url"):
+    for d in drafts:
+        if not d.content_url:
             continue
-        cid, eid = p.get("college_id"), p.get("external_id")
-        if cid is None or eid is None:
-            continue
-        k = (cid, eid)
+        k = (d.college_id, d.external_id)
         if k not in key_to_id:
             missing.append(k)
     return missing
@@ -297,19 +294,16 @@ def _build_missing_notice_stmt(
     )
 
 
-def _build_bulk_upsert_stmt(notices: list[dict[str, Any]]) -> tuple[Any, list[dict[str, Any]]]:
+def _build_bulk_upsert_stmt(drafts: Sequence[NoticeDraft]) -> tuple[Any, list[NoticeDraft]]:
     """
-    Bulk upsert용 Insert statement와 정렬된 notices를 반환. 데드락 방지를 위해
-    (college_id, external_id) 기준 오름차순 정렬. sync/async 실행부에서 공통 사용.
+    Bulk upsert용 Insert statement와 정렬된 drafts 반환. 데드락 방지를 위해
+    (college_id, external_id) 기준 오름차순 정렬. dict 변환은 SQL 직전에만 수행.
     """
-    # [핵심 리팩토링: 데드락 방지]
-    # 병렬 Celery 워커들이 무작위 순서로 행(Row) 잠금을 획득하여 데드락이 발생하는 것을 막기 위해,
-    # 복합 유니크 키(college_id, external_id)를 기준으로 항상 오름차순 정렬합니다.
-    sorted_notices = sorted(
-        notices,
-        key=lambda x: (str(x.get("college_id", "")), str(x.get("external_id", ""))),
+    sorted_drafts = sorted(
+        list(drafts),
+        key=lambda d: (str(d.college_id), d.external_id),
     )
-    notice_rows = [_notice_values_no_content(p) for p in sorted_notices]
+    notice_rows = [_notice_values_no_content(_draft_to_notice_dict(d)) for d in sorted_drafts]
     base = insert(Notice).values(notice_rows)
     stmt = base.on_conflict_do_update(
         index_elements=["college_id", "external_id"],
@@ -317,7 +311,7 @@ def _build_bulk_upsert_stmt(notices: list[dict[str, Any]]) -> tuple[Any, list[di
         set_=_notice_upsert_set_excluded(base),
         where=Notice.content_hash.is_distinct_from(base.excluded.content_hash),
     ).returning(Notice.id, Notice.college_id, Notice.external_id)
-    return stmt, sorted_notices
+    return stmt, sorted_drafts
 
 
 def _build_upsert_stmt_for_rows(notice_rows: list[dict[str, Any]]) -> Any:
@@ -332,33 +326,28 @@ def _build_upsert_stmt_for_rows(notice_rows: list[dict[str, Any]]) -> Any:
 
 
 def _build_notice_contents_upsert_payloads(
-    payloads: list[dict[str, Any]],
+    drafts: Sequence[NoticeDraft],
     key_to_id: dict[tuple[uuid.UUID, str], uuid.UUID],
 ) -> list[dict[str, Any]]:
-    """payloads와 key_to_id로 notice_contents upsert용 to_insert 리스트 구성. sync/async 공통."""
+    """drafts와 key_to_id로 notice_contents upsert용 to_insert 리스트 구성(DB insert용 dict만). sync/async 공통."""
     to_insert: list[dict[str, Any]] = []
-    for p in payloads:
-        content_url = p.get("content_url")
-        if not content_url:
+    for d in drafts:
+        if not d.content_url:
             continue
-        cid = p.get("college_id")
-        eid = p.get("external_id")
-        if cid is None or eid is None:
-            continue
-        nid = key_to_id.get((cid, eid))
+        nid = key_to_id.get((d.college_id, d.external_id))
         if nid is None:
             continue
-        to_insert.append({"notice_id": nid, "content_url": content_url})
+        to_insert.append({"notice_id": nid, "content_url": d.content_url})
     return to_insert
 
 
 async def _fill_key_to_id_from_notices(
     session: AsyncSession,
-    payloads: list[dict[str, Any]],
+    drafts: Sequence[NoticeDraft],
     key_to_id: dict[tuple[uuid.UUID, str], uuid.UUID],
 ) -> None:
     """RETURNING에 없는(동일 content_hash) 행의 notice_id를 조회해 key_to_id 보완. 본문 백필 가능."""
-    missing = _keys_with_content_but_missing(payloads, key_to_id)
+    missing = _keys_with_content_but_missing(drafts, key_to_id)
     if not missing:
         return
     stmt = _build_missing_notice_stmt(missing)
@@ -370,11 +359,11 @@ async def _fill_key_to_id_from_notices(
 
 def _fill_key_to_id_from_notices_sync(
     session: Session,
-    payloads: list[dict[str, Any]],
+    drafts: Sequence[NoticeDraft],
     key_to_id: dict[tuple[uuid.UUID, str], uuid.UUID],
 ) -> None:
     """동기: RETURNING에 없는 행의 notice_id 조회해 key_to_id 보완."""
-    missing = _keys_with_content_but_missing(payloads, key_to_id)
+    missing = _keys_with_content_but_missing(drafts, key_to_id)
     if not missing:
         return
     stmt = _build_missing_notice_stmt(missing)
@@ -390,21 +379,20 @@ async def upsert_notices_bulk(
 ) -> list[uuid.UUID]:
     """
     여러 공지를 한 트랜잭션으로 bulk upsert. 500행 단위 배치로 execute하여 락/WAL 부담 완화.
-    payload에 content_url이 있으면 notice_contents도 upsert.
+    content_url이 있으면 notice_contents도 upsert. 내부 전달은 NoticeDraft 유지, DB 직전에만 dict 변환.
     content_hash가 실제로 변한 행만 업데이트하고, RETURNING id로 신규/변경 공지 ID만 반환 (AI 큐 대상).
     """
     if not notices:
         return []
-    notices_dicts = [_draft_to_notice_dict(d) for d in notices]
-    sorted_notices = sorted(
-        notices_dicts,
-        key=lambda x: (str(x.get("college_id", "")), str(x.get("external_id", ""))),
+    sorted_drafts = sorted(
+        list(notices),
+        key=lambda d: (str(d.college_id), d.external_id),
     )
     key_to_id: dict[tuple[uuid.UUID, str], uuid.UUID] = {}
     ids: list[uuid.UUID] = []
-    for i in range(0, len(sorted_notices), BULK_UPSERT_BATCH_SIZE):
-        batch = sorted_notices[i : i + BULK_UPSERT_BATCH_SIZE]
-        notice_rows = [_notice_values_no_content(p) for p in batch]
+    for i in range(0, len(sorted_drafts), BULK_UPSERT_BATCH_SIZE):
+        batch = sorted_drafts[i : i + BULK_UPSERT_BATCH_SIZE]
+        notice_rows = [_notice_values_no_content(_draft_to_notice_dict(d)) for d in batch]
         stmt = _build_upsert_stmt_for_rows(notice_rows)
         result = await session.execute(stmt)
         for row in result.all():
@@ -412,8 +400,8 @@ async def upsert_notices_bulk(
             key_to_id[(cid, eid)] = nid
             ids.append(nid)
         await session.flush()
-    await _fill_key_to_id_from_notices(session, sorted_notices, key_to_id)
-    await _upsert_notice_contents_bulk_from_payloads(session, sorted_notices, key_to_id)
+    await _fill_key_to_id_from_notices(session, sorted_drafts, key_to_id)
+    await _upsert_notice_contents_bulk_from_drafts(session, sorted_drafts, key_to_id)
     return ids
 
 
@@ -423,21 +411,20 @@ def upsert_notices_bulk_sync(
 ) -> list[uuid.UUID]:
     """
     동기 bulk upsert (Celery 워커용). 500행 단위 배치로 execute하여 락/WAL 부담 완화.
-    payload에 content_url이 있으면 notice_contents도 upsert.
+    content_url이 있으면 notice_contents도 upsert. 내부 전달은 NoticeDraft 유지, DB 직전에만 dict 변환.
     content_hash가 실제로 변한 행만 업데이트, RETURNING id로 신규/변경 공지 ID만 반환.
     """
     if not notices:
         return []
-    notices_dicts = [_draft_to_notice_dict(d) for d in notices]
-    sorted_notices = sorted(
-        notices_dicts,
-        key=lambda x: (str(x.get("college_id", "")), str(x.get("external_id", ""))),
+    sorted_drafts = sorted(
+        list(notices),
+        key=lambda d: (str(d.college_id), d.external_id),
     )
     key_to_id: dict[tuple[uuid.UUID, str], uuid.UUID] = {}
     ids: list[uuid.UUID] = []
-    for i in range(0, len(sorted_notices), BULK_UPSERT_BATCH_SIZE):
-        batch = sorted_notices[i : i + BULK_UPSERT_BATCH_SIZE]
-        notice_rows = [_notice_values_no_content(p) for p in batch]
+    for i in range(0, len(sorted_drafts), BULK_UPSERT_BATCH_SIZE):
+        batch = sorted_drafts[i : i + BULK_UPSERT_BATCH_SIZE]
+        notice_rows = [_notice_values_no_content(_draft_to_notice_dict(d)) for d in batch]
         stmt = _build_upsert_stmt_for_rows(notice_rows)
         result = session.execute(stmt)
         for row in result.all():
@@ -445,18 +432,18 @@ def upsert_notices_bulk_sync(
             key_to_id[(cid, eid)] = nid
             ids.append(nid)
         session.flush()
-    _fill_key_to_id_from_notices_sync(session, sorted_notices, key_to_id)
-    _upsert_notice_contents_bulk_from_payloads_sync(session, sorted_notices, key_to_id)
+    _fill_key_to_id_from_notices_sync(session, sorted_drafts, key_to_id)
+    _upsert_notice_contents_bulk_from_drafts_sync(session, sorted_drafts, key_to_id)
     return ids
 
 
-def _upsert_notice_contents_bulk_from_payloads_sync(
+def _upsert_notice_contents_bulk_from_drafts_sync(
     session: Session,
-    payloads: list[dict[str, Any]],
+    drafts: Sequence[NoticeDraft],
     key_to_id: dict[tuple[uuid.UUID, str], uuid.UUID],
 ) -> None:
-    """payloads와 key_to_id로 notice_contents bulk upsert (동기). notice_id 순 정렬로 락 순서 통일."""
-    to_insert = _build_notice_contents_upsert_payloads(payloads, key_to_id)
+    """drafts와 key_to_id로 notice_contents bulk upsert (동기). notice_id 순 정렬로 락 순서 통일."""
+    to_insert = _build_notice_contents_upsert_payloads(drafts, key_to_id)
     if not to_insert:
         return
     to_insert = sorted(to_insert, key=lambda x: x["notice_id"])
@@ -469,13 +456,13 @@ def _upsert_notice_contents_bulk_from_payloads_sync(
     session.flush()
 
 
-async def _upsert_notice_contents_bulk_from_payloads(
+async def _upsert_notice_contents_bulk_from_drafts(
     session: AsyncSession,
-    payloads: list[dict[str, Any]],
+    drafts: Sequence[NoticeDraft],
     key_to_id: dict[tuple[uuid.UUID, str], uuid.UUID],
 ) -> None:
-    """payloads와 key_to_id로 notice_contents bulk upsert (비동기). notice_id 순 정렬로 락 순서 통일."""
-    to_insert = _build_notice_contents_upsert_payloads(payloads, key_to_id)
+    """drafts와 key_to_id로 notice_contents bulk upsert (비동기). notice_id 순 정렬로 락 순서 통일."""
+    to_insert = _build_notice_contents_upsert_payloads(drafts, key_to_id)
     if not to_insert:
         return
     to_insert = sorted(to_insert, key=lambda x: x["notice_id"])

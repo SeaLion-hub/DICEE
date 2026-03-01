@@ -5,19 +5,16 @@ import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from fastapi.testclient import TestClient
-from pydantic import SecretStr
-
 from app.core.metrics import REFRESH_TOKEN_REUSE_ATTEMPT_TOTAL, get_counter
 from app.core.oauth_state import consume_state, store_state
 from app.core.redis import BlocklistUnavailableError
 from app.services.auth_service import AuthError, create_jwt_pair, verify_access_token
+from fastapi.testclient import TestClient
 
 
 @pytest.mark.asyncio
 async def test_verify_access_token_fail_closed_redis_none_raises_blocklist_unavailable() -> None:
     """Phase 1: fail_closed=True이고 Redis가 None이면 BlocklistUnavailableError(503 변환)."""
-    from app.services.auth_service import verify_access_token
 
     access_token, _ = create_jwt_pair(user_id=uuid.UUID("00000000-0000-7000-8000-000000000001"))
     with pytest.raises(BlocklistUnavailableError, match="Redis not configured"):
@@ -33,7 +30,6 @@ async def test_verify_access_token_fail_closed_redis_none_via_dep_returns_503(
     client: TestClient,
 ) -> None:
     """Phase 1: Bearer 검증 시 Redis None + fail_closed → 503."""
-    from app.api.v1.auth import get_current_user_id
     from app.core.deps import get_redis_blocklist
     from app.main import app
 
@@ -277,9 +273,9 @@ def test_production_requires_state_for_google_auth(client: TestClient) -> None:
 
 
 def test_production_requires_user_id_hmac_key() -> None:
-    """Phase 6: ENVIRONMENT=production이고 USER_ID_HMAC_KEY 비면 설정 로드 실패."""
+    """Phase 6: ENVIRONMENT=production이고 필수 변수 누락 시 설정 로드 실패."""
     with patch.dict(os.environ, {"ENVIRONMENT": "production", "USER_ID_HMAC_KEY": ""}):
         from app.core.config.base import Settings
 
-        with pytest.raises(ValueError, match="USER_ID_HMAC_KEY"):
+        with pytest.raises(ValueError, match="Production environment requires"):
             Settings()

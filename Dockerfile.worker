@@ -1,0 +1,17 @@
+# DICEE Celery worker. Same base as API; add Playwright deps here if crawlers need it.
+# See docs/DEPLOYMENT.md.
+
+FROM python:3.11-slim
+
+WORKDIR /app
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    APP_ENTRY=celery
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY . .
+
+CMD ["celery", "-A", "app.core.celery_app:app", "worker", "-l", "info", "-O", "fair", "-Q", "critical,crawl,ai", "--concurrency=1"]

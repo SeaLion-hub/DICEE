@@ -50,7 +50,7 @@ from app.repositories.notice_repository import (
     update_ai_result_sync,
     update_notice_content_url_sync,
 )
-from app.services.crawl_service import run_crawl_job_sync
+from app.services.crawl_service import handle_crawl_failure_composite, run_crawl_job_sync
 
 logger = logging.getLogger(__name__)
 
@@ -152,7 +152,13 @@ def crawl_college_task(
                     )
 
         with get_sync_session() as session:
-            count, _ = run_crawl_job_sync(session, college_code, task_id, on_chunk)
+            count, _ = run_crawl_job_sync(
+                session,
+                college_code,
+                task_id,
+                on_chunk,
+                failure_publisher=lambda ev: handle_crawl_failure_composite(session, ev),
+            )
         increment(CRAWL_SUCCESS_TOTAL, 1, labels=labels)
         msg = (
             f"Crawling {college_code} completed. Upserted {count} notices, "

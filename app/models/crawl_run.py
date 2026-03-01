@@ -37,3 +37,6 @@ class CrawlRun(Base):
     status: Mapped[str] = mapped_column(String(32), nullable=False)  # running | success | failed
     notices_upserted: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # 진행률·체크포인트: 청크 upsert와 동일 트랜잭션 커밋에 갱신. Resume는 별도 설계.
+    processed_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    checkpointed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

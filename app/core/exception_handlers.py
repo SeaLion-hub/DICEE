@@ -1,4 +1,4 @@
-"""전역 예외 핸들러. 공통 인터페이스: (request, exc) -> JSONResponse, 응답 스키마 { "detail", "code", "errors"?, "request_id"? }."""
+"""전역 예외 핸들러. (request, exc) -> JSONResponse. 응답 스키마: detail, code, errors?, request_id?."""
 
 import asyncio
 import json
@@ -26,7 +26,7 @@ def _normalize_detail(detail: Any) -> str:
     """HTTPException.detail을 응답 body용 문자열로 통일. 클라이언트는 항상 문자열 detail을 받음."""
     if isinstance(detail, str):
         return detail
-    if isinstance(detail, (dict, list)):
+    if isinstance(detail, dict | list):
         try:
             return json.dumps(detail, ensure_ascii=False)
         except (TypeError, ValueError):
@@ -57,7 +57,7 @@ async def validation_exception_handler(request: Request, exc: Exception) -> JSON
         detail="Validation error",
         code="VALIDATION_ERROR",
         request_id=request_id,
-        errors=exc_c.errors(),
+        errors=list(exc_c.errors()),
     )
     return JSONResponse(status_code=422, content=content)
 

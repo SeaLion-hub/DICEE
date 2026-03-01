@@ -4,7 +4,6 @@ from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
-
 from app.repositories.notice_repository import (
     _decode_cursor,
     _encode_cursor,

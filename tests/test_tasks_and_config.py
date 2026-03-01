@@ -269,6 +269,7 @@ def test_production_local_spool_allows_ephemeral_override():
             "CONTENT_UPLOAD_FAILURE_POLICY": "fail",
             "CONTENT_SPOOL_BACKEND": "local",
             "CONTENT_SPOOL_ALLOW_EPHEMERAL": "true",
+            "REDIS_BLOCKLIST_FAIL_CLOSED": "true",
         },
         clear=False,
     ):

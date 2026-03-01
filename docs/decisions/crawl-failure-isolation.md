@@ -15,4 +15,4 @@
 
 ## 적용 위치
 
-- `app/services/crawl_service.py`: `run_crawl_job_sync` except 블록, `_record_crawl_failure_fallback`.
+- `app/services/crawl_service.py`: `run_crawl_job_sync`는 예외 시 `failure_publisher(CrawlJobFailed)`만 호출(명시적 주입, 전역 없음). 실제 DB/Redis 처리는 `handle_crawl_failure_composite(session, event)`에서 순서 보장(동일 세션 우선 → 실패 시 `_record_crawl_failure_fallback`). `app/services/tasks.py`에서 `failure_publisher=lambda ev: handle_crawl_failure_composite(session, ev)`로 주입.

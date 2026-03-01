@@ -74,6 +74,8 @@ def create_or_update_crawl_run_sync(
         existing.notices_upserted = 0
         existing.finished_at = None
         existing.error_message = None
+        existing.processed_count = 0
+        existing.checkpointed_at = None
         session.flush()
         session.refresh(existing)
         return existing
@@ -85,6 +87,8 @@ def create_or_update_crawl_run_sync(
         notices_upserted=0,
         finished_at=None,
         error_message=None,
+        processed_count=0,
+        checkpointed_at=None,
     )
     session.add(run)
     session.flush()
@@ -100,6 +104,8 @@ def update_crawl_run_sync(
     status: str | None = None,
     notices_upserted: int | None = None,
     error_message: str | None = None,
+    processed_count: int | None = None,
+    checkpointed_at: datetime | None = None,
 ) -> CrawlRun | None:
     """
     run_id로 crawl_runs 1건 갱신 (동기, 워커용).
@@ -118,9 +124,31 @@ def update_crawl_run_sync(
         row.notices_upserted = notices_upserted
     if error_message is not None:
         row.error_message = error_message
+    if processed_count is not None:
+        row.processed_count = processed_count
+    if checkpointed_at is not None:
+        row.checkpointed_at = checkpointed_at
     session.flush()
     session.refresh(row)
     return row
+
+
+def update_crawl_run_checkpoint_sync(
+    session: Session,
+    run_id: uuid.UUID,
+    processed_count: int,
+    checkpointed_at: datetime,
+) -> CrawlRun | None:
+    """
+    run_id의 체크포인트만 갱신. 청크 upsert와 동일 트랜잭션·같은 세션에서 호출해
+    진행률과 실데이터를 한 커밋에 묶을 때 사용.
+    """
+    return update_crawl_run_sync(
+        session,
+        run_id,
+        processed_count=processed_count,
+        checkpointed_at=checkpointed_at,
+    )
 
 
 def close_stale_running_runs_sync(

@@ -57,6 +57,7 @@ from app.domain.contracts.crawl_contracts import (
     EVENT_LIST_FETCH_FAILED,
     EVENT_PARSE_FAILED,
     EVENT_UPSERT_FAILED,
+    CrawlJobFailed,
     CrawlLogContext,
     CrawlPhase,
     LinkItem,
@@ -71,6 +72,7 @@ from app.repositories.college_repository import (
 from app.repositories.crawl_run_repository import (
     create_or_update_crawl_run_sync,
     ensure_crawl_run_task_sync,
+    update_crawl_run_checkpoint_sync,
     update_crawl_run_sync,
 )
 from app.repositories.notice_repository import (
@@ -890,16 +892,26 @@ def _finalize_chunk_sync(
     *,
     on_chunk_processed: Callable[[list[uuid.UUID]], None] | None,
     notice_ids_to_process: list[uuid.UUID],
+    run_id: uuid.UUID | None = None,
+    total_processed_before_chunk: int = 0,
 ) -> int:
     ids = adapter.upsert_chunk(session, chunk)
+    n = len(ids)
     chunk.clear()
+    if run_id is not None:
+        update_crawl_run_checkpoint_sync(
+            session,
+            run_id,
+            processed_count=total_processed_before_chunk + n,
+            checkpointed_at=datetime.now(UTC),
+        )
     if on_chunk_processed is not None:
         session.commit()
         session.expunge_all()
         on_chunk_processed(ids)
     else:
         notice_ids_to_process.extend(ids)
-    return len(ids)
+    return n
 
 
 def _finalize_chunk_sync_with_phase_log(
@@ -910,9 +922,11 @@ def _finalize_chunk_sync_with_phase_log(
     *,
     on_chunk_processed: Callable[[list[uuid.UUID]], None] | None,
     notice_ids_to_process: list[uuid.UUID],
+    run_id: uuid.UUID | None = None,
+    total_processed_before_chunk: int = 0,
 ) -> int:
     """청크 upsert 실행. 실패 시 event_code=EVENT_UPSERT_FAILED, phase=upsert 로그 후 재발생.
-    메트릭: chunk_size·elapsed_sec 로깅."""
+    메트릭: chunk_size·elapsed_sec 로깅. run_id 있으면 체크포인트를 같은 트랜잭션에 갱신."""
     import time
 
     chunk_size = len(chunk)
@@ -924,6 +938,8 @@ def _finalize_chunk_sync_with_phase_log(
             chunk,
             on_chunk_processed=on_chunk_processed,
             notice_ids_to_process=notice_ids_to_process,
+            run_id=run_id,
+            total_processed_before_chunk=total_processed_before_chunk,
         )
         elapsed = time.perf_counter() - t0
         logger.debug(
@@ -1017,6 +1033,8 @@ def _run_crawl_pipeline_sync(
                         ctx,
                         on_chunk_processed=on_chunk_processed,
                         notice_ids_to_process=notice_ids_to_process,
+                        run_id=run_id,
+                        total_processed_before_chunk=total_upserted,
                     )
             if chunk:
                 total_upserted += _finalize_chunk_sync_with_phase_log(
@@ -1026,6 +1044,8 @@ def _run_crawl_pipeline_sync(
                     ctx,
                     on_chunk_processed=on_chunk_processed,
                     notice_ids_to_process=notice_ids_to_process,
+                    run_id=run_id,
+                    total_processed_before_chunk=total_upserted,
                 )
         except Exception as e:
             from app.core.logging_context import set_request_context
@@ -1145,11 +1165,48 @@ def _record_crawl_failure_fallback(
         )
 
 
+def handle_crawl_failure_composite(session: Session, event: CrawlJobFailed) -> None:
+    """
+    단일 컴포지트 핸들러: DB FAILED 기록 → 실패 시 Redis fallback.
+    docs/decisions/crawl-failure-isolation.md 시맨틱 1:1 (동일 세션 우선 → 실패 시 Redis 격리).
+    """
+    try:
+        update_crawl_run_sync(
+            session,
+            event.run_id,
+            finished_at=datetime.now(UTC),
+            status=CrawlRunStatus.FAILED.value,
+            error_message=event.error_message,
+        )
+        session.commit()
+    except Exception as record_err:
+        logger.warning(
+            "Failed to record crawl run FAILED in DB (run_id=%s): %s",
+            event.run_id,
+            record_err,
+            exc_info=True,
+        )
+        _record_crawl_failure_fallback(
+            event.run_id,
+            event.task_id,
+            event.college_code,
+            event.error_message,
+            reason_code=event.reason_code,
+        )
+
+
+def _noop_failure_publisher(_event: CrawlJobFailed) -> None:
+    """테스트용 no-op 발행자. 전역 상태 없이 failure_publisher 생략 시 사용."""
+    pass
+
+
 def run_crawl_job_sync(
     session: Session,
     college_code: str,
     task_id: str,
     on_chunk_processed: Callable[[list[uuid.UUID]], None],
+    *,
+    failure_publisher: Callable[[CrawlJobFailed], None] | None = None,
 ) -> tuple[int, int]:
     """
     크롤 작업 한 건 실행 (college 조회 + crawl_run 생성/갱신 + crawl_college_sync).
@@ -1185,29 +1242,18 @@ def run_crawl_job_sync(
         session.commit()
         return (count, count)
     except Exception as e:
-        # 실패한 트랜잭션 초기화 (PendingRollbackError 방지)
         session.rollback()
         error_msg = (str(e))[:2000]
-        # 1) 동일 세션으로 FAILED 기록 시도 (DB 장애가 아닐 때 성공)
-        try:
-            update_crawl_run_sync(
-                session,
-                run_id,
-                finished_at=datetime.now(UTC),
-                status=CrawlRunStatus.FAILED.value,
-                error_message=error_msg,
-            )
-            session.commit()
-        except Exception as record_err:
-            # 2) 동일 세션도 실패(DB 장애·풀 고갈) 시 Redis 등 외부 저장소에 실패 컨텍스트 격리(중앙 추적용)
-            logger.warning(
-                "Failed to record crawl run FAILED in DB (run_id=%s): %s",
-                run_id,
-                record_err,
-                exc_info=True,
-            )
-            from app.core.logging_context import get_request_context
+        from app.core.logging_context import get_request_context
 
-            reason = (get_request_context().get("event_code") or "").strip() or "unknown"
-            _record_crawl_failure_fallback(run_id, task_id, college_code, error_msg, reason_code=reason)
+        reason = (get_request_context().get("event_code") or "").strip() or "unknown"
+        event = CrawlJobFailed(
+            run_id=run_id,
+            task_id=task_id,
+            college_code=college_code,
+            error_message=error_msg,
+            reason_code=reason,
+        )
+        publisher = failure_publisher if failure_publisher is not None else _noop_failure_publisher
+        publisher(event)
         raise

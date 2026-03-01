@@ -1,6 +1,11 @@
-"""Alembic 환경. 마이그레이션에만 psycopg(psycopg3) 동기 드라이버 사용. Windows+asyncpg 이슈·psycopg2 UnicodeDecodeError 마스킹 회피."""
+"""Alembic 환경. 마이그레이션에만 psycopg(psycopg3) 동기 드라이버 사용. Windows+asyncpg 이슈·psycopg2 UnicodeDecodeError 마스킹 회피.
+
+Single migrator: release/migrate job must run one at a time. PostgreSQL advisory lock (ALEMBIC_ADVISORY_LOCK_ID)
+prevents concurrent alembic upgrade head from multiple release processes.
+"""
 
 import os
+import sys
 import time
 # PostgreSQL 클라이언트 인코딩 강제 (서버 응답 UTF-8 디코딩)
 os.environ.setdefault("PGCLIENTENCODING", "UTF8")
@@ -13,8 +18,11 @@ from urllib.parse import unquote, urlparse
 import psycopg
 
 from alembic import context
-from sqlalchemy import create_engine, pool
+from sqlalchemy import create_engine, pool, text
 from sqlalchemy.exc import OperationalError
+
+# Advisory lock ID for single migrator. Only one process can hold this lock; prevents duplicate migration runs.
+ALEMBIC_ADVISORY_LOCK_ID = int(os.environ.get("ALEMBIC_ADVISORY_LOCK_ID", "1296183890"))
 
 from app.core.config import settings
 from app.models import Base
@@ -109,6 +117,26 @@ def run_migrations_online() -> None:
                 creator=lambda: psycopg.connect(**conn_args),
             )
             with connectable.connect() as connection:
+                # Serialize migration: only one process may run alembic upgrade at a time.
+                lock_acquired = connection.execute(
+                    text("SELECT pg_try_advisory_lock(:lid)"), {"lid": ALEMBIC_ADVISORY_LOCK_ID}
+                ).scalar()
+                if not lock_acquired:
+                    lock_wait_sec = float(os.environ.get("ALEMBIC_LOCK_WAIT_SEC", "30"))
+                    lock_retries = int(os.environ.get("ALEMBIC_LOCK_RETRIES", "6"))
+                    for _ in range(lock_retries):
+                        time.sleep(lock_wait_sec)
+                        lock_acquired = connection.execute(
+                            text("SELECT pg_try_advisory_lock(:lid)"), {"lid": ALEMBIC_ADVISORY_LOCK_ID}
+                        ).scalar()
+                        if lock_acquired:
+                            break
+                    if not lock_acquired:
+                        sys.stderr.write(
+                            "[alembic] Could not acquire advisory lock; another migrator may be running. Exit.\n"
+                        )
+                        sys.stderr.flush()
+                        sys.exit(1)
                 context.configure(connection=connection, target_metadata=target_metadata)
                 with context.begin_transaction():
                     context.run_migrations()

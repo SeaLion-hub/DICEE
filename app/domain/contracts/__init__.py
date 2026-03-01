@@ -2,6 +2,7 @@
 
 from app.domain.contracts.crawl_contracts import (
     AsyncNoticeRepositoryPort,
+    CrawlJobFailed,
     CrawlRunRow,
     CrawlStatsQueryPort,
     NoticeDraft,
@@ -18,6 +19,7 @@ from app.domain.contracts.user_contracts import UserRecord, UserRepositoryPort, 
 __all__ = [
     "AsyncNoticeRepositoryPort",
     "CrawlDispatcherPort",
+    "CrawlJobFailed",
     "CrawlRunRow",
     "CrawlStatsQueryPort",
     "NoticeDraft",

@@ -34,7 +34,7 @@ async def consume_state(client: RedisAsyncio | None, state: str) -> bool:
     key = f"{OAUTH_STATE_KEY_PREFIX}{state.strip()}"
     try:
         deleted = await client.delete(key)
-        return deleted > 0
+        return bool(deleted > 0)
     except Exception:
         logger.warning("OAuth state consume failed", exc_info=True)
         return False

@@ -10,10 +10,11 @@ from app.domain.contracts.crawl_contracts import NoticeDraft
 
 def test_run_crawl_job_sync_rollback_then_failed_on_commit_failure():
     """
-    크롤 성공 후 session.commit() 실패 시 except 진입 → rollback → 동일 세션으로 FAILED 기록 시도 → 예외 재발생.
-    PendingRollbackError 방지 및 FAILED 기록은 동일 세션 우선(DB 장애 시 Redis fallback은 별도 테스트).
+    크롤 성공 후 session.commit() 실패 시 except 진입 → rollback → failure_publisher(컴포지트) 호출 →
+    동일 세션으로 FAILED 기록 시도 → 예외 재발생.
+    PendingRollbackError 방지 및 FAILED 기록은 컴포지트 핸들러(동일 세션 우선 → Redis fallback)로 수행.
     """
-    from app.services.crawl_service import run_crawl_job_sync
+    from app.services.crawl_service import handle_crawl_failure_composite, run_crawl_job_sync
 
     run_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
     college = MagicMock()
@@ -28,7 +29,7 @@ def test_run_crawl_job_sync_rollback_then_failed_on_commit_failure():
             return None  # 첫 번째 commit (create_or_update 후) 성공
         if commit_call_count[0] == 2:
             raise RuntimeError("simulated DB error on success-path commit")
-        return None  # except 내 FAILED 기록 후 commit(3번째)은 성공
+        return None  # 컴포지트 핸들러 내 FAILED 기록 후 commit(3번째)은 성공
 
     session.commit.side_effect = commit_side_effect
 
@@ -60,18 +61,16 @@ def test_run_crawl_job_sync_rollback_then_failed_on_commit_failure():
                 "engineering",
                 "task-123",
                 on_chunk_processed=lambda ids: None,
+                failure_publisher=lambda ev: handle_crawl_failure_composite(session, ev),
             )
 
-        # 실패한 트랜잭션 초기화
         session.rollback.assert_called()
-        # FAILED 기록은 동일 세션(session)으로 1회 호출
         failed_calls = [c for c in mock_update.call_args_list if c.kwargs.get("status") == CrawlRunStatus.FAILED.value]
         assert len(failed_calls) == 1
         assert (
             failed_calls[0].kwargs.get("error_message", "")[:50] == ("simulated DB error on success-path commit"[:50])
         )
         assert failed_calls[0].args[0] is session
-        # except 내 FAILED 기록 후 commit 호출됨
         assert session.commit.call_count >= 2
 
 
@@ -737,9 +736,13 @@ def test_retry_policy_429_retried(monkeypatch):
 
 
 def test_process_scrape_result_parser_threshold_aborts():
-    """파서 실패 임계치(비율 또는 연속) 초과 시 CrawlThresholdExceeded 반환(대학 단위 중단)."""
+    """파서 실패 임계치 초과 시 CrawlThresholdExceeded 반환(대학 단위 중단)."""
     from app.domain.contracts.crawl_contracts import CrawlLogContext
-    from app.services.crawl_policy import CrawlErrorTracker, CrawlThresholdExceeded, PARSER_CONSECUTIVE_FAILURES_THRESHOLD
+    from app.services.crawl_policy import (
+        PARSER_CONSECUTIVE_FAILURES_THRESHOLD,
+        CrawlErrorTracker,
+        CrawlThresholdExceeded,
+    )
     from app.services.crawl_service import _process_scrape_result
 
     college_id = uuid.UUID("00000000-0000-0000-0000-000000000001")

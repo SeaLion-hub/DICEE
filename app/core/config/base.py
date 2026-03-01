@@ -331,8 +331,8 @@ class Settings(BaseSettings):
             for indicator in production_indicators:
                 if indicator in host:
                     raise ValueError(
-                        f"ENVIRONMENT=development but DATABASE_URL host looks like production ({indicator!r} in {host!r}). "
-                        "Use a local DB or set ENVIRONMENT=production for production DB."
+                        f"ENVIRONMENT=development but DATABASE_URL host looks like production "
+                        f"({indicator!r} in {host!r}). Use a local DB or set ENVIRONMENT=production."
                     )
         except ValueError:
             raise
@@ -426,6 +426,10 @@ class Settings(BaseSettings):
 
         if not self.trusted_proxy_skip_fast and not (self.trusted_proxy_ips or "").strip():
             missing.append("TRUSTED_PROXY_IPS")
+
+        # API only: production must use fail-closed for Redis blocklist (JWT invalidation).
+        if self.app_entry == "api" and not self.redis_blocklist_fail_closed:
+            missing.append("REDIS_BLOCKLIST_FAIL_CLOSED must be true in production when APP_ENTRY=api")
 
         has_google_client = bool(
             (self.google_client_id or "").strip() or (self.google_client_secret.get_secret_value() or "").strip()
