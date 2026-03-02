@@ -1,13 +1,12 @@
 # DICEE 백엔드 배포용 최소 의존성 (계획 1~3단계 기준).
-# FastAPI·Celery·크롤러(requests+BS4)·Auth(Google)·DB(asyncpg+psycopg)·Sentry만 포함.
+# FastAPI·Celery·크롤러(requests+BS4)·Auth(Google)·DB(psycopg)·Sentry만 포함.
 
 # Web
 fastapi==0.115.6
 uvicorn==0.32.1
 
-# DB (비동기: FastAPI / 동기: Celery 워커·Alembic)
+# DB (비동기: FastAPI / 동기: Celery 워커·Alembic) — psycopg만 사용.
 sqlalchemy==2.0.36
-asyncpg==0.30.0
 psycopg[binary]==3.3.2
 alembic==1.14.0
 

@@ -1,4 +1,4 @@
-"""로컬 실행 스크립트. Windows에서 psycopg/asyncpg 호환을 위해 이벤트 루프 정책을 먼저 설정."""
+"""로컬 실행 스크립트. Windows에서 psycopg 호환을 위해 이벤트 루프 정책을 먼저 설정."""
 import asyncio
 import sys
 

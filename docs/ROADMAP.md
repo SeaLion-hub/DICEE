@@ -33,7 +33,7 @@
 
 | 원칙 | 요약 |
 |------|------|
-| **Async-First** | FastAPI·DB는 비동기(AsyncSession, asyncpg). Celery 워커는 동기(psycopg2) 전용. 라우터는 `async def`·비동기 클라이언트 사용. |
+| **Async-First** | FastAPI·DB는 비동기(AsyncSession, psycopg). Celery 워커는 동기(psycopg) 전용. 라우터는 `async def`·비동기 클라이언트 사용. |
 | **Zero-Downtime Crawling** | IP 차단·429·OOM을 **예상 문제**가 아닌 **핵심 설계 요건**으로 취급. Polite crawling, rate limit, 지수 백오프, 모니터링 필수. |
 | **Strict Security & Auth** | OAuth·JWT 설계 일원화. 토큰 갱신·검증·Blocklist 정책 명시. 시크릿은 환경변수·SecretStr, 비교는 constant-time. |
 | **관심사 분리** | Router → Service → Repository. 결정은 ADR, 기록은 WORK_LOG. 로드맵은 전략·마일스톤·기둥·지표만 유지. |

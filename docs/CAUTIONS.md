@@ -108,7 +108,7 @@
 | **Redis TLS (로컬 vs Railway)** | Railway Redis는 `rediss://`(TLS) 제공. `redis://`만 가정하면 연결 실패. | Celery broker_url에서 **redis://·rediss://** 모두 대응. TLS 시 **ssl_cert_reqs** 등 적용. DEPLOYMENT Redis 참고. |
 | **Upsert 구현** | "있으면 갱신"을 ORM만으로 하면 까다로움. | PostgreSQL **`insert().on_conflict_do_update(index_elements=[...], set_={...})`** 사용. **NoticeRepository에 캡슐화.** ROADMAP 3단계 할 일 참고. |
 | **Playwright OOM** | Railway에서 Chromium 여러 개 띄우면 RAM 초과로 OOM Kill. **정적 HTML 수집 불가 시에만** Playwright 사용. | 브라우저 옵션 **`--no-sandbox`, `--disable-dev-shm-usage`** 필수. **Celery concurrency 1~2**로 제한. |
-| **Celery + 비동기 DB 풀** | 태스크 안에서 `asyncio.run()`으로 asyncpg 사용 시 커넥션 반환이 불완전해 "Too many connections" 위험. | 워커 전용 **동기 DB(psycopg2)** 사용. asyncpg는 FastAPI 웹만. ROADMAP "진행 시 예상 문제·대비" 참고. |
+| **Celery + 비동기 DB 풀** | 태스크 안에서 `asyncio.run()`으로 비동기 DB 사용 시 커넥션 반환이 불완전해 "Too many connections" 위험. | 워커 전용 **동기 DB(psycopg)** 사용. FastAPI 웹은 psycopg 비동기. ROADMAP "진행 시 예상 문제·대비" 참고. |
 | **크롤러 설정 하드코딩** | 사이트 개편 시 CSS 선택자·URL을 코드에서 매번 수정·재배포해야 함. | **선택자·URL 패턴·페이징 규칙**은 config 분리. 레포는 URL 인자로 받으므로 config에 College별 URL·모듈명만. |
 | **중복 수집** | 재실행 시 같은 공지가 두 번 들어감. | **(college_id, external_id)** 유니크. 저장은 **upsert**(on_conflict_do_update). |
 | **실패 시 복구 없음** | 잘못된 데이터 대량 적재 시 되돌릴 방법이 없음. | 특정 기간/소스만 **삭제 후 재수집**하는 스크립트 또는 절차를 두기. |

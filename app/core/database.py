@@ -1,4 +1,4 @@
-"""비동기 DB 연결 및 세션 관리. SQLAlchemy 2.0 + psycopg(또는 asyncpg)."""
+"""비동기 DB 연결 및 세션 관리. SQLAlchemy 2.0 + psycopg."""
 
 import asyncio
 import logging
@@ -168,8 +168,8 @@ def _async_database_url(url: str) -> str:
 
     parsed = make_url(raw_url)
 
-    # 2. 비동기 드라이버 자동 적용 (drivername 미지정 시 여기서 설정. 배포 시 postgresql+psycopg 권장 — DEPLOYMENT.md)
-    if "asyncpg" not in parsed.drivername and "psycopg" not in parsed.drivername:
+    # 2. psycopg만 사용. drivername 미지정 또는 asyncpg면 postgresql+psycopg로 통일 (DEPLOYMENT.md).
+    if "asyncpg" in parsed.drivername or "psycopg" not in parsed.drivername:
         parsed = parsed.set(drivername="postgresql+psycopg")
 
     # 3. 핵심 픽스: str() 사용 시 비밀번호가 '***'로 마스킹되는 것을 방지

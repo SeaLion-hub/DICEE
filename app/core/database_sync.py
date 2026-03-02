@@ -1,6 +1,6 @@
 """
 동기 DB 연결 (Celery 워커 전용). SQLAlchemy 2.0 + psycopg (sync).
-FastAPI 웹은 asyncpg, 워커는 이 모듈만 사용해 "Too many connections" 방지.
+FastAPI 웹은 psycopg(비동기), 워커는 이 모듈만 사용해 "Too many connections" 방지.
 """
 
 import logging
@@ -38,7 +38,7 @@ def _normalize_ssl_query_for_psycopg(url_str: str) -> str:
 
 
 def _sync_database_url() -> str | None:
-    """asyncpg URL을 동기 드라이버(psycopg3)용으로 변환. plain postgresql:// → +psycopg. ssl → sslmode 정규화."""
+    """DATABASE_URL을 동기 드라이버(psycopg3)용으로 변환. plain postgresql:// → +psycopg. ssl → sslmode 정규화."""
     raw = (settings.db.database_url or "").strip()
     if not raw:
         return None

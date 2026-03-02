@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       # Use postgres role (matches POSTGRES_USER). Do not use "root" - PostgreSQL has no default root role.
-      DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/dicee_test
+      DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/dicee_test
     services:
       postgres:
         image: postgres:15

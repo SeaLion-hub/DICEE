@@ -19,7 +19,7 @@ from app.domain.contracts.crawl_contracts import CrawlLogContext, LinkItem, Noti
 
 logger = logging.getLogger(__name__)
 
-MAX_HTML_BYTES = 5 * 1024 * 1024  # 본문 HTML 최대 바이트. 초과 시 해당 공지 스킵(OOM 방지).
+MAX_HTML_BYTES = 10 * 1024 * 1024  # 본문 HTML 최대 바이트. 초과 시 해당 공지 스킵(OOM 방지).
 
 # Sentry 건별 전송 폭주 방지: 동일 시그니처는 TTL 내 1회만 전송 (디듀프 훅).
 _SENTRY_DEDUP_TTL_SECONDS = 60

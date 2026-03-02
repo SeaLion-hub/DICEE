@@ -1,4 +1,4 @@
-"""Alembic 환경. 마이그레이션에만 psycopg(psycopg3) 동기 드라이버 사용. Windows+asyncpg 이슈·psycopg2 UnicodeDecodeError 마스킹 회피.
+"""Alembic 환경. 마이그레이션에 psycopg(psycopg3) 동기 드라이버만 사용.
 
 Single migrator: release/migrate job must run one at a time. PostgreSQL advisory lock (ALEMBIC_ADVISORY_LOCK_ID)
 prevents concurrent alembic upgrade head from multiple release processes.
@@ -37,7 +37,7 @@ target_metadata = Base.metadata
 
 
 def _to_psycopg_url(url: str) -> str:
-    """postgresql+asyncpg:// -> postgresql+psycopg:// (마이그레이션 전용, psycopg3)."""
+    """postgresql:// 또는 legacy asyncpg URL → postgresql+psycopg:// (마이그레이션 전용)."""
     if url.startswith("postgresql+asyncpg://"):
         return url.replace("postgresql+asyncpg://", "postgresql+psycopg://", 1)
     if url.startswith("postgresql+psycopg2://"):

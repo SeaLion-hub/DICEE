@@ -32,7 +32,7 @@ services:
       dockerfile: Dockerfile.api
     command: ["alembic", "upgrade", "head"]
     environment:
-      DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/dicee
+      DATABASE_URL: postgresql+psycopg://postgres:postgres@db:5432/dicee
       APP_ENTRY: api
     depends_on:
       db:
@@ -49,7 +49,7 @@ services:
       - .env
     environment:
       APP_ENTRY: api
-      DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/dicee
+      DATABASE_URL: postgresql+psycopg://postgres:postgres@db:5432/dicee
       REDIS_URL: redis://redis:6379/0
     depends_on:
       migrate:
@@ -72,7 +72,7 @@ services:
       - .env
     environment:
       APP_ENTRY: celery
-      DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/dicee
+      DATABASE_URL: postgresql+psycopg://postgres:postgres@db:5432/dicee
       REDIS_URL: redis://redis:6379/0
       REDIS_CELERY_URL: redis://redis:6379/0
     depends_on:
