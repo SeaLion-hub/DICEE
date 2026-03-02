@@ -39,7 +39,7 @@ from app.core.lifespan import (
     teardown_state,
 )
 from app.core.network import InvalidForwardedHeaderError, warn_trusted_proxy_configuration
-from app.middleware import RequestIDMiddleware, Sanitize5xxMiddleware
+from app.middleware import RequestIDMiddleware, RequestMetricsMiddleware, Sanitize5xxMiddleware
 
 logger = logging.getLogger(__name__)
 
@@ -84,6 +84,7 @@ app.include_router(internal.router)
 app.include_router(v1_auth.router, prefix="/v1")
 
 app.add_middleware(Sanitize5xxMiddleware)
+app.add_middleware(RequestMetricsMiddleware)
 app.add_middleware(RequestIDMiddleware)
 app.add_middleware(
     CORSMiddleware,

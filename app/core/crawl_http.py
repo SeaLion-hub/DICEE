@@ -1,8 +1,8 @@
-"""
-크롤러 공통 HTTP 래퍼. OOM 방지: Content-Length fail-fast + 무조건 stream chunking.
-악의적 서버가 Content-Length를 속여도 누적 바이트 캡으로 방어.
-동기(워커용) fetch_html, 비동기(웹용) fetch_html_async.
-상세 페이지 read-through 캐시: fetch_html_detail_cached (목록은 미캐시).
+﻿"""
+?щ·??怨듯넻 HTTP ?섑띁. OOM 諛⑹?: Content-Length fail-fast + 臾댁“嫄?stream chunking.
+?낆쓽???쒕쾭媛 Content-Length瑜??띿뿬???꾩쟻 諛붿씠??罹≪쑝濡?諛⑹뼱.
+?숆린(?뚯빱?? fetch_html, 鍮꾨룞湲??뱀슜) fetch_html_async.
+?곸꽭 ?섏씠吏 read-through 罹먯떆: fetch_html_detail_cached (紐⑸줉? 誘몄틦??.
 """
 
 import hashlib
@@ -13,19 +13,24 @@ import httpx
 import requests
 
 from app.core.config import settings
-from app.core.crawler_config import CRAWLER_HEADERS
 from app.core.redis import get_shared_sync_redis_client
+from app.services.crawl.downloader_middleware import (
+    DownloadRequest,
+    DownloadResponse,
+    get_default_async_downloader_manager,
+    get_default_sync_downloader_manager,
+)
 
 logger = logging.getLogger(__name__)
 
-# 기본 최대 HTML 바이트 (crawl_service.MAX_HTML_BYTES와 동일 값 유지)
+# 湲곕낯 理쒕? HTML 諛붿씠??(crawl_service.MAX_HTML_BYTES? ?숈씪 媛??좎?)
 DEFAULT_MAX_HTML_BYTES = 10 * 1024 * 1024
 DEFAULT_TIMEOUT = 10
 CHUNK_SIZE = 64 * 1024
 
 
 class HtmlTooLargeError(Exception):
-    """응답 본문이 max_bytes를 초과함 (OOM 방지)."""
+    """?묐떟 蹂몃Ц??max_bytes瑜?珥덇낵??(OOM 諛⑹?)."""
 
     pass
 
@@ -34,31 +39,53 @@ def fetch_html(
     url: str,
     *,
     max_bytes: int = DEFAULT_MAX_HTML_BYTES,
-    timeout: int = DEFAULT_TIMEOUT,
+    timeout: float = DEFAULT_TIMEOUT,
     headers: dict[str, Any] | None = None,
     encoding: str = "utf-8",
+    request_meta: dict[str, Any] | None = None,
 ) -> str:
     """
-    URL에서 HTML 문자열을 안전하게 가져옴.
-    - Content-Length가 있으면 max_bytes 초과 시 본문 읽기 전에 HtmlTooLargeError.
-    - 실제 읽기는 무조건 stream + iter_content; 누적이 max_bytes 초과 시 즉시 close 후 HtmlTooLargeError.
-    - encoding: 디코딩에 사용 (기본 utf-8, cp949 등).
+    URL?먯꽌 HTML 臾몄옄?댁쓣 ?덉쟾?섍쾶 媛?몄샂.
+    - Content-Length媛 ?덉쑝硫?max_bytes 珥덇낵 ??蹂몃Ц ?쎄린 ?꾩뿉 HtmlTooLargeError.
+    - ?ㅼ젣 ?쎄린??臾댁“嫄?stream + iter_content; ?꾩쟻??max_bytes 珥덇낵 ??利됱떆 close ??HtmlTooLargeError.
+    - encoding: ?붿퐫?⑹뿉 ?ъ슜 (湲곕낯 utf-8, cp949 ??.
     """
-    h = headers or CRAWLER_HEADERS
-    resp = requests.get(url, headers=h, timeout=timeout, stream=True)
+    manager = get_default_sync_downloader_manager()
+    request = DownloadRequest(
+        url=url,
+        timeout=timeout,
+        headers=headers,
+        meta=dict(request_meta or {}),
+    )
+
+    response = manager.fetch(
+        request,
+        lambda req: _fetch_html_stream_sync(req, max_bytes=max_bytes, encoding=encoding),
+    )
+    return response.body
+
+
+def _fetch_html_stream_sync(
+    request: DownloadRequest,
+    *,
+    max_bytes: int,
+    encoding: str,
+) -> DownloadResponse:
+    """Single HTTP fetch with stream-size guard. Retry/rate-limit are handled by middleware."""
+    resp = requests.get(request.url, headers=request.headers, timeout=request.timeout, stream=True)
     try:
         resp.raise_for_status()
     except Exception:
         resp.close()
         raise
 
-    # Fail-fast: Content-Length가 있고 초과하면 본문 읽지 않음
+    # Fail-fast: Content-Length媛 ?덇퀬 珥덇낵?섎㈃ 蹂몃Ц ?쎌? ?딆쓬
     cl = resp.headers.get("Content-Length")
     if cl:
         try:
             if int(cl) > max_bytes:
                 resp.close()
-                raise HtmlTooLargeError(f"Content-Length {cl} > max_bytes {max_bytes}; url={url[:200]}")
+                raise HtmlTooLargeError(f"Content-Length {cl} > max_bytes {max_bytes}; url={request.url[:200]}")
         except ValueError:
             pass
 
@@ -70,16 +97,22 @@ def fetch_html(
                 accumulated += len(chunk)
                 if accumulated > max_bytes:
                     resp.close()
-                    raise HtmlTooLargeError(f"Accumulated {accumulated} > max_bytes {max_bytes}; url={url[:200]}")
+                    raise HtmlTooLargeError(
+                        f"Accumulated {accumulated} > max_bytes {max_bytes}; url={request.url[:200]}"
+                    )
                 chunks.append(chunk)
     finally:
         resp.close()
-
-    return b"".join(chunks).decode(encoding, errors="replace")
+    return DownloadResponse(
+        url=request.url,
+        body=b"".join(chunks).decode(encoding, errors="replace"),
+        status_code=resp.status_code,
+        headers=dict(resp.headers),
+    )
 
 
 def _detail_cache_key(url: str, encoding: str) -> str:
-    """캐시 키: prefix + hash(url|encoding). URL 길이 제한 회피."""
+    """罹먯떆 ?? prefix + hash(url|encoding). URL 湲몄씠 ?쒗븳 ?뚰뵾."""
     raw = f"{url}|{encoding}"
     h = hashlib.sha256(raw.encode("utf-8", errors="replace")).hexdigest()
     prefix = getattr(settings, "crawl_detail_cache_key_prefix", "dicee:crawl:detail:")
@@ -90,13 +123,14 @@ def fetch_html_detail_cached(
     url: str,
     *,
     max_bytes: int = DEFAULT_MAX_HTML_BYTES,
-    timeout: int = DEFAULT_TIMEOUT,
+    timeout: float = DEFAULT_TIMEOUT,
     headers: dict[str, Any] | None = None,
     encoding: str = "utf-8",
+    request_meta: dict[str, Any] | None = None,
 ) -> str:
     """
-    상세 페이지용 read-through 캐시. hit 시 즉시 반환, miss 시 fetch 후 setex.
-    Redis 장애/미설정 시 fail-open(fetch_html 호출). 목록 페이지에는 사용하지 말 것.
+    ?곸꽭 ?섏씠吏??read-through 罹먯떆. hit ??利됱떆 諛섑솚, miss ??fetch ??setex.
+    Redis ?μ븷/誘몄꽕????fail-open(fetch_html ?몄텧). 紐⑸줉 ?섏씠吏?먮뒗 ?ъ슜?섏? 留?寃?
     """
     enabled = getattr(settings, "crawl_detail_cache_enabled", False)
     client = get_shared_sync_redis_client()
@@ -107,6 +141,7 @@ def fetch_html_detail_cached(
             timeout=timeout,
             headers=headers,
             encoding=encoding,
+            request_meta=request_meta,
         )
     key = _detail_cache_key(url, encoding)
     ttl = getattr(settings, "crawl_detail_cache_ttl_seconds", 300)
@@ -122,6 +157,7 @@ def fetch_html_detail_cached(
             timeout=timeout,
             headers=headers,
             encoding=encoding,
+            request_meta=request_meta,
         )
     html = fetch_html(
         url,
@@ -129,6 +165,7 @@ def fetch_html_detail_cached(
         timeout=timeout,
         headers=headers,
         encoding=encoding,
+        request_meta=request_meta,
     )
     try:
         client.setex(key, ttl, html)
@@ -145,21 +182,43 @@ async def fetch_html_async(
     timeout: float = DEFAULT_TIMEOUT,
     headers: dict[str, Any] | None = None,
     encoding: str = "utf-8",
+    request_meta: dict[str, Any] | None = None,
 ) -> str:
     """
-    비동기: URL에서 HTML 문자열을 안전하게 가져옴 (stream + 청크).
-    OOM 방지: Content-Length 초과 시 본문 읽지 않음; 누적 초과 시 HtmlTooLargeError.
-    max_bytes 초과 시 즉시 HtmlTooLargeError 발생·스트림 종료(에러 메시지에 url 일부 포함).
-    encoding: 디코딩에 사용 (기본 utf-8, cp949 등).
+    鍮꾨룞湲? URL?먯꽌 HTML 臾몄옄?댁쓣 ?덉쟾?섍쾶 媛?몄샂 (stream + 泥?겕).
+    OOM 諛⑹?: Content-Length 珥덇낵 ??蹂몃Ц ?쎌? ?딆쓬; ?꾩쟻 珥덇낵 ??HtmlTooLargeError.
+    max_bytes 珥덇낵 ??利됱떆 HtmlTooLargeError 諛쒖깮쨌?ㅽ듃由?醫낅즺(?먮윭 硫붿떆吏??url ?쇰? ?ы븿).
+    encoding: ?붿퐫?⑹뿉 ?ъ슜 (湲곕낯 utf-8, cp949 ??.
     """
-    h = headers or CRAWLER_HEADERS
-    async with client.stream("GET", url, headers=h, timeout=timeout) as response:
+    manager = get_default_async_downloader_manager()
+    request = DownloadRequest(
+        url=url,
+        timeout=timeout,
+        headers=headers,
+        meta=dict(request_meta or {}),
+    )
+    response = await manager.fetch(
+        request,
+        lambda req: _fetch_html_stream_async(client, req, max_bytes=max_bytes, encoding=encoding),
+    )
+    return response.body
+
+
+async def _fetch_html_stream_async(
+    client: httpx.AsyncClient,
+    request: DownloadRequest,
+    *,
+    max_bytes: int,
+    encoding: str,
+) -> DownloadResponse:
+    """Single async HTTP fetch with stream-size guard. Retry/rate-limit are handled by middleware."""
+    async with client.stream("GET", request.url, headers=request.headers, timeout=request.timeout) as response:
         response.raise_for_status()
         cl = response.headers.get("Content-Length")
         if cl:
             try:
                 if int(cl) > max_bytes:
-                    raise HtmlTooLargeError(f"Content-Length {cl} > max_bytes {max_bytes}; url={url[:200]}")
+                    raise HtmlTooLargeError(f"Content-Length {cl} > max_bytes {max_bytes}; url={request.url[:200]}")
             except ValueError:
                 pass
         accumulated = 0
@@ -168,6 +227,14 @@ async def fetch_html_async(
             if chunk:
                 accumulated += len(chunk)
                 if accumulated > max_bytes:
-                    raise HtmlTooLargeError(f"Accumulated {accumulated} > max_bytes {max_bytes}; url={url[:200]}")
+                    raise HtmlTooLargeError(
+                        f"Accumulated {accumulated} > max_bytes {max_bytes}; url={request.url[:200]}"
+                    )
                 chunks.append(chunk)
-    return b"".join(chunks).decode(encoding, errors="replace")
+    return DownloadResponse(
+        url=request.url,
+        body=b"".join(chunks).decode(encoding, errors="replace"),
+        status_code=response.status_code,
+        headers=dict(response.headers),
+    )
+

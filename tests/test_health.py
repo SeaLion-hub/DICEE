@@ -59,3 +59,36 @@ def test_health_returns_200(client):
     assert response.status_code == 200
     data = response.json()
     assert data == {"status": "ok"}
+
+
+def test_worker_health_returns_200_when_worker_alive(client, monkeypatch):
+    from app.api import health as health_module
+
+    async def _mock_ok():
+        return ("ok", ["celery@dicee-worker-1"], None)
+
+    monkeypatch.setattr(health_module, "_check_celery_workers", _mock_ok)
+
+    response = client.get("/health/worker")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "ok"
+    assert data["celery"] == "ok"
+    assert data["active_worker_count"] == 1
+    assert data["workers"] == ["celery@dicee-worker-1"]
+
+
+def test_worker_health_returns_503_when_worker_unavailable(client, monkeypatch):
+    from app.api import health as health_module
+
+    async def _mock_unavailable():
+        return ("error", [], "broker_not_configured")
+
+    monkeypatch.setattr(health_module, "_check_celery_workers", _mock_unavailable)
+
+    response = client.get("/health/worker")
+    assert response.status_code == 503
+    data = response.json()
+    assert data["status"] == "not_ready"
+    assert data["celery"] == "error"
+    assert data["reason"] == "broker_not_configured"

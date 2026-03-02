@@ -25,6 +25,11 @@ CRAWL_PARSER_FAILURE_TOTAL = "crawl_parser_failure_total"
 CRAWL_RETRY_TOTAL = "crawl_retry_total"
 CRAWL_DROP_TOTAL = "crawl_drop_total"
 CRAWL_PARSE_THRESHOLD_TRIGGER_TOTAL = "crawl_parse_threshold_trigger_total"
+CRAWL_DISPATCH_ENQUEUED_TOTAL = "crawl_dispatch_enqueued_total"
+CRAWL_DISPATCH_BACKPRESSURE_TOTAL = "crawl_dispatch_backpressure_total"
+CRAWL_DISPATCH_MEMORY_MB = "crawl_dispatch_memory_mb"
+CRAWL_DISPATCH_NET_SENT_MB = "crawl_dispatch_net_sent_mb"
+CRAWL_DISPATCH_NET_RECV_MB = "crawl_dispatch_net_recv_mb"
 
 # reason 라벨 값 (고정 enum, 카디널리티 제한)
 RETRY_REASON_TIMEOUT = "timeout"
@@ -51,6 +56,18 @@ READ_CACHE_MISS_TOTAL = "read_cache_miss_total"
 READ_CACHE_REFRESH_TOTAL = "read_cache_refresh_total"
 READ_CACHE_WAIT_TOTAL = "read_cache_wait_total"
 
+# API 골든 시그널 (라벨 허용 목록: endpoint_template, status_class, method 만 사용)
+REQUEST_TOTAL = "request_total"
+REQUEST_ERROR_TOTAL = "request_error_total"
+REQUEST_DURATION_SECONDS = "request_duration_seconds"
+
+ALLOWED_REQUEST_LABELS = frozenset({"endpoint_template", "status_class", "method"})
+
+
+def _labels_for_request_metrics(labels: dict[str, str]) -> dict[str, str]:
+    """허용 목록 외 라벨 제거. 카디널리티 폭주 방지."""
+    return {k: v for k, v in labels.items() if k in ALLOWED_REQUEST_LABELS}
+
 
 def _make_key(name: str, labels: dict[str, str] | None) -> str:
     """Prometheus 스타일의 복합 키 생성: name{k="v",...}"""
@@ -61,12 +78,16 @@ def _make_key(name: str, labels: dict[str, str] | None) -> str:
 
 
 def increment(name: str, value: int = 1, labels: dict[str, str] | None = None) -> None:
+    if name in (REQUEST_TOTAL, REQUEST_ERROR_TOTAL) and labels:
+        labels = _labels_for_request_metrics(labels)
     key = _make_key(name, labels)
     with _lock:
         _counters[key] = _counters.get(key, 0) + value
 
 
 def set_gauge(name: str, value: float, labels: dict[str, str] | None = None) -> None:
+    if name == REQUEST_DURATION_SECONDS and labels:
+        labels = _labels_for_request_metrics(labels)
     key = _make_key(name, labels)
     with _lock:
         _gauges[key] = value

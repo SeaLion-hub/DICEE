@@ -2,7 +2,7 @@
 
 import asyncio
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
@@ -64,6 +64,42 @@ async def _check_redis_trigger_lock(request: Request) -> str:
     return await _ping_redis(client)
 
 
+def _extract_pong_workers(raw: Any) -> list[str]:
+    workers: list[str] = []
+    if isinstance(raw, list):
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            for worker_name, payload in item.items():
+                if isinstance(payload, dict) and payload.get("ok") == "pong":
+                    workers.append(worker_name)
+    elif isinstance(raw, dict):
+        for worker_name, payload in raw.items():
+            if isinstance(payload, dict) and payload.get("ok") == "pong":
+                workers.append(worker_name)
+    return workers
+
+
+async def _check_celery_workers() -> tuple[str, list[str], str | None]:
+    broker_url = (settings.redis_celery_url or settings.redis_url or "").strip()
+    if not broker_url:
+        return ("error", [], "broker_not_configured")
+    try:
+        from app.core.celery_app import app as celery_app
+
+        raw = await asyncio.to_thread(
+            celery_app.control.ping,
+            timeout=settings.celery_worker_health_timeout_seconds,
+        )
+        workers = _extract_pong_workers(raw)
+        if len(workers) < settings.celery_worker_health_min_workers:
+            return ("error", workers, "no_active_workers")
+        return ("ok", workers, None)
+    except Exception as e:
+        logger.warning("Health Celery check failed: %s", e, exc_info=True)
+        return ("error", [], type(e).__name__)
+
+
 def _update_operational_mode(request: Request, ready_ok: bool) -> None:
     """
     Ready 결과로 연속 성공/실패 카운터 갱신 후 N/M 임계치로 operational_mode 전환.
@@ -111,6 +147,26 @@ async def get_ready(request: Request) -> JSONResponse:
         "redis_blocklist": redis_blocklist,
         "redis_trigger_lock": redis_trigger_lock,
     }
+    return JSONResponse(status_code=200 if ok else 503, content=content)
+
+
+@router.get("/health/worker")
+async def get_worker_health() -> JSONResponse:
+    """
+    Celery worker readiness check.
+    API process asks the broker for ping responses and verifies minimum active worker count.
+    """
+    celery_status, workers, reason = await _check_celery_workers()
+    ok = celery_status == "ok"
+    content: dict[str, Any] = {
+        "status": "ok" if ok else "not_ready",
+        "celery": celery_status,
+        "active_worker_count": len(workers),
+        "required_worker_count": settings.celery_worker_health_min_workers,
+        "workers": sorted(workers),
+    }
+    if reason:
+        content["reason"] = reason
     return JSONResponse(status_code=200 if ok else 503, content=content)
 
 

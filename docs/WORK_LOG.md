@@ -12,6 +12,7 @@
 
 - [작성 규칙](#작성-규칙)
 - [작성 형식](#작성-형식)
+- [2026-03-02](#2026-03-02)
 - [2026-03-01](#2026-03-01)
 - [2026-02-28](#2026-02-28)
 - [2026-02-27](#2026-02-27)
@@ -36,6 +37,13 @@
 ## 작성 형식
 
 - `- [단계 또는 영역] 무엇을 했는지 (어떤 파일/기능). 왜 또는 결과 한 줄.`
+
+---
+## 2026-03-02
+
+- [BENCHMARK_INSIGHTS 기반 개선 계획 구현] **Sentry release**: app/core/config/base.py에 sentry_release 필드, lifespan.py·worker.py init에 release= 전달, .env.example 문서화. **DI alias**: app/core/deps.py에 SessionDep/ReadOnlySessionDep 표준 alias 주석 정리. **trace_id**: logging_context·request_id 미들웨어에 trace_id(request_id와 동일) 추가, Sentry set_tag. **429 Retry-After**: app/services/crawl/runtime.py에 parse_retry_after_seconds(delta-seconds·HTTP-date, wait_seconds=retry_after_datetime−now), get_crawl_retry_wait; collect_sync에서 get_crawl_retry_wait 사용. tests/test_crawl_retry_after.py 단위 테스트 추가. **Runbook**: docs/runbooks/ 4개(api-error-budget, crawler-retry-dlq, redis-scheduler-recovery, release-rollback) 초안, 롤백 트리거 수치 포함. **재시도 정책**: tasks.py crawl_college_task·process_notice_ai_task에 max_retries=6, docs/decisions/celery-retry-policy.md(Retryable vs Fatal). **API 골든 시그널**: app/core/metrics.py REQUEST_* 상수·허용 라벨(endpoint_template, status_class, method), app/middleware/request_metrics.py 미들웨어. **SLO/롤백 SSOT**: docs/decisions/slo-rollback-thresholds.md. **BaseSchema**: app/schemas/base.py(BaseSchema, IdType, SlugType, NameType), internal.py CrawlRunStatsItem/CrawlStatsResponse가 BaseSchema 상속. pytest 192 passed, 3 skipped.
+
+- [설정 검증·테스트 안정화 및 미반영 항목 마무리] **base.py**: Pydantic import를 Ruff 규칙(I001/E501/F841)에 맞게 정리; `validate_redis_url`에서 Redis DSN 검증 실패 시 `raise ValueError(...) from exc` 예외 체이닝 추가로 디버깅 용이화. **tests/test_tasks_and_config.py**: `test_settings_reject_invalid_database_url_scheme`, `test_settings_reject_invalid_redis_url_scheme`, `test_celery_requires_separate_redis_url_when_enabled` 3건을 Settings() 직접 생성 방식에서 `importlib.reload(app.core.config)` 방식으로 변경 — `app.core.config`의 import 시점 `settings = Settings()` 초기화 때문에 기존 방식은 pytest.raises 범위 밖에서 실패할 수 있음. **이미 반영 확인**: compose.yml·.env.example의 REDIS_CELERY_URL(redis://redis:6379/1), CELERY_REQUIRE_SEPARATE_REDIS_URL 예시 유지. 검증: ruff check 해당 파일 통과, 해당 3개·4개·test_health 7개 pytest -k 통과. 전체 pytest·docker compose up 런타임 검증은 미실행.
 
 ---
 ## 2026-03-01

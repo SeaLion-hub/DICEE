@@ -1,9 +1,9 @@
 """내부 API 전용 응답 스키마. error_message 등 민감 필드는 노출하지 않음."""
 
-from pydantic import BaseModel
+from app.schemas.base import BaseSchema
 
 
-class CrawlRunStatsItem(BaseModel):
+class CrawlRunStatsItem(BaseSchema):
     """GET /internal/crawl-stats 응답의 run 한 건. error_message는 has_error로만 노출."""
 
     college_code: str
@@ -14,7 +14,7 @@ class CrawlRunStatsItem(BaseModel):
     has_error: bool
 
 
-class CrawlStatsResponse(BaseModel):
+class CrawlStatsResponse(BaseSchema):
     """GET /internal/crawl-stats 응답 body."""
 
     runs: list[CrawlRunStatsItem]

@@ -18,7 +18,14 @@ logger = logging.getLogger(__name__)
 sync_engine = None
 sync_session_factory = None
 
-_SSL_TO_SSLMODE = {"true": "require", "require": "require", "1": "require", "false": "disable", "disable": "disable", "0": "disable"}
+_SSL_TO_SSLMODE = {
+    "true": "require",
+    "require": "require",
+    "1": "require",
+    "false": "disable",
+    "disable": "disable",
+    "0": "disable",
+}
 
 
 def _normalize_ssl_query_for_psycopg(url_str: str) -> str:

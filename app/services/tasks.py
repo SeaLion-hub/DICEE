@@ -81,6 +81,7 @@ def _heartbeat_loop(
             logger.debug("Trigger lock heartbeat renewed: college=%s", college_code)
 
 
+# Retryable: timeout, 5xx, 408, 409, 425, 429, 네트워크 일시 오류. Fatal(그 외 4xx 등)은 autoretry_for에 넣지 않음.
 @app.task(
     bind=True,
     name="app.services.tasks.crawl_college_task",
@@ -88,6 +89,7 @@ def _heartbeat_loop(
     retry_backoff=True,
     retry_backoff_max=600,
     retry_jitter=True,
+    max_retries=6,
 )
 def crawl_college_task(
     self,
@@ -205,6 +207,7 @@ def close_stale_crawl_runs_task():
     retry_backoff=True,
     retry_backoff_max=600,
     rate_limit="10/m",
+    max_retries=6,
 )
 def process_notice_ai_task(self, notice_id: str):
     """

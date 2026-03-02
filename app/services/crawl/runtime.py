@@ -4,10 +4,12 @@ import logging
 import uuid
 from collections import deque
 from dataclasses import dataclass
+from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
 from functools import lru_cache
 from typing import Any
 
-from tenacity import wait_exponential_jitter
+from tenacity import RetryCallState, wait_exponential_jitter
 
 from app.core.config import settings
 from app.core.crawler_config import COLLEGE_CODE_TO_MODULE, CRAWLER_CONFIG
@@ -52,6 +54,54 @@ _crawl_retry_wait = wait_exponential_jitter(
     max=CRAWL_RETRY_MAX_SEC,
     jitter=1.0,
 )
+
+
+def parse_retry_after_seconds(response: Any) -> float | None:
+    """
+    RFC 7231 Retry-After: delta-seconds (integer) or HTTP-date.
+    wait_seconds = retry_after_datetime - now for HTTP-date (positive if server time in future).
+    Returns None if header absent, invalid, negative, or oversized (then use fallback).
+    """
+    if response is None or not hasattr(response, "headers"):
+        return None
+    raw = response.headers.get("Retry-After")
+    if not raw or not str(raw).strip():
+        return None
+    raw = str(raw).strip()
+    try:
+        secs: float
+        if raw.isdigit():
+            secs = float(int(raw))
+        else:
+            dt = parsedate_to_datetime(raw)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=UTC)
+            now = datetime.now(UTC)
+            secs = (dt - now).total_seconds()
+        if secs < 0:
+            return None
+        if secs < CRAWL_RETRY_BASE_SEC:
+            secs = CRAWL_RETRY_BASE_SEC
+        if secs > CRAWL_RETRY_MAX_SEC:
+            secs = CRAWL_RETRY_MAX_SEC
+        return secs
+    except (ValueError, TypeError, OSError):
+        return None
+
+
+def get_crawl_retry_wait(retry_state: RetryCallState) -> float:
+    """
+    Tenacity wait: 429 and Retry-After present → use parsed seconds (capped);
+    otherwise exponential+jitter fallback.
+    """
+    exc = retry_state.outcome.exception() if retry_state.outcome else None
+    if exc is not None and hasattr(exc, "response") and exc.response is not None:
+        code = getattr(exc.response, "status_code", None)
+        if code == 429:
+            secs = parse_retry_after_seconds(exc.response)
+            if secs is not None:
+                return secs
+    return _crawl_retry_wait(retry_state)
 
 
 class _BoundedSeenSet:

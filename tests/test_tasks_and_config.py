@@ -311,6 +311,73 @@ def test_non_production_local_spool_is_allowed():
         assert settings.environment == "development"
 
 
+def test_production_migrate_entry_requires_only_database_url():
+    with patch.dict(
+        "os.environ",
+        {
+            "ENVIRONMENT": "production",
+            "APP_ENTRY": "migrate",
+            "DATABASE_URL": "postgresql://localhost/test",
+        },
+        clear=True,
+    ):
+        from app.core.config import Settings
+
+        settings = Settings()
+        assert settings.app_entry == "migrate"
+        assert settings.database_url == "postgresql://localhost/test"
+
+
+def test_settings_reject_invalid_database_url_scheme():
+    import app.core.config as config_module
+
+    with patch.dict(
+        "os.environ",
+        {
+            "APP_ENTRY": "migrate",
+            "DATABASE_URL": "mysql://localhost/test",
+        },
+        clear=False,
+    ):
+        with pytest.raises(ValidationError):
+            importlib.reload(config_module)
+    importlib.reload(config_module)
+
+
+def test_settings_reject_invalid_redis_url_scheme():
+    import app.core.config as config_module
+
+    with patch.dict(
+        "os.environ",
+        {
+            "APP_ENTRY": "celery",
+            "REDIS_URL": "http://localhost:6379/0",
+        },
+        clear=False,
+    ):
+        with pytest.raises(ValidationError):
+            importlib.reload(config_module)
+    importlib.reload(config_module)
+
+
+def test_celery_requires_separate_redis_url_when_enabled():
+    import app.core.config as config_module
+
+    with patch.dict(
+        "os.environ",
+        {
+            "APP_ENTRY": "celery",
+            "REDIS_URL": "redis://localhost:6379/0",
+            "REDIS_CELERY_URL": "redis://localhost:6379/0",
+            "CELERY_REQUIRE_SEPARATE_REDIS_URL": "true",
+        },
+        clear=False,
+    ):
+        with pytest.raises(ValidationError):
+            importlib.reload(config_module)
+    importlib.reload(config_module)
+
+
 def test_settings_fail_fast_rs256_mode_requires_complete_keys():
     with patch.dict(
         "os.environ",

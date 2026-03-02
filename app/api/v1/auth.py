@@ -7,15 +7,13 @@ from collections.abc import Callable
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.api_rate_limit import (
     RateLimitUnavailableError,
     check_rate_limit,
 )
 from app.core.config import settings
-from app.core.database import get_db
-from app.core.deps import get_google_key_fetcher, get_httpx_client, get_redis_blocklist
+from app.core.deps import SessionDep, get_google_key_fetcher, get_httpx_client, get_redis_blocklist
 from app.core.ip_hmac import compute_ip_hmac
 from app.core.logging_context import set_request_context
 from app.core.network import get_client_ip
@@ -211,7 +209,7 @@ async def get_google_auth_state(
 @router.post("/google", response_model=TokenResponse)
 async def post_google_auth(
     payload: TokenPayload,
-    session: AsyncSession = Depends(get_db),
+    session: SessionDep,
     http_client: httpx.AsyncClient = Depends(get_httpx_client),
     key_fetcher=Depends(get_google_key_fetcher),
     redis_blocklist=Depends(get_redis_blocklist),
@@ -284,7 +282,7 @@ async def post_google_auth(
 async def post_refresh(
     request: Request,
     payload: RefreshTokenPayload,
-    session: AsyncSession = Depends(get_db),
+    session: SessionDep,
     client_ip: str = Depends(
         _auth_rate_limit_dep(
             "refresh",
@@ -344,13 +342,14 @@ async def post_refresh(
 
 @router.post("/logout", status_code=204)
 async def post_logout(
+    session: SessionDep,
     user_id_and_jti=Depends(get_current_user_id_and_jti),
-    session: AsyncSession = Depends(get_db),
     redis_blocklist=Depends(get_redis_blocklist),
 ) -> None:
     """
     로그아웃. Redis Blocklist 등록(성공) 후 refresh_token_version 증가 + commit.
-    Redis 먼저 등록해 두어, DB 실패 시에도 Access는 이미 블록됨. Authorization: Bearer <access_token> 필요. 204 No Content.
+    Redis 먼저 등록해 두어, DB 실패 시에도 Access는 이미 블록됨.
+    Authorization: Bearer <access_token> 필요. 204 No Content.
     """
     user_id, jti = user_id_and_jti
     if redis_blocklist and jti and settings.jwt_access_expire_seconds > 0:

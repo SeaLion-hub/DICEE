@@ -24,6 +24,7 @@ from app.repositories.crawl_run_repository import update_crawl_run_checkpoint_sy
 from app.repositories.notice_repository import upsert_notices_bulk_sync
 
 from .collect_sync import _collect_payloads_sync
+from .item_pipeline import NoticeBulkUpsertPipeline
 from .runtime import (
     CrawlRuntimeConfig,
     _cap_links_for_run,
@@ -53,6 +54,9 @@ class _SyncCrawlAdapter(Protocol):
 
 
 class _DefaultSyncCrawlAdapter:
+    def __init__(self, upsert_pipeline: NoticeBulkUpsertPipeline | None = None) -> None:
+        self._upsert_pipeline = upsert_pipeline or NoticeBulkUpsertPipeline(upsert_notices_bulk_sync)
+
     def collect_payloads(
         self,
         *,
@@ -75,7 +79,7 @@ class _DefaultSyncCrawlAdapter:
         )
 
     def upsert_chunk(self, session: Session, chunk: list[NoticeDraft]) -> list[uuid.UUID]:
-        return upsert_notices_bulk_sync(session, chunk)
+        return self._upsert_pipeline.process(session, chunk)
 
 
 def _finalize_chunk_sync(

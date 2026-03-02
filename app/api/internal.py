@@ -8,7 +8,6 @@ import logging
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, Response
 from redis.asyncio import Redis as RedisAsyncio
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import metrics
 from app.core.api_rate_limit import (
@@ -16,8 +15,8 @@ from app.core.api_rate_limit import (
     check_rate_limit,
 )
 from app.core.config import settings
-from app.core.database import get_read_only_db
 from app.core.deps import (
+    ReadOnlySessionDep,
     get_crawl_stats_service,
     get_internal_crawl_service,
     get_redis_trigger_lock,
@@ -279,10 +278,10 @@ async def post_trigger_crawl(
 @router.get("/crawl-stats")
 async def get_crawl_stats(
     request: Request,
+    session: ReadOnlySessionDep,
     limit: int = Query(50, ge=1, le=200, description="최근 N건"),
     x_crawl_trigger_secret: str | None = Header(None, alias="X-Crawl-Trigger-Secret"),
     authorization: str | None = Header(None),
-    session: AsyncSession = Depends(get_read_only_db),
     redis_client: RedisAsyncio | None = Depends(get_redis_trigger_lock),
     crawl_stats_service: CrawlStatsService = Depends(get_crawl_stats_service),
 ) -> CrawlStatsResponse:

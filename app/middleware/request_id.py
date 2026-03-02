@@ -44,8 +44,9 @@ class RequestIDMiddleware(BaseHTTPMiddleware):
             import sentry_sdk
 
             sentry_sdk.set_tag("request_id", request_id)
+            sentry_sdk.set_tag("trace_id", request_id)
         except Exception:
-            logger.debug("Sentry set_tag failed (request_id); continuing.", exc_info=True)
+            logger.debug("Sentry set_tag failed (request_id/trace_id); continuing.", exc_info=True)
         response = await call_next(request)
         response.headers["X-Request-ID"] = request_id
         return response

@@ -78,8 +78,8 @@ def test_crawl_college_sync_uses_seen_set():
     """crawl_college_sync는 seen으로 _BoundedSeenSet 또는 _RedisSeenSet 사용 (멀티 워커 중복 방지)."""
     from unittest.mock import MagicMock, patch
 
-    from app.services.crawl.runtime import _BoundedSeenSet, _RedisSeenSet
     from app.services.crawl.pipeline_sync import crawl_college_sync
+    from app.services.crawl.runtime import _BoundedSeenSet, _RedisSeenSet
 
     seen_captured = []
 
@@ -409,10 +409,9 @@ def test_collect_payloads_sync_applies_rate_limit_in_worker_thread(monkeypatch):
 
 def test_collect_payloads_sync_pre_dedup_reduces_scrape_calls():
     """post[\"no\"] 기준 pre-dedup + in_flight: 동일 no 두 링크 시 scrape_fn 1회만 호출."""
+    from app.domain.contracts.crawl_contracts import CrawlLogContext
     from app.services.crawl.collect_sync import _collect_payloads_sync
     from app.services.crawlers.base import ScrapeResult
-
-    from app.domain.contracts.crawl_contracts import CrawlLogContext
 
     scrape_calls: list[str] = []
 
@@ -443,10 +442,9 @@ def test_collect_payloads_sync_pre_dedup_reduces_scrape_calls():
 
 def test_collect_payloads_sync_pre_dedup_many_duplicates_no_recursion():
     """대량 연속 중복 시 재귀 대신 반복으로 처리해 RecursionError가 나지 않음."""
+    from app.domain.contracts.crawl_contracts import CrawlLogContext
     from app.services.crawl.collect_sync import _collect_payloads_sync
     from app.services.crawlers.base import ScrapeResult
-
-    from app.domain.contracts.crawl_contracts import CrawlLogContext
 
     scrape_calls: list[str] = []
 
@@ -475,10 +473,9 @@ def test_collect_payloads_sync_pre_dedup_many_duplicates_no_recursion():
 
 def test_retry_reason_from_exc_requests_timeout_is_timeout():
     """requests.exceptions.Timeout은 retry reason이 timeout으로 집계됨."""
-    from requests.exceptions import Timeout as RequestsTimeout
-
     from app.core.metrics import RETRY_REASON_TIMEOUT
     from app.services.crawl.collect_sync import _retry_reason_from_exc
+    from requests.exceptions import Timeout as RequestsTimeout
 
     exc = RequestsTimeout("read timed out")
     assert _retry_reason_from_exc(exc) == RETRY_REASON_TIMEOUT
@@ -489,12 +486,11 @@ def test_scrape_one_sync_with_sem_retries_request_exception_and_succeeds(monkeyp
 
     from app.services.crawl import collect_sync as crawl_collect_sync
     from app.services.crawl.collect_sync import _scrape_one_sync_with_sem
-    from app.services.crawl.runtime import CRAWL_RETRY_MAX_ATTEMPTS
     from app.services.crawlers.base import ScrapeResult
     from requests.exceptions import RequestException
     from tenacity import wait_none
 
-    monkeypatch.setattr(crawl_collect_sync, "_crawl_retry_wait", wait_none())
+    monkeypatch.setattr(crawl_collect_sync, "get_crawl_retry_wait", wait_none())
     calls = {"scrape": 0, "wait": 0}
 
     class _FakeLimiter:
@@ -529,7 +525,7 @@ def test_scrape_one_sync_with_sem_retries_request_exception_until_limit(monkeypa
     from requests.exceptions import RequestException
     from tenacity import wait_none
 
-    monkeypatch.setattr(crawl_collect_sync, "_crawl_retry_wait", wait_none())
+    monkeypatch.setattr(crawl_collect_sync, "get_crawl_retry_wait", wait_none())
     calls = {"scrape": 0, "wait": 0}
 
     class _FakeLimiter:
@@ -562,7 +558,7 @@ def test_retry_policy_404_skippable_no_retry(monkeypatch):
     from requests.exceptions import HTTPError
     from tenacity import wait_none
 
-    monkeypatch.setattr(crawl_collect_sync, "_crawl_retry_wait", wait_none())
+    monkeypatch.setattr(crawl_collect_sync, "get_crawl_retry_wait", wait_none())
     calls = {"scrape": 0}
 
     class _FakeLimiter:
@@ -596,7 +592,7 @@ def test_retry_policy_429_retried(monkeypatch):
     from requests.exceptions import HTTPError
     from tenacity import wait_none
 
-    monkeypatch.setattr(crawl_collect_sync, "_crawl_retry_wait", wait_none())
+    monkeypatch.setattr(crawl_collect_sync, "get_crawl_retry_wait", wait_none())
     calls = {"scrape": 0}
 
     class _FakeLimiter:
@@ -625,12 +621,12 @@ def test_retry_policy_429_retried(monkeypatch):
 def test_process_scrape_result_parser_threshold_aborts():
     """파서 실패 임계치 초과 시 CrawlThresholdExceeded 반환(대학 단위 중단)."""
     from app.domain.contracts.crawl_contracts import CrawlLogContext
+    from app.services.crawl.collect_sync import _process_scrape_result
     from app.services.crawl_policy import (
         PARSER_CONSECUTIVE_FAILURES_THRESHOLD,
         CrawlErrorTracker,
         CrawlThresholdExceeded,
     )
-    from app.services.crawl.collect_sync import _process_scrape_result
 
     college_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
     ctx = CrawlLogContext(college_code="test")
@@ -658,14 +654,13 @@ def test_process_scrape_result_parser_threshold_aborts():
 
 def test_process_scrape_result_increments_threshold_metric_on_trigger(monkeypatch):
     """CrawlThresholdExceeded 반환 직전에 CRAWL_PARSE_THRESHOLD_TRIGGER_TOTAL 1회 증가."""
-    from app.core.metrics import CRAWL_PARSE_THRESHOLD_TRIGGER_TOTAL, increment
+    from app.core.metrics import CRAWL_PARSE_THRESHOLD_TRIGGER_TOTAL
     from app.domain.contracts.crawl_contracts import CrawlLogContext
+    from app.services.crawl.collect_sync import _process_scrape_result
     from app.services.crawl_policy import (
         PARSER_CONSECUTIVE_FAILURES_THRESHOLD,
         CrawlErrorTracker,
-        CrawlThresholdExceeded,
     )
-    from app.services.crawl.collect_sync import _process_scrape_result
 
     college_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
     ctx = CrawlLogContext(college_code="test")
@@ -699,9 +694,9 @@ def test_process_scrape_result_increments_drop_metric_with_reason(monkeypatch):
     """중복 드롭 시 CRAWL_DROP_TOTAL에 reason=duplicate 기록."""
     from app.core.metrics import CRAWL_DROP_TOTAL, DROP_REASON_DUPLICATE
     from app.domain.contracts.crawl_contracts import CrawlLogContext
-    from app.services.crawlers.base import ScrapeResult
     from app.services.crawl.collect_sync import _process_scrape_result
     from app.services.crawl_policy import CrawlErrorTracker
+    from app.services.crawlers.base import ScrapeResult
 
     college_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
     ctx = CrawlLogContext(college_code="test")
@@ -726,5 +721,9 @@ def test_process_scrape_result_increments_drop_metric_with_reason(monkeypatch):
     )
     assert payload is None
     assert raise_exc is None
-    drop_duplicate = [c for c in increment_calls if c[0] == CRAWL_DROP_TOTAL and (c[2] or {}).get("reason") == DROP_REASON_DUPLICATE]
+    drop_duplicate = [
+        c
+        for c in increment_calls
+        if c[0] == CRAWL_DROP_TOTAL and (c[2] or {}).get("reason") == DROP_REASON_DUPLICATE
+    ]
     assert len(drop_duplicate) == 1

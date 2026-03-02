@@ -47,6 +47,7 @@ def init_sentry() -> None:
             ],
             traces_sample_rate=0.1,
             environment=settings.environment,
+            release=settings.sentry_release,
             before_send=cast(Any, before_send_scrub),
         )
     except Exception as e:

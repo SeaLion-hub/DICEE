@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Annotated, cast
 
 import httpx
 
@@ -12,8 +12,14 @@ if TYPE_CHECKING:
 from fastapi import Depends, Request
 from pyjwt_key_fetcher import AsyncKeyFetcher
 from redis.asyncio import Redis as RedisAsyncio
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.database import ReadOnlySessionWrapper, get_db, get_read_only_db
 from app.core.state import AppState
+
+# 표준 DB 세션 DI alias. 라우터에서는 이 타입만 사용해 get_db/get_read_only_db 의존성을 주입받는다.
+SessionDep = Annotated[AsyncSession, Depends(get_db)]
+ReadOnlySessionDep = Annotated[ReadOnlySessionWrapper, Depends(get_read_only_db)]
 
 
 def get_httpx_client(request: Request) -> httpx.AsyncClient:

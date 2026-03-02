@@ -4,7 +4,16 @@ import logging
 from typing import Literal
 from urllib.parse import urlparse
 
-from pydantic import AliasChoices, Field, SecretStr, field_validator, model_validator
+from pydantic import (
+    AliasChoices,
+    Field,
+    PostgresDsn,
+    RedisDsn,
+    SecretStr,
+    TypeAdapter,
+    field_validator,
+    model_validator,
+)
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from .jwt import normalize_jwt_signing_mode, resolve_jwt_signing_algorithm
@@ -17,6 +26,8 @@ from .parsing import _parse_allowed_origins
 from .types import _DatabaseConfig, _RedisConfig
 
 logger = logging.getLogger(__name__)
+_POSTGRES_DSN_ADAPTER = TypeAdapter(PostgresDsn)
+_REDIS_DSN_ADAPTER = TypeAdapter(RedisDsn)
 
 
 class Settings(BaseSettings):
@@ -26,16 +37,21 @@ class Settings(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         case_sensitive=False,
+        extra="ignore",
     )
 
     # Phase 1
     sentry_dsn: SecretStr | None = None
-    environment: str = "development"
+    sentry_release: str | None = Field(
+        None,
+        description="Sentry release identifier (e.g. version, git SHA). Unset = Sentry uses default.",
+    )
+    environment: Literal["development", "staging", "production", "test", "local"] = "development"
 
     # Entry point (required: no default — fail-fast when APP_ENTRY/ROLE missing)
-    app_entry: Literal["api", "celery"] = Field(
+    app_entry: Literal["api", "celery", "migrate"] = Field(
         ...,
-        description="Entry point: api | celery. Set APP_ENTRY or ROLE.",
+        description="Entry point: api | celery | migrate. Set APP_ENTRY or ROLE.",
         validation_alias=AliasChoices("APP_ENTRY", "ROLE"),
     )
 
@@ -136,8 +152,27 @@ class Settings(BaseSettings):
     )
     ai_pipeline_enabled: bool = False
     celery_worker_prefetch_multiplier: int = Field(1, ge=1, le=16)
+    celery_broker_connection_max_retries: int = Field(100, ge=1, le=10000)
+    celery_result_expires_seconds: int = Field(3600, ge=60, le=604800)
+    celery_result_backend_always_retry: bool = True
+    celery_result_backend_max_retries: int = Field(5, ge=1, le=100)
+    celery_worker_health_timeout_seconds: float = Field(2.0, ge=0.5, le=30.0)
+    celery_worker_health_min_workers: int = Field(1, ge=1, le=100)
+    celery_require_separate_redis_url: bool = False
+    celery_dispatch_memory_soft_limit_mb: int = Field(1024, ge=128, le=262144)
+    celery_dispatch_backpressure_step_seconds: int = Field(30, ge=0, le=1800)
+    celery_dispatch_backpressure_max_seconds: int = Field(300, ge=0, le=7200)
     polite_delay_seconds: float = Field(1.0, ge=0.1, le=60.0)
     crawl_page_timeout_seconds: float = Field(30.0, ge=1.0, le=300.0)
+    crawl_http_retry_max_attempts: int = Field(3, ge=1, le=10)
+    crawl_http_retry_backoff_base_seconds: float = Field(0.5, ge=0.0, le=60.0)
+    crawl_http_retry_backoff_max_seconds: float = Field(8.0, ge=0.1, le=300.0)
+    crawl_retry_403_hosts: str = Field(
+        "",
+        description=(
+            "Comma-separated hostnames that should retry HTTP 403 to handle host-specific WAF behavior."
+        ),
+    )
     crawl_upsert_chunk_size: int = Field(50, ge=1, le=1000)
     crawl_collect_sync_max_workers: int = Field(5, ge=1, le=32)
     crawl_collect_in_flight_limit: int = Field(500, ge=10, le=50000)
@@ -238,6 +273,16 @@ class Settings(BaseSettings):
     def validate_jwt_signing_mode(cls, v: str | None) -> str:
         return normalize_jwt_signing_mode(v)
 
+    @field_validator("environment", mode="before")
+    @classmethod
+    def normalize_environment(cls, v: str | None) -> str:
+        normalized = (v or "development").strip().lower()
+        alias = {
+            "prod": "production",
+            "dev": "development",
+        }
+        return alias.get(normalized, normalized)
+
     @field_validator("allowed_origins", mode="after")
     @classmethod
     def validate_allowed_origins(cls, v: str) -> str:
@@ -245,6 +290,63 @@ class Settings(BaseSettings):
             return v
         _parse_allowed_origins(v)
         return v
+
+    @field_validator("database_url", mode="after")
+    @classmethod
+    def validate_database_url(cls, v: str | None) -> str | None:
+        if not v:
+            return v
+        normalized = v.replace("postgres://", "postgresql://", 1) if v.startswith("postgres://") else v
+        try:
+            _POSTGRES_DSN_ADAPTER.validate_python(normalized)
+        except Exception as exc:
+            raise ValueError(
+                "DATABASE_URL must use postgresql://, postgresql+psycopg://, "
+                "postgresql+psycopg2://, or postgresql+asyncpg://"
+            ) from exc
+        parsed = urlparse(normalized)
+        if not parsed.hostname:
+            raise ValueError("DATABASE_URL must include a hostname")
+        return normalized
+
+    @field_validator("redis_url", "redis_celery_url", mode="after")
+    @classmethod
+    def validate_redis_url(cls, v: str | None) -> str | None:
+        if not v:
+            return v
+        normalized = v.strip()
+        try:
+            _REDIS_DSN_ADAPTER.validate_python(normalized)
+        except Exception as exc:
+            raise ValueError("REDIS_URL / REDIS_CELERY_URL must use redis:// or rediss://") from exc
+        parsed = urlparse(normalized)
+        if not parsed.hostname:
+            raise ValueError("REDIS_URL / REDIS_CELERY_URL must include a hostname")
+        return normalized
+
+    @field_validator("content_storage_type", mode="after")
+    @classmethod
+    def validate_content_storage_type(cls, v: str) -> str:
+        normalized = (v or "").strip().lower()
+        if normalized not in {"local", "s3"}:
+            raise ValueError("CONTENT_STORAGE_TYPE must be one of: local, s3")
+        return normalized
+
+    @field_validator("content_spool_backend", mode="after")
+    @classmethod
+    def validate_content_spool_backend(cls, v: str) -> str:
+        normalized = (v or "").strip().lower()
+        if normalized not in {"local", "s3"}:
+            raise ValueError("CONTENT_SPOOL_BACKEND must be one of: local, s3")
+        return normalized
+
+    @field_validator("content_upload_failure_policy", mode="after")
+    @classmethod
+    def validate_content_upload_failure_policy(cls, v: str) -> str:
+        normalized = (v or "").strip().lower()
+        if normalized not in {"allow_none", "fail"}:
+            raise ValueError("CONTENT_UPLOAD_FAILURE_POLICY must be one of: allow_none, fail")
+        return normalized
 
     @property
     def allowed_origins_list(self) -> list[str]:
@@ -310,7 +412,7 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def block_dev_using_production_db(self) -> "Settings":
         """development 환경에서 운영 DB 호스트로 접속하려 하면 기동 시 에러. 실수로 로컬에서 운영 DB 붙는 것 방지."""
-        if (self.environment or "").strip().lower() != "development":
+        if (self.environment or "").strip().lower() not in {"development", "local", "test"}:
             return self
         raw = (self.database_url or "").strip()
         if not raw:
@@ -354,6 +456,8 @@ class Settings(BaseSettings):
         """production 환경에서 USER_ID_HMAC_KEY 필수. 비어 있으면 부팅 실패(ValueError)."""
         if (self.environment or "").strip().lower() != "production":
             return self
+        if self.app_entry == "migrate":
+            return self
         raw = (self.user_id_hmac_key.get_secret_value() or "").strip()
         if not raw:
             raise ValueError(
@@ -382,8 +486,23 @@ class Settings(BaseSettings):
         return self
 
     @model_validator(mode="after")
+    def validate_celery_redis_separation(self) -> "Settings":
+        base = (self.redis_url or "").strip()
+        celery = (self.redis_celery_url or "").strip()
+        if not base or not celery:
+            return self
+        if base != celery:
+            return self
+        if self.celery_require_separate_redis_url:
+            raise ValueError(
+                "CELERY_REQUIRE_SEPARATE_REDIS_URL=true but REDIS_CELERY_URL equals REDIS_URL. "
+                "Use a separate Redis DB/index or instance for Celery broker/result backend."
+            )
+        return self
+
+    @model_validator(mode="after")
     def fail_fast_jwt_secret_at_boot(self) -> "Settings":
-        if self.app_entry == "celery":
+        if self.app_entry != "api":
             return self
         try:
             resolve_jwt_signing_algorithm(
@@ -405,6 +524,16 @@ class Settings(BaseSettings):
 
         if not (self.database_url or "").strip():
             missing.append("DATABASE_URL")
+
+        if self.app_entry == "migrate":
+            if missing:
+                raise ValueError(
+                    "Production environment requires these variables to be set: "
+                    + ", ".join(missing)
+                    + ". Set them in Secret Manager or environment before boot."
+                )
+            return self
+
         if not (self.redis_url or "").strip():
             missing.append("REDIS_URL")
 

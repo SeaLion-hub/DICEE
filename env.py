@@ -1,9 +1,12 @@
 """Alembic 환경. 마이그레이션에 psycopg(psycopg3) 동기 드라이버만 사용."""
 
+# ruff: noqa: I001
+
 import os
 import time
 # PostgreSQL 클라이언트 인코딩 강제 (서버 응답 UTF-8 디코딩)
 os.environ.setdefault("PGCLIENTENCODING", "UTF8")
+os.environ.setdefault("APP_ENTRY", "migrate")
 
 from logging.config import fileConfig
 from urllib.parse import unquote, urlparse
@@ -24,6 +27,14 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 target_metadata = Base.metadata
+
+
+def process_revision_directives(context, revision, directives):
+    if getattr(config.cmd_opts, "autogenerate", False):
+        script = directives[0]
+        if script.upgrade_ops.is_empty():
+            directives[:] = []
+            print("[alembic] No schema changes detected; empty revision skipped.")
 
 
 def _to_psycopg_url(url: str) -> str:
@@ -63,11 +74,11 @@ def get_url() -> str:
             "DATABASE_URL not set. Set it in .env or environment."
         )
     url = url.strip()
-    
+
     # 레거시 스킴 정규화 (app/core/database.py와 동일한 로직)
     if url.startswith("postgres://"):
         url = url.replace("postgres://", "postgresql://", 1)
-        
+
     # 공백·줄바꿈 검사
     for s in (" ", "\n", "\r"):
         if s in url:
@@ -85,6 +96,9 @@ def run_migrations_offline() -> None:
         url=url,
         target_metadata=target_metadata,
         literal_binds=True,
+        compare_type=True,
+        compare_server_default=True,
+        process_revision_directives=process_revision_directives,
         dialect_opts={"paramstyle": "named"},
     )
     with context.begin_transaction():
@@ -107,7 +121,13 @@ def run_migrations_online() -> None:
                 creator=lambda: psycopg.connect(**conn_args),
             )
             with connectable.connect() as connection:
-                context.configure(connection=connection, target_metadata=target_metadata)
+                context.configure(
+                    connection=connection,
+                    target_metadata=target_metadata,
+                    compare_type=True,
+                    compare_server_default=True,
+                    process_revision_directives=process_revision_directives,
+                )
                 with context.begin_transaction():
                     context.run_migrations()
             return
@@ -117,7 +137,9 @@ def run_migrations_online() -> None:
                 delay = min(initial_delay * (2**attempt), max_delay)
                 import sys
                 sys.stderr.write(
-                    f"[alembic] connect attempt {attempt + 1}/{max_attempts} failed, retry in {delay:.0f}s: {type(e).__name__}: {str(e)[:200]}\n"
+                    "[alembic] connect attempt "
+                    f"{attempt + 1}/{max_attempts} failed, retry in {delay:.0f}s: "
+                    f"{type(e).__name__}: {str(e)[:200]}\n"
                 )
                 sys.stderr.flush()
                 time.sleep(delay)
