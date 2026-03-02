@@ -6,7 +6,7 @@ FastAPI 웹은 asyncpg, 워커는 이 모듈만 사용해 "Too many connections"
 import logging
 from collections.abc import Generator
 from contextlib import contextmanager
-from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
@@ -18,38 +18,67 @@ logger = logging.getLogger(__name__)
 sync_engine = None
 sync_session_factory = None
 
-_SSL_TO_SSLMODE = {"true": "require", "require": "require", "1": "require", "false": "disable", "disable": "disable", "0": "disable"}
-
 
 def _normalize_ssl_query_for_psycopg(url_str: str) -> str:
-    """psycopg3는 'ssl' 옵션을 인식하지 않음. 쿼리에서 ssl=... → sslmode=... 로 변환."""
-    parsed = urlparse(url_str)
-    if not parsed.query:
+    """
+    URL 쿼리에서 ssl=... 를 찾아 sslmode=... 로 바꿉니다.
+    - ssl=true / ssl=require -> sslmode=require
+    - ssl=false -> sslmode=disable
+    - 이미 sslmode가 있으면 그대로 두고 ssl만 제거합니다.
+    """
+    try:
+        parsed = urlparse(url_str)
+        if not parsed.query:
+            return url_str
+
+        query_params = parse_qsl(parsed.query, keep_blank_values=True)
+        new_params = []
+        has_sslmode = any(k == "sslmode" for k, v in query_params)
+        ssl_val = None
+
+        for k, v in query_params:
+            if k == "ssl":
+                ssl_val = v.lower()
+                continue
+            new_params.append((k, v))
+
+        if not has_sslmode and ssl_val:
+            if ssl_val in ("true", "require"):
+                new_params.append(("sslmode", "require"))
+            elif ssl_val == "false":
+                new_params.append(("sslmode", "disable"))
+            else:
+                # 알 수 없는 값은 일단 sslmode로 넘김
+                new_params.append(("sslmode", ssl_val))
+
+        new_query = urlencode(new_params)
+        return urlunparse(parsed._replace(query=new_query))
+    except Exception:
         return url_str
-    q = parse_qs(parsed.query, keep_blank_values=True)
-    if "ssl" not in q:
-        return url_str
-    ssl_val = (q["ssl"][0] or "").strip().lower()
-    if "sslmode" not in q:
-        q["sslmode"] = [_SSL_TO_SSLMODE.get(ssl_val, "require")]
-    del q["ssl"]
-    new_query = urlencode([(k, v[0]) for k, v in q.items()], doseq=False)
-    return urlunparse((parsed.scheme, parsed.netloc, parsed.path, parsed.params, new_query, parsed.fragment))
 
 
 def _sync_database_url() -> str | None:
-    """asyncpg URL을 동기 드라이버(psycopg3)용으로 변환. plain postgresql:// → +psycopg. ssl → sslmode 정규화."""
+    """
+    asyncpg URL을 동기 드라이버(psycopg3)용으로 변환.
+    driver를 postgresql+psycopg로 바꾼 뒤 _normalize_ssl_query_for_psycopg를 호출해 반환합니다.
+    """
     raw = (settings.db.database_url or "").strip()
     if not raw:
         return None
+
+    # 1. postgres:// -> postgresql:// 정규화
+    if raw.startswith("postgres://"):
+        raw = raw.replace("postgres://", "postgresql://", 1)
+
+    # 2. 드라이버 교체 (postgresql+psycopg)
     if "postgresql+asyncpg" in raw:
         url = raw.replace("postgresql+asyncpg", "postgresql+psycopg", 1)
     elif raw.startswith("postgresql://") and "postgresql+" not in raw:
         url = raw.replace("postgresql://", "postgresql+psycopg://", 1)
-    elif "postgresql+psycopg" in raw:
-        url = raw
     else:
         url = raw
+
+    # 3. SSL 쿼리 정규화
     return _normalize_ssl_query_for_psycopg(url)
 
 

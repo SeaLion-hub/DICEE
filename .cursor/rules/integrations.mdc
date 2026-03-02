@@ -27,17 +27,6 @@ Celery, Playwright, Gemini AI 연동 시 아래 가이드라인을 **반드시**
 - **Gemini API를 호출하는 Celery 태스크**에는 **rate_limit**(예: `rate_limit='10/m'`)을 반드시 지정하라. 동시에 많은 요청이 나가면 429 에러로 워커가 실패한다.
 - 429 재시도 시 **지수 백오프**(`retry_backoff=True`, `retry_backoff_max=600`)를 적용하라. 즉시 재시도하면 연속 429가 발생한다.
 
-### Celery Task 필수 규칙
-
-- **멱등성(idempotency)**: 모든 task는 재실행 시 같은 결과를 보장해야 한다.
-- **네트워크 I/O**: **connect/read timeout** 을 반드시 둔다.
-- **시간 제한**: `soft_time_limit`, `time_limit`, `max_retries` 를 task별로 명시해 무한 실행·무한 재시도 리스크를 막는다.
-- **재시도**: `autoretry_for`, `retry_backoff`, `retry_backoff_max`, `retry_jitter` 를 기본 적용한다.
-- **장기/단기 task 분리**: 전용 큐/워커로 라우팅한다.
-- **`acks_late`**: 사용 시 **멱등성·중복 실행 안전장치**가 없으면 적용 금지. (idempotency에 의존한다고 가정.)
-- **장기 ETA/countdown 금지**: `eta`/`countdown` 장시간 남용 금지. 장기 스케줄은 beat/DB 기반 스케줄러 사용.
-- **실패 시 로깅·re-raise**: 실패 시 **구조화된 로그**(Task ID, Args, Error)를 남기고 **반드시 re-raise** 한다. (또는 Celery signal/base task로 공통 로깅. try-except로 감싸되 예외를 삼키지 않음.)
-
 ---
 
 ## Playwright 설정

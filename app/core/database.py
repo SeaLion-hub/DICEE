@@ -212,9 +212,19 @@ def init_db() -> None:
 
     # 연결 단위 statement_timeout 적용. docs/decisions/database-pool-capacity.md.
     # psycopg3 (postgresql+psycopg)는 server_settings 미지원 → libpq options 사용.
+    # asyncpg는 server_settings(dict)를 지원하므로 구분하여 처리합니다.
     connect_args: dict = {}
     timeout_ms = settings.db.db_statement_timeout_ms
-    connect_args["options"] = f"-c statement_timeout={timeout_ms}"
+
+    url = _async_database_url(raw_url)
+    parsed_url = make_url(url)
+
+    if "asyncpg" in parsed_url.drivername:
+        # asyncpg: server_settings={ "parameter": "value" }
+        connect_args["server_settings"] = {"statement_timeout": str(timeout_ms)}
+    else:
+        # psycopg (libpq): options="-c parameter=value"
+        connect_args["options"] = f"-c statement_timeout={timeout_ms}"
 
     pool_kw: dict[str, Any] = {
         "pool_pre_ping": True,
@@ -226,7 +236,7 @@ def init_db() -> None:
     if settings.db.db_pool_recycle_async >= 0:
         pool_kw["pool_recycle"] = settings.db.db_pool_recycle_async
     _db_holder.engine = create_async_engine(
-        _async_database_url(raw_url),
+        url,
         echo=False,
         **pool_kw,
     )

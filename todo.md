@@ -10,7 +10,7 @@ Composer(Cmd+I) 사용 시 **@todo.md**를 반드시 포함해 세션 컨텍스�
 
 | 항목 | 내용 |
 |------|------|
-| **현재 수정 중** | 없음 (타입·Ruff·crawl_runs 계획 구현 완료) |
+| **현재 수정 중** | 없음 (버그 수정·마이그레이션·용량 상향 완료) |
 | **발생 중인 이슈** | 없음 |
 | **주의 사항** | 규칙·매뉴얼은 .cursor/rules/·docs/rules/ 참조, WORK_LOG에 실제 수정만 기록 |
 
@@ -25,7 +25,7 @@ Composer(Cmd+I) 사용 시 **@todo.md**를 반드시 포함해 세션 컨텍스�
 - **예시(새 대학 크롤러)**: @docs/decisions/database-spec.md를 참고해 Notice 스키마·필수 필드(published_at, external_id, title, url 등)를 확인한 뒤, 베이스/기존 크롤러 패턴을 따라 단계별 계획을 적는다.
 - 한 번에 "모든 크롤러 다 만들어줘"라고 하지 말고, **"베이스 클래스 상속 확인 → 로그인/세션 로직 → 파싱 로직"**처럼 끊어서 지시하고, 그때마다 이 [Plan]과 [Checklist]를 갱신하게 하라.
 
-(최신) md 문서 uptodate 확인·최신화: README(Celery 진입점·헬스 엔드포인트·현재 M2 문구), CAUTIONS(DATABASE_URL psycopg), error-handling(청크 commit·expunge_all), WORK_LOG·PLAN_REMEDIATION_68 반영.
+(최신) 3단계 마무리 및 안정화: 데이터 적재 상태 모니터링, 예외 상황(IP 차단 등) 대응 설계 검토.
 
 ---
 
@@ -36,7 +36,12 @@ Composer(Cmd+I) 사용 시 **@todo.md**를 반드시 포함해 세션 컨텍스�
 - **예시**: "진행 중: app/services/crawlers/yonsei_ai.py. Notice 모델의 published_at, external_id, title, url, raw_html 필수. content_hash는 제목+본문 텍스트만 사용."
 - 현재 수정 중인 파일(@yonsei_ai.py 등)의 **[Context]**를 요약해 이 섹션에 적고, 다음 턴에서도 @todo.md를 참조하면 맥락을 잃지 않는다.
 
-문서: README·CAUTIONS·docs/rules/error-handling·WORK_LOG·PLAN_REMEDIATION_68 최신화 반영. (코드 기준: app.core.celery_app:app, postgresql+psycopg, 청크 commit·expunge_all, /health·/ready·/live)
+완료된 작업:
+- `.env` 유효성 검사 에러 수정 (`APP_ENTRY`, `ENVIRONMENT`)
+- `asyncpg`/`psycopg` 공통 DB 연결 로직 (`app/core/database.py`)
+- `009_crawl_runs` 수동 마이그레이션 완료
+- `MAX_HTML_BYTES` 10MB 상향 (`crawl_http.py`, `crawl_payload.py`)
+- SSL 쿼리 정규화 (`app/core/database_sync.py`)
 
 ---
 
@@ -44,14 +49,12 @@ Composer(Cmd+I) 사용 시 **@todo.md**를 반드시 포함해 세션 컨텍스�
 
 수정할 때마다 **한 항목씩 지워나가며** 완료 보고를 한다. "다 했습니다"만 하지 말고, 어떤 항목을 끝냈는지 여기서 체크하고 보고하라.
 
-- [x] 이슈 1: run_crawl_job_sync rollback→FAILED 경로 단위 테스트 추가
-- [x] 이슈 2: _BoundedSeenSet max/evict 정책 docs/decisions 문서화
-- [x] pytest 실행 및 수정 반영 (36 passed)
-- [x] md 파일 uptodate 확인 및 최신화 (README·CAUTIONS·error-handling·WORK_LOG·PLAN_REMEDIATION_68)
-- [x] Phase 1: Ruff E501/I001 2건 수정
-- [x] Phase 2 전: mypy 모듈별 스냅샷 MYPY_BASELINE_BY_MODULE.md
-- [x] Phase 2: boto3(types-boto3)·core/main/services/crawlers 타입 수정·ensure_str_attr 헬퍼·mypy overrides 제거
-- [x] Phase 3: crawl_runs 감시·알림 문서·옵션 B 이슈 문서
+- [x] 버그 수정: Settings 유효성 검사 에러 (APP_ENTRY)
+- [x] 버그 수정: DB 연결 TypeError (options vs server_settings)
+- [x] DB 마이그레이션: 009_crawl_runs 수동 적용
+- [x] 기능 상향: MAX_HTML_BYTES 10MB로 증가
+- [x] 기능 개선: 동기 DB SSL 쿼리 정규화
+- [x] md 파일 uptodate 확인 및 최신화 (README·CAUTIONS·ROADMAP_PHASES·WORK_LOG·todo)
 
 ---
 

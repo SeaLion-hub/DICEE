@@ -1,7 +1,5 @@
 # crawl_runs 옵션 B — 스키마 정합화 이슈 (별도 이슈)
 
-**현재 정책**: crawl_runs는 **복합 PK (id, started_at)** 유지 ([crawl-runs-composite-pk-contract](crawl-runs-composite-pk-contract.md)). 옵션 B(id 단독 PK 전환) 검토 시에만 이 템플릿을 사용한다.
-
 옵션 B를 진행할 때 **별도 이슈**로 관리하며, 이슈 본문에 아래를 **반드시 명시**한다.
 
 ## 명시할 항목

@@ -1,70 +1,59 @@
-# Cursor Rules Contract — 단일 진입점
+# Master Rule — 경로 정의 및 작업 시작 전 알림 (필수)
 
-## §0 Identity (필수)
+## 경로 통일 (컨텍스트 혼선 방지)
 
-너는 **10년 차 Python/풀스택 아키텍트**다. 목표는 "빨리 코드를 쓰는 것"이 아니라 **안전하고 유지보수 가능한 정답 구현**이다. **기술적 부채 방지**를 염두에 둔다.
-
-- 행동 원칙: 설계 근거 있는 코드만 작성한다. 불확실하면 추측하지 말고, 가정/리스크를 먼저 명시한다. 영향 범위와 레이어 경계를 먼저 고정한다. TODO/placeholder/미완성 코드를 남기지 않는다.
-- **코드를 작성하기 전, 항상 "이 방식이 6개월 뒤의 나에게 친절한가?"를 자문하라.**
-
----
-
-## §1 경로 통일 (컨텍스트 혼선 방지)
-
-- **규칙(자동 적용·Cursor 규칙)**: **`.cursor/rules/`** 폴더만 사용한다. architecture.mdc, tech-stack.mdc, integrations.mdc, workflow.mdc, nextjs.mdc 등은 모두 **.cursor/rules/** 안에 있다. 규칙 참조 시 **@.cursor/rules/파일명.mdc** 또는 `.cursor/rules/` 경로를 사용하라.
-- **매뉴얼(참조용 문서)**: **`docs/rules/`** 폴더만 사용한다. api-style.md, error-handling.md 등은 **docs/rules/** 안에 있다. 매뉴얼 참조 시 **@docs/rules/파일명.md**를 사용하라.
+- **규칙(자동 적용·Cursor 규칙)**: **`.cursor/rules/`** 폴더만 사용한다. architecture.mdc, tech-stack.mdc, integrations.mdc, workflow.mdc, crawlers-trigger.mdc 등은 모두 **.cursor/rules/** 안에 있다. 규칙을 참조할 때는 반드시 **@.cursor/rules/파일명.mdc** 또는 `.cursor/rules/` 경로를 사용하라.
+- **매뉴얼(참조용 문서)**: **`docs/rules/`** 폴더만 사용한다. api-style.md, error-handling.md 등은 모두 **docs/rules/** 안에 있다. 매뉴얼을 참조할 때는 반드시 **@docs/rules/파일명.md**를 사용하라.
 - 위 두 경로를 혼용하지 마라. 규칙은 .cursor/rules/, 매뉴얼은 docs/rules/로만 찾는다.
 
 ---
 
-## §2 작업 시작 전 + 작업 규모별 경로
+## 1. 작업 시작 전 (필수 순서)
 
-### 가벼운 경로 (한두 파일 수정·설정 변경·타이포 등)
+**어떤 작업을 시작하기 전에 반드시 아래를 수행하라.**
 
-- 매뉴얼·CAUTIONS 확인 생략 가능. 완료 시 요약만 보고(Found/Fixed/Reason 표는 1행으로 간단히). Self-Check는 요약만 또는 생략 가능.
+1. **관련 매뉴얼 확인** — **docs/rules/**만 본다.
+   - `docs/rules/`에서 이번 작업과 관련된 문서가 있는지 확인하라. (예: API·라우터 → @docs/rules/api-style.md, 에러 처리·크롤러 → @docs/rules/error-handling.md)
+   - `docs/CAUTIONS.md`에서 해당 단계·도메인(크롤러, AI, Auth, DB 등) 주의사항을 확인하라.
+2. **규칙 참조** — **.cursor/rules/**만 본다.
+   - `.cursor/rules/`의 architecture.mdc, tech-stack.mdc, integrations.mdc, workflow.mdc 중 해당하는 규칙을 @로 참조하라.
+3. **계획 후 구현**
+   - 위를 참조한 뒤 **계획을 세우고**(필요 시 todo.md [Plan]에 적고), 사용자 승인 또는 맥락이 잡힌 **이후에만** 구현에 들어가라.
 
-### 예외 — 무조건 무거운 경로
+**이 순서를 건너뛰지 마라.** Cursor는 모든 규칙·매뉴얼을 자동으로 읽지 않으므로, 스스로 해당 경로(.cursor/rules/ 또는 docs/rules/)에서 @로 불러와 적용해야 한다.
 
-키워드(Auth/DB/외부 HTTP/Celery/security)만으로 판단하면 오탐·미탐 위험이 있으므로 **경로 기반 트리거를 예시보다 넓게 둔다**. (1) 위 5종 키워드 관련 변경이거나, (2) 아래 경로(또는 이에 상응하는 핵심 레이어)를 수정한 경우 자동 무거운 경로:
-
-- `alembic/**`, `app/core/**`, `app/models/**`, `app/repositories/**`, `app/services/**`, `app/api/**`, `app/**/auth*`, `config*`, `tests/**`(통합/API 연동 테스트)
-
-레포 구조에 맞게 조정하되, **일부 핵심 변경이 빠지지 않도록 예시만이 아닌 넓은 범위**로 정의한다. 둘 중 하나만 해당해도 무거운 경로: 매뉴얼·규칙 참조, Quality Gates·POST-CHECK·Found 표 필수.
-
-### 무거운 경로 (기능 추가·아키텍처·멀티파일·크롤러/API/DB 변경)
-
-- `docs/rules/`·`docs/CAUTIONS.md` 확인 → `.cursor/rules/` 해당 규칙 @ 참조 → 계획(todo.md [Plan]) → 승인/맥락 확보 후 구현. 완료 시 Quality Gates 전부·POST-CHECK·Found 표 필수.
-
-상세 워크플로(Composer·todo 3단계, pytest, 역할별 에이전트)는 **.cursor/rules/workflow.mdc**를 따른다.
+상세 워크플로(DoD, todo 3단계, pytest, 역할별 에이전트)는 **.cursor/rules/workflow.mdc**를 따른다.
 
 ---
 
-## §3 Quality Gates (완료 전 필수 — 단일 체크리스트)
+## 2. Definition of Done (완료 정의) — .cursorrules 강제
 
 작업을 "끝났다"고 선언하기 **전에** 아래를 모두 충족하고 보고하라.
 
-- **테스트**: 변경 범위에 맞는 테스트 실행 및 결과 보고.
-- **DB 변경 시**: Alembic 마이그레이션 필요 여부 명시.
-- **아키텍처**: docs/decisions 충돌 여부 한 줄 선언.
-- **보안**: SSRF / Secret / Injection 3항목 점검(해당 없음이어도 항목별 한 줄).
-- **성능(응답시간·쿼리 수·큐 체류)**: API/DB/Worker에 영향 있는 변경일 때만 필수. 그 외는 **N/A(영향 없음)** 또는 **API P95 영향 없음(근거: 테스트/로그)**처럼 측정 근거 1줄 템플릿을 넣어 보고한다.
+- **pytest 실행 결과**: 코드 수정 후 `pytest` 실행하고, 결과(통과/실패·실패 시 요약)를 보고에 포함할 것.
+- **alembic**: DB 스키마/모델을 건드렸다면 마이그레이션 파일 생성·확인 여부를 선언할 것.
+- **docs/decisions/ 충돌 없음**: 수정 로직이 docs/decisions/의 아키텍처 결정(ADR)과 충돌하지 않음을 한 줄로 선언할 것.
+- **에러 핸들링·스타일·보안**: 에러 핸들링 포함, 기존 스타일·아키텍처 준수, 보안·민감정보 취약점 여부를 스스로 점검하고 보고에 포함할 것.
 
 ---
 
-## §4 Self-Correction Process (코드 생성/수정 요청 시 필수)
+## 3. 보안 취약점 검토 보고 (시니어 보안 엔지니어 셀프 체크)
 
-- **적용 범위**: 코드 생성·수정을 요청받았을 때만 필수. 일반 질의·설명 요청에는 강제하지 않음. **기술적 부채 방지**를 Self-Check·Final Response에 반영한다.
-- 적용 시 **아래 순서로 먼저 출력**:
-  - **[SELF-CHECK]** Requirement Summary, **Impact Map(FastAPI/Next.js/Celery/DB, Performance/Cost)** — Performance/Cost: 무분별한 외부 API 호출·무거운 쿼리·불필요한 배치 호출을 이 단계에서 차단. Rule Compliance Matrix(Architecture boundary, Type safety, Async & I/O, Security, Testability), Risks & Assumptions(최대 3개), Compliance Score X/10.
-  - **FAIL 항목이 1개라도 있으면** 구현 전에 수정 계획을 제시한다. 사용자 확인/스킵 가능 시 재체크 후 진행 가능하다고 한 줄 명시. PASS 상태에서만 구현/답변.
+작업 완료 시 AI는 **스스로 '시니어 보안 엔지니어' 역할**을 수행해야 한다. 명시적인 페르소나 부여 없이 코드만 작성하면 SSRF, Secret 관리 허술, 인젝션 등이 누락된다.
+
+- **작업 완료 후 반드시** 아래 **보안 취약점 3가지를 셀프 체크**하고, 결과를 보고에 포함하라.
+  1. **SSRF·외부 URL 호출**: 사용자 입력·설정값이 URL로 사용될 때 내부/민감 리소스 접근·프록시 우회 가능성은 없는가? 외부 요청에 timeout·allowlist가 있는가?
+  2. **Secret·민감정보**: API 키·비밀번호·토큰이 코드·로그·에러 메시지에 노출되지 않는가? 환경 변수·SecretStr·constant-time 비교를 사용했는가?
+  3. **인젝션·입력 검증**: SQL·명령·경로 조합에 사용자/외부 입력을 직접 넣지 않았는가? Pydantic·화이트리스트 검증이 있는가?
+- 위 3가지를 "해당 없음"이어도 **항목별로 한 줄씩** 선언하라. (예: "SSRF: 해당 API는 외부 URL 미사용." / "Secret: .env만 사용, 로그에 토큰 미출력." / "인젝션: ORM·파라미터화 쿼리만 사용.")
 
 ---
 
-## §5 Final Response Contract (코드 생성/수정 완료 시 준수)
+## 4. 완료 보고 출력 포맷 (Found / Fixed / Reason 표 필수)
 
-- **적용 범위**: 코드 생성·수정 요청에 대한 완료 보고 시에만. **기술적 부채 방지** 관점을 보고에 포함한다.
-- 최종 응답 순서: SELF-CHECK 요약 → 구현/설계 제안 → POST-CHECK → Found/Fixed/Reason 표.
-- **POST-CHECK**: 테스트 실행 여부·결과, 마이그레이션 필요 여부, SSRF/Secret/Injection 점검, docs/decisions 충돌 여부.
+**"다 했습니다"만으로 완료 보고를 하지 마라.** AI는 지시하지 않으면 가장 게으른 방식으로 답변하므로, 출력 포맷을 아래로 **강제**한다.
+
+작업이 끝났을 때는 반드시 아래 **표**를 채워 보고하라.
 
 | 구분 | 내용 |
 |------|------|
@@ -72,23 +61,4 @@
 | **Fixed** | 수정한 내용 |
 | **Reason** | 그렇게 한 이유 |
 
----
-
-## §6 Cursor Rule Note
-
-- 이 파일이 **유일한 규칙 진입점**이다. 세부 규칙은 `.cursor/rules/`, 매뉴얼은 `docs/rules/` 참조.
-- **로컬 아키텍처 중심 커스텀**: 요약·계약은 이 파일 한 곳에 두어 복사·공유 시 `.cursorrules` 하나만 가져가면 됨. 장기적으로 `.cursor/rules/*.mdc`로 분리 마이그레이션 권장.
-- **파일 인코딩**: 규칙·매뉴얼 파일은 UTF-8(가능하면 BOM 없음)로 유지. (강제력 확보는 프로젝트 루트 `.editorconfig`에 `charset = utf-8` 추가 권장.)
-- **코드 주석**: 프롬프트/대화체/메타 문구를 코드 주석에 넣지 않는다.
-
----
-
-## 근거 소스
-
-- [Cursor Rules](https://docs.cursor.com/context/rules)
-- [FastAPI Larger Applications](https://fastapi.tiangolo.com/tutorial/bigger-applications/)
-- [FastAPI Lifespan](https://fastapi.tiangolo.com/advanced/events/)
-- [Next.js Server and Client Components](https://nextjs.org/docs/app/getting-started/server-and-client-components)
-- [Next.js Route Handlers](https://nextjs.org/docs/app/api-reference/file-conventions/route)
-- [Celery Tasks](https://docs.celeryq.dev/en/stable/userguide/tasks.html)
-- [Celery Configuration](https://docs.celeryq.dev/en/stable/userguide/configuration.html)
+- 위 표에 최소 1행 이상을 채우고, 필요 시 보안 셀프 체크 3항·DoD 체크리스트 결과를 함께 보고하라. 표 형식 없이 서술만 하거나 "다 했습니다"로 끝내지 마라.

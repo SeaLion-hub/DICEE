@@ -1,7 +1,7 @@
 # ADR 001: Notice 일정 스키마 (A vs B)
 
-**상태**: **확정 — Option A** (notice_schedules·active_notice_schedules_mv 정규화). [ROADMAP_PHASES](../ROADMAP_PHASES.md) 및 [database-spec](database-spec.md) 참고.  
-**결정 시점**: 3단계 DB 스키마·데이터 적재 로직 확정 전 (이미 반영됨)
+**상태**: 확정 전 (3단계 DB 스키마 확정 시 선택 적용)  
+**결정 시점**: 3단계 DB 스키마·데이터 적재 로직 확정 전
 
 ---
 

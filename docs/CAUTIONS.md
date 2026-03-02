@@ -62,6 +62,8 @@
 | **진입점 변경** | `main:app` vs `app.main:app` 혼동 시 배포·로컬 실행이 깨짐. | **진입점은 `app.main:app` 고정**. DEPLOYMENT Start Command와 일치. 루트에 `app/` 패키지. |
 | **폴더 구조** | `api/`, `core/`, `services/` 등 위치를 맘대로 바꾸면 import 전부 깨짐. | ROADMAP 1단계 "계층형 디렉터리" 유지. 새 폴더는 `app/` 안에 추가. |
 | **환경변수 하드코딩** | API 키·URL을 코드에 넣으면 커밋 시 유출. | 모든 설정은 **환경변수**. `.env.example`에는 **키 이름만**. 값은 로컬 .env·Railway Variables. |
+| **Settings 유효성 검사** | `APP_ENTRY`, `ENVIRONMENT` 등 필수 변수 누락 시 서버 기동 불가. | `.env` 또는 시스템 환경 변수에 필수 설정 누락 여부 확인. |
+| **드라이버별 DB 설정** | `asyncpg`와 `psycopg`는 `connect_args` 구조가 다름 (options vs server_settings). | `app/core/database.py`의 분기 로직 확인. |
 | **.env 커밋** | 실수로 .env를 푸시하면 시크릿 유출. | 커밋 전 `.env` 포함 여부 확인. pre-commit 또는 스크립트로 방지. |
 | **새 환경변수** | 코드에만 넣고 문서 안 바꾸면 배포·협업 시 누락. | 새 변수 추가 시 **DEPLOYMENT 표 + .env.example** 동시 갱신. |
 

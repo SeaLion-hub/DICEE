@@ -27,4 +27,3 @@ Phase 0: 변경 전/후 회귀 비교 가능하도록 테스트·정적검사 �
 ## 참고
 
 - Phase 1~6 적용 후 동일 명령으로 회귀 확인. Auth 경로 동작은 test_auth_security_hardening.py로 고정.
-- **적용 완료**: Phase 1~6 적용 완료 (WORK_LOG 2026-03-01). 현재는 이 기준선 대비 회귀 없음.

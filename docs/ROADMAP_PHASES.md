@@ -144,6 +144,7 @@
 - Railway 워커: Playwright 필요 시에만 Dockerfile, OOM 방지 옵션·concurrency 1~2.  
 - 재시도·스케줄링: autoretry_for, max_retries 후 DLQ. Railway Cron으로 POST /internal/trigger-crawl, 크롤 주기 6시간.  
 - 모니터링: Sentry 워커 부착.
+- **데이터베이스 마이그레이션**: `009_crawl_runs` 수동 적용 완료 (processed_count, checkpointed_at 추가).
 
 **3단계 → 4단계 전 검크리스트**: content_hash 중복 없음(약 100건 적재 후 확인). 날짜 형식 정상.
 

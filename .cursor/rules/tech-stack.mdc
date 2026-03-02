@@ -9,15 +9,6 @@ alwaysApply: true
 
 ---
 
-## Global Coding Style
-
-- Python **public 함수/메서드 시그니처**에 **타입 힌트**를 반드시 작성한다.
-- 예외 처리는 **guard clause(조기 반환)** 우선으로 작성한다.
-- **민감정보**(토큰/비밀번호/API 키)를 코드·로그·에러 메시지에 노출하지 않는다.
-- **코드 주석**: 프롬프트/대화체/메타 문구 주석 금지. (동일 항목 .cursorrules §6 참조.)
-
----
-
 ## SQLAlchemy 2.0 (비동기) 강제
 
 - **절대** `session.query(Model)` 를 사용하지 마라.  

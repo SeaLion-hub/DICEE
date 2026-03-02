@@ -19,7 +19,7 @@ from app.core.redis import get_shared_sync_redis_client
 logger = logging.getLogger(__name__)
 
 # 기본 최대 HTML 바이트 (crawl_service.MAX_HTML_BYTES와 동일 값 유지)
-DEFAULT_MAX_HTML_BYTES = 5 * 1024 * 1024
+DEFAULT_MAX_HTML_BYTES = 10 * 1024 * 1024
 DEFAULT_TIMEOUT = 10
 CHUNK_SIZE = 64 * 1024
 

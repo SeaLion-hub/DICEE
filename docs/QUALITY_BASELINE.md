@@ -6,7 +6,7 @@ This document defines the current quality baseline and how to verify it locally 
 
 | Item | Command | Baseline |
 |---|---|---|
-| Pytest | `pytest tests -q --tb=no` | 167 passed, 3 skipped |
+| Pytest | `pytest tests -q --tb=no` | 130 passed, 3 skipped |
 | Coverage | `pytest tests --cov=app --cov-fail-under=50` | CI threshold 50%; goal 80%. |
 | Mypy | `mypy app` | 0 errors |
 | Architecture guard | `pytest -q tests/test_architecture_imports.py` (위임: `lint-imports`) | pass |

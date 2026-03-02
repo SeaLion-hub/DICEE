@@ -1,13 +1,5 @@
 # 작업 로그 (WORK_LOG)
 
-## 월별 분리 원칙
-
-- **현재**: 단일 파일(WORK_LOG.md)에 날짜별로 기록. 목차로 연·월·일 구간 이동.
-- **원칙**: 로그가 과도하게 길어지면(예: 1년분 이상) **월별 분리**를 검토한다. 분리 시 `docs/logs/WORK_LOG_YYYY-MM.md` 형식으로 두고, 본 문서에는 "최근 N개월은 본문, 그 이전은 docs/logs/ 참고" 안내를 둔다. **이번 IA 정리에서는 파일 분리까지 수행하지 않고 원칙만 명시.**
-- **문서 이동**: 기준선·리포트(QUALITY_BASELINE, MYPY_BASELINE, auth_baseline, BENCHMARK_INSIGHTS, PLAN_REMEDIATION_68 등)는 [docs/README.md](README.md)에 정리된 대로 `docs/reports/` 이하로 이동됨. 과거 항목에 적힌 경로는 해당 시점 기준.
-
----
-
 ## 목차
 
 - [작성 규칙](#작성-규칙)
@@ -39,8 +31,6 @@
 
 ---
 ## 2026-03-01
-
-- [Celery 워커 DB 연결 오류 수정] Railway 등에서 DATABASE_URL에 `?ssl=require`가 포함될 때 psycopg3가 인식하지 못하는 `ssl` 옵션으로 인해 `invalid connection option "ssl"` 발생. app/core/database_sync.py: 동기 URL에서 `ssl=` 쿼리 파라미터를 `sslmode=`로 변환하는 `_normalize_ssl_query_for_psycopg` 추가, `_sync_database_url`에서 호출. tests/test_env_and_config_whitespace.py: 변환 검증 테스트 추가.
 
 - [Auth·DB·Main 개선 계획 구현] **(2.3)** app/main.py: lifespan에서 `current_env = (settings.environment or "").strip().lower()` 한 번 계산 후 development/production 분기만 사용. **(2.4)** app/core/database.py: `_resolved_max_connections`를 모듈 전역에서 제거하고 `_DbHolder.resolved_max_connections`로 캡슐화; `verify_db_connection`·`get_resolved_max_connections`·`override_db_for_testing`에서 Holder 사용; 테스트 격리를 위해 `override_db_for_testing`에서 `_pool_budget_manager = None` 초기화. **(2.2.1)** app/api/v1/auth.py: `_log_auth_rate_limit_exceeded(request, client_ip)` 헬퍼 추가, `_auth_rate_limit_dep`·`post_refresh`에서 공통 호출로 Rate Limit 초과 로깅 DRY. **(2.5)** docs/decisions/logout-redis-failure-policy.md: 클라이언트 방어적 동작(응답과 관계없이 로컬 토큰 파기)·재시도 문구 보강. **(2.6)** app/core/config: base/types/legacy에 `db_pool_recycle_async` 추가; app/core/database.py `init_db()`에서 `pool_recycle` 조건부 적용; .env.example·DEPLOYMENT.md·docs/decisions/database-pool-capacity.md 반영. **(2.1)** app/api/v1/auth.py `post_logout`: Redis Blocklist 등록을 먼저 수행, 실패 시 503(DB 미호출); 성공 시 `logout_user` + `commit`; DB 예외 시 `rollback` 후 재발생. docs/decisions/logout-redis-failure-policy.md: "Redis 먼저" 순서·재시도 시 401 가능 명시. tests/test_security_features.py: test_logout_blocklist_unavailable_returns_503에서 Redis 먼저 순서에 맞게 "commit 미호출" assert로 변경. pytest 167 passed, 3 skipped.
 
@@ -264,3 +254,5 @@
 - [단계] 무엇을 했는지 (어떤 파일/기능). 왜 또는 결과 한 줄.
 ```
 - [PLAN_OWNER_REMEDIATION 실행(P0+P1)] `app/core/config` 패키지 분해(호환 import 유지), `JWT_SIGNING_MODE(auto|hs256|rs256)` 도입 및 auto RS 우선 규칙/encode-decode 공통 해석 강제, production local spool fail-fast(`CONTENT_SPOOL_ALLOW_EPHEMERAL`) 추가, internal API client IP 미판별 503 fail-closed 적용. `storage.py`에 local/s3 공통 spool 계약(list/read/overwrite/delete/move_to_dlq) 및 retry/last_error/dead-letter 메타데이터 추가, `tasks.py` drain 경로를 backend 공통 처리로 리팩터링. `crawl_service.py`의 Redis 동기 클라이언트 경로를 `app.core.redis.get_shared_sync_redis_client` 공유 경로로 통합. 테스트/검증: `pytest -q`(85 passed, 3 skipped), `ruff check app tests`, `mypy app` 통과.
+
+- [버그 수정 및 환경 설정] **(P0)** `.env`: `APP_ENTRY=api` 및 `ENVIRONMENT=development` 추가하여 Settings 유효성 검사 에러(Field required) 해결. **(P0)** `app/core/database.py`: `asyncpg`와 `psycopg` 드라이버를 모두 지원하도록 `connect_args` 처리 로직 개선 — `asyncpg`는 `server_settings` 사용, `psycopg`는 `options` 사용하도록 분기하여 `TypeError` 해결. **(P1)** `alembic`: 데이터베이스를 `009_crawl_runs` 버전으로 수동 마이그레이션하여 `crawl_runs` 테이블에 missing columns(`processed_count`, `checkpointed_at`) 추가 및 `ProgrammingError` 해결. **(P2)** `app/core/crawl_http.py`·`app/services/crawl_payload.py`: `MAX_HTML_BYTES`를 5MB에서 10MB로 상향 조정하여 대용량 공지사항 수집 스킵 문제 해결. **(P2)** `app/core/database_sync.py`: `_normalize_ssl_query_for_psycopg` 도입하여 `ssl=true/require` 쿼리를 `sslmode=require`로 자동 변환, `psycopg3` 동기 연결 호환성 강화.
