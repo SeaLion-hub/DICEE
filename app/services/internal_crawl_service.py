@@ -1,6 +1,6 @@
 """
 내부 API 트리거 크롤 서비스. 멱등성·락·enqueue 오케스트레이션.
-HTTP/JSONResponse/status_code 의미를 모름. 도메인 결과(TriggerCrawlResult) 또는 도메인 예외만 사용.
+도메인 결과(TriggerCrawlResult) 또는 도메인 예외 단위의 트랜잭션을 처리합니다.
 """
 
 import logging
@@ -130,8 +130,12 @@ class InternalCrawlService:
                         task_id,
                         countdown,
                     )
-                except Exception:
-                    logger.exception("trigger-crawl apply_async failed: code=%s", code)
+                except (ConnectionError, TimeoutError, OSError):
+                    logger.exception(
+                        "trigger-crawl apply_async failed: code=%s",
+                        code,
+                        extra={"college_code": code},
+                    )
                     if self._redis is not None and lock_token:
                         await release_trigger_lock(self._redis, code, lock_token)
                     failed.append(code)

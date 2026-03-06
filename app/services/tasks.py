@@ -9,6 +9,7 @@ import time
 import uuid as uuid_mod
 from pathlib import Path
 
+import requests
 from requests.exceptions import RequestException
 
 from app.core.celery_app import app
@@ -51,12 +52,29 @@ from app.repositories.notice_repository import (
     update_notice_content_url_sync,
 )
 from app.schemas.ai import NoticeAIExtraction, NoticeCategory
-from app.services.ai_pipeline import project_extraction_to_notice_fields
+from app.services.ai_pipeline import extract_notice_info, project_extraction_to_notice_fields
 from app.services.crawl_service import handle_crawl_failure_composite, run_crawl_job_sync
 
 logger = logging.getLogger(__name__)
 
 TRIGGER_LOCK_HEARTBEAT_INTERVAL_SECONDS = 60
+NOTICE_HTML_FETCH_TIMEOUT = 30
+
+
+def _get_notice_html_for_ai(notice) -> str:
+    """공지 본문 HTML 반환. content_url이 있으면 HTTP GET, 없으면 title 기반 최소 HTML."""
+    url = None
+    if getattr(notice, "notice_content", None) and getattr(notice.notice_content, "content_url", None):
+        url = (notice.notice_content.content_url or "").strip()
+    if url and (url.startswith("http://") or url.startswith("https://")):
+        try:
+            resp = requests.get(url, timeout=NOTICE_HTML_FETCH_TIMEOUT)
+            resp.raise_for_status()
+            return resp.text or ""
+        except RequestException:
+            raise
+    title = getattr(notice, "title", None) or ""
+    return f"<title>{title}</title>" if title else ""
 
 
 def _set_task_context(task_id: str | None, college_code: str | None = None):
@@ -244,8 +262,9 @@ def process_notice_ai_task(self, notice_id: str):
                 notice.ai_extracted_json or {},
             )
         else:
-            stub = NoticeAIExtraction(notice_category=NoticeCategory.OTHER)
-            projected = project_extraction_to_notice_fields(stub)
+            html_content = _get_notice_html_for_ai(notice)
+            extraction = extract_notice_info(html_content)
+            projected = project_extraction_to_notice_fields(extraction)
             update_ai_result_sync(
                 session,
                 notice_uuid,

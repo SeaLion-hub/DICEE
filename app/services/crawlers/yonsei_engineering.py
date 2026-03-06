@@ -159,7 +159,13 @@ def scrape_yonsei_engineering_precise(url):
                                 "name": f"image_{idx+1}.{ext}",
                             }
                         )
-                    except Exception:
+                    except (ValueError, IndexError) as e:
+                        logger.warning(
+                            "scrape_yonsei_engineering_precise inline image parse failed url=%s index=%s",
+                            url,
+                            idx,
+                            exc_info=True,
+                        )
                         continue
                 else:
                     if any(x in src for x in ["icon", "btn", "button", "search", "blank"]):
@@ -346,7 +352,13 @@ async def scrape_yonsei_engineering_precise_async(client: httpx.AsyncClient, url
                         images_data.append(
                             {"type": "base64", "data": encoded, "ext": ext, "name": f"image_{idx+1}.{ext}"}
                         )
-                    except Exception:
+                    except (ValueError, IndexError) as e:
+                        logger.warning(
+                            "scrape_yonsei_engineering_precise_async inline image parse failed url=%s index=%s",
+                            url,
+                            idx,
+                            exc_info=True,
+                        )
                         continue
                 else:
                     if any(x in src for x in ["icon", "btn", "button", "search", "blank"]):

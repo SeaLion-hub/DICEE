@@ -151,6 +151,14 @@ class Settings(BaseSettings):
         description="Comma-separated IPs allowed to scrape /internal/metrics. Empty = deny all.",
     )
     ai_pipeline_enabled: bool = False
+    gemini_api_key: SecretStr | None = Field(
+        None,
+        description="Gemini API key. When unset, google-generativeai uses GOOGLE_API_KEY from env.",
+    )
+    gemini_model: str = Field(
+        "gemini-1.5-flash-latest",
+        description="Gemini model id for AI extraction (tool-calling supported).",
+    )
     celery_worker_prefetch_multiplier: int = Field(1, ge=1, le=16)
     celery_broker_connection_max_retries: int = Field(100, ge=1, le=10000)
     celery_result_expires_seconds: int = Field(3600, ge=60, le=604800)
@@ -253,6 +261,7 @@ class Settings(BaseSettings):
         "allowed_origins",
         "jwt_secret",
         "google_client_secret",
+        "gemini_api_key",
         "crawl_trigger_secret",
         mode="before",
     )

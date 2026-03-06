@@ -30,5 +30,8 @@ PyJWT==2.10.1
 google-auth==2.40.3
 pyjwt-key-fetcher==0.8.0
 
+# AI (Instructor + Gemini structured output). from_provider("google/...") uses GOOGLE_API_KEY or api_key.
+instructor[google-genai]>=1.0.0
+
 # Monitoring
 sentry-sdk==2.18.0

@@ -1,4 +1,4 @@
-"""내부 API(trigger-crawl) 도메인 계약. 서비스는 result_kind만 반환하고 HTTP 의미를 모름."""
+"""내부 API(trigger-crawl) 도메인 계약. 서비스는 result_kind만 반환합니다."""
 
 from dataclasses import dataclass
 from enum import Enum

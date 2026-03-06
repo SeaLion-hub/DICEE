@@ -1,0 +1,17 @@
+{
+  "exclude": [
+    ".git",
+    ".venv",
+    "venv",
+    "env",
+    "__pycache__",
+    ".cursor",
+    "node_modules",
+    "build",
+    "dist",
+    "*.egg-info",
+    ".mypy_cache",
+    ".ruff_cache",
+    "alembic/versions"
+  ]
+}

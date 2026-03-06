@@ -9,11 +9,43 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
-from typing import Any
+from typing import Annotated, Any
 
-from pydantic import Field, model_validator
+from pydantic import AfterValidator, Field, model_validator
 
 from app.schemas.base import BaseSchema
+
+_DEPARTMENT_PLACEHOLDER_VALUES = frozenset(
+    {"없음", "알 수 없음", "해당없음", "해당 없음", "-", "없음.", "알수없음"}
+)
+_PLACEHOLDER_LOWER = frozenset({"none", "n/a", "na"})
+
+
+def _reject_placeholder_departments(v: list[str]) -> list[str]:
+    for s in v:
+        t = (s or "").strip()
+        if t and (t in _DEPARTMENT_PLACEHOLDER_VALUES or t.lower() in _PLACEHOLDER_LOWER):
+            raise ValueError(
+                "target_departments must not contain placeholder values (e.g. '없음', '알 수 없음'). "
+                "Use empty list if no departments specified."
+            )
+    return v
+
+
+def _reject_placeholder_date_raw(v: str | None) -> str | None:
+    if v is None:
+        return v
+    t = v.strip()
+    if not t:
+        return None
+    if t in _DEPARTMENT_PLACEHOLDER_VALUES or t.lower() in _PLACEHOLDER_LOWER:
+        raise ValueError(
+            "date_raw must not be a placeholder (e.g. '없음', '알 수 없음'). "
+            "Use null or the actual date text from the notice."
+        )
+    if len(t) > 500:
+        raise ValueError("date_raw must not exceed 500 characters.")
+    return v
 
 
 class NoticeCategory(str, Enum):
@@ -67,10 +99,11 @@ class ScheduleItem(BaseSchema):
         default=None,
         description="사람이 읽기 좋은 라벨 (예: '서류 마감', '1차 면접', '사전 설명회')",
     )
-    date_raw: str | None = Field(
-        default=None,
-        description="파싱 불가/애매한 날짜의 원문 (예: '11월 중순', '추후 공지')",
-    )
+    date_raw: Annotated[
+        str | None,
+        Field(default=None, description="파싱 불가/애매한 날짜의 원문 (예: '11월 중순', '추후 공지')"),
+        AfterValidator(_reject_placeholder_date_raw),
+    ] = None
 
     @model_validator(mode="after")
     def _normalize_all_day(self) -> ScheduleItem:
@@ -126,10 +159,11 @@ class NoticeAIExtraction(BaseSchema):
         description="raw_eligibility_text를 바탕으로 분절한 자격 조건 리스트",
     )
 
-    target_departments: list[str] = Field(
-        default_factory=list,
-        description="자격 요건에 명시된 타겟 학과 리스트 (없으면 빈 리스트)",
-    )
+    target_departments: Annotated[
+        list[str],
+        Field(default_factory=list, description="자격 요건에 명시된 타겟 학과 리스트 (없으면 빈 리스트)"),
+        AfterValidator(_reject_placeholder_departments),
+    ]
 
     target_grades: list[TargetGrade] = Field(
         default_factory=list,

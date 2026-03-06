@@ -164,8 +164,14 @@ def get_notice_for_ai_sync(session: Session, notice_id: uuid.UUID) -> Notice | N
     """
     AI 처리 대상 1건 선점. ai_status='pending'인 행만 FOR UPDATE SKIP LOCKED로 잡고
     ai_status='processing'으로 갱신 후 반환. 동시 워커 중복 처리 방지.
+    notice_content(본문 URL) 함께 로드.
     """
-    stmt = select(Notice).where(Notice.id == notice_id, Notice.ai_status == "pending").with_for_update(skip_locked=True)
+    stmt = (
+        select(Notice)
+        .where(Notice.id == notice_id, Notice.ai_status == "pending")
+        .options(selectinload(Notice.notice_content))
+        .with_for_update(skip_locked=True)
+    )
     result = session.execute(stmt)
     notice = result.scalar_one_or_none()
     if notice is None:
