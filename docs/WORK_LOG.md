@@ -39,6 +39,10 @@
 - `- [단계 또는 영역] 무엇을 했는지 (어떤 파일/기능). 왜 또는 결과 한 줄.`
 
 ---
+## 2026-03-06
+
+- [4단계 AI 스키마·파이프라인 초석] `app/schemas/ai.py`에 NoticeAIExtraction/NoticeCategory/ScheduleItem/TargetGrade Pydantic 스키마 추가(자격 요건 Schema-driven CoT: raw_eligibility_text → eligibility_rules → target_departments → target_grades, 일정 date_raw/label 포함). `app/models/notice.py`에 category/sub_category ORM 필드 추가(DDL과 정합). `app/services/ai_pipeline.py`에 NoticeAIExtraction → Notice 필드 투영 유틸(project_extraction_to_notice_fields) 구현, `app/repositories/notice_repository.update_ai_result_sync`를 dates/eligibility/hashtags/category까지 저장하도록 확장. `app/services/tasks.py`의 process_notice_ai_task에서 is_manual_edited 보호 및 스텁 NoticeAIExtraction 기반 투영 적용(나중에 Instructor+Gemini 연동 시 동일 흐름 사용). `docs/decisions/ai-extraction-schema.md` ADR 작성, ROADMAP/ROADMAP_PHASES 관련 문서 링크 갱신, `tests/test_ai_pipeline_schema.py`로 투영 로직 단위 테스트 2건 추가(Pytest 통과, import-linter·보안 테스트 일부는 기존 환경 이슈 그대로 유지).
+
 ## 2026-03-02
 
 - [BENCHMARK_INSIGHTS 기반 개선 계획 구현] **Sentry release**: app/core/config/base.py에 sentry_release 필드, lifespan.py·worker.py init에 release= 전달, .env.example 문서화. **DI alias**: app/core/deps.py에 SessionDep/ReadOnlySessionDep 표준 alias 주석 정리. **trace_id**: logging_context·request_id 미들웨어에 trace_id(request_id와 동일) 추가, Sentry set_tag. **429 Retry-After**: app/services/crawl/runtime.py에 parse_retry_after_seconds(delta-seconds·HTTP-date, wait_seconds=retry_after_datetime−now), get_crawl_retry_wait; collect_sync에서 get_crawl_retry_wait 사용. tests/test_crawl_retry_after.py 단위 테스트 추가. **Runbook**: docs/runbooks/ 4개(api-error-budget, crawler-retry-dlq, redis-scheduler-recovery, release-rollback) 초안, 롤백 트리거 수치 포함. **재시도 정책**: tasks.py crawl_college_task·process_notice_ai_task에 max_retries=6, docs/decisions/celery-retry-policy.md(Retryable vs Fatal). **API 골든 시그널**: app/core/metrics.py REQUEST_* 상수·허용 라벨(endpoint_template, status_class, method), app/middleware/request_metrics.py 미들웨어. **SLO/롤백 SSOT**: docs/decisions/slo-rollback-thresholds.md. **BaseSchema**: app/schemas/base.py(BaseSchema, IdType, SlugType, NameType), internal.py CrawlRunStatsItem/CrawlStatsResponse가 BaseSchema 상속. pytest 192 passed, 3 skipped.

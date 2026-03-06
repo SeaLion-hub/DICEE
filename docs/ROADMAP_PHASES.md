@@ -155,7 +155,7 @@
 
 **목표**: AI 비용 절감 + 파싱 에러 원천 차단. **API 429로 워커가 죽지 않도록** 속도 제한 필수.
 
-**할 일 요약**: 3→4 전달은 notice_id만. AI 입력 전 raw_html 정제(Clean HTML)로 Gemini 토큰 초과·400 방지. 입출력: ai_extracted_json(자격요건), hashtags, 일정 데이터(데이터베이스 명세서). 자격 요건·일정 스키마 4·5·6 공유, Pydantic으로 Gemini response_schema 강제. AI False Positive 지향(애매하면 True). Gemini Multimodal(포스터 이미지). Structured Output만 사용. **Celery AI 태스크 rate_limit='10/m'**, 지수 백오프 재시도, max_retries 후 DLQ. content_hash 변화 시에만 AI 재추출. is_manual_edited=True인 공지는 AI로 덮어쓰지 않음. LLMOps: 프롬프트 버저닝·A/B·Fallback. Push 알림 파이프라인: 매칭 결과 → 알림 큐 enqueue(실제 발송은 5·6단계).
+**할 일 요약**: 3→4 전달은 notice_id만. AI 입력 전 raw_html 정제(Clean HTML)로 Gemini 토큰 초과·400 방지. 입출력: ai_extracted_json(자격요건), hashtags, 일정 데이터(데이터베이스 명세서). 자격 요건·일정 스키마 4·5·6 공유, Pydantic으로 Gemini response_schema 강제. AI False Positive 지향(애매하면 True). Gemini Multimodal(포스터 이미지). Structured Output만 사용. **Celery AI 태스크 rate_limit='10/m'**, 지수 백오프 재시도, max_retries 후 DLQ. content_hash 변화 시에만 AI 재추출. is_manual_edited=True인 공지는 AI로 덮어쓰지 않음. LLMOps: 프롬프트 버저닝·A/B·Fallback. Push 알림 파이프라인: 매칭 결과 → 알림 큐 enqueue(실제 발송은 5·6단계). 상세 AI 스키마는 [AI 추출 스키마 ADR](decisions/ai-extraction-schema.md) 및 `app/schemas/ai.py` 참고.
 
 **마일스톤**: 불규칙한 포스터 공지도 AI가 JSON으로 분해해 DB에 에러 없이 저장. 429 없이 안정 동작. 매칭 시 알림 큐 이벤트 전달 설계 반영.
 

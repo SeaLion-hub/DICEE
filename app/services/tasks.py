@@ -50,6 +50,8 @@ from app.repositories.notice_repository import (
     update_ai_result_sync,
     update_notice_content_url_sync,
 )
+from app.schemas.ai import NoticeAIExtraction, NoticeCategory
+from app.services.ai_pipeline import project_extraction_to_notice_fields
 from app.services.crawl_service import handle_crawl_failure_composite, run_crawl_job_sync
 
 logger = logging.getLogger(__name__)
@@ -234,12 +236,25 @@ def process_notice_ai_task(self, notice_id: str):
                 notice_id,
             )
             return
-        # AI pipeline constraint:
-        # If an external AI call is added here later, split the transaction into
-        # (1) claim/update status, (2) external call outside DB session,
-        # (3) result update transaction. Do not hold DB connections during AI calls.
         logger.info("process_notice_ai_task: task_id=%s notice_id=%s", task_id, notice_id)
-        update_ai_result_sync(session, notice_uuid, {})
+        if notice.is_manual_edited:
+            update_ai_result_sync(
+                session,
+                notice_uuid,
+                notice.ai_extracted_json or {},
+            )
+        else:
+            stub = NoticeAIExtraction(notice_category=NoticeCategory.OTHER)
+            projected = project_extraction_to_notice_fields(stub)
+            update_ai_result_sync(
+                session,
+                notice_uuid,
+                projected["ai_extracted_json"],
+                dates=projected["dates"],
+                eligibility=projected["eligibility"],
+                hashtags=projected["hashtags"],
+                category=projected["category"],
+            )
 
 
 def _resolve_spool_backend_ops(backend: str):

@@ -41,6 +41,9 @@ class Notice(Base):
     url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
 
+    category: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    sub_category: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
     # 1. 원본 데이터 보존 (본문은 notice_contents.content_url로 S3 등에 분리 저장)
     images: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB, nullable=True)
     attachments: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB, nullable=True)

@@ -179,9 +179,26 @@ def update_ai_result_sync(
     session: Session,
     notice_id: uuid.UUID,
     ai_extracted_json: dict[str, Any],
+    *,
+    dates: list[dict[str, Any]] | None = None,
+    eligibility: list[str] | None = None,
+    hashtags: list[str] | None = None,
+    category: str | None = None,
 ) -> None:
-    """AI 처리 완료 시 ai_status='done', ai_extracted_json 저장 (동기, 워커용)."""
-    stmt = update(Notice).where(Notice.id == notice_id).values(ai_status="done", ai_extracted_json=ai_extracted_json)
+    """
+    AI 처리 완료 시 ai_status='done', ai_extracted_json 및 투영 필드 저장 (동기, 워커용).
+    dates/eligibility/hashtags/category는 NoticeAIExtraction 투영 시 전달.
+    """
+    values: dict[str, Any] = {"ai_status": "done", "ai_extracted_json": ai_extracted_json}
+    if dates is not None:
+        values["dates"] = dates
+    if eligibility is not None:
+        values["eligibility"] = eligibility
+    if hashtags is not None:
+        values["hashtags"] = hashtags
+    if category is not None:
+        values["category"] = category
+    stmt = update(Notice).where(Notice.id == notice_id).values(**values)
     session.execute(stmt)
     session.flush()
 
