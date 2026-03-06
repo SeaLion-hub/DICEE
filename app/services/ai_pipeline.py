@@ -13,7 +13,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from app.core.config import settings
-from app.schemas.ai import NoticeAIExtraction, NoticeCategory
+from app.domain.contracts.ai_extraction import NoticeAIExtraction, NoticeCategory
 
 logger = logging.getLogger(__name__)
 

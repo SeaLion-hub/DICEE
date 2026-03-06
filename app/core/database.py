@@ -340,6 +340,24 @@ class ReadOnlySessionWrapper:
         return getattr(self._session, name)
 
 
+@asynccontextmanager
+async def read_only_session_cm(
+    maker: async_sessionmaker[AsyncSession] | None,
+) -> AsyncGenerator[ReadOnlySessionWrapper, None]:
+    """
+    읽기 전용 세션 컨텍스트 매니저. Depends 없이 지연 획득 시 사용.
+    maker가 None이면 RuntimeError. 캐시 히트 시 DB 세션을 열지 않는 라우터에서 활용.
+    """
+    if not maker:
+        raise RuntimeError("Database not initialized. Set DATABASE_URL.")
+    async with maker(execution_options={"isolation_level": "AUTOCOMMIT"}) as session:
+        try:
+            await session.execute(text("SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY"))
+        except Exception as e:
+            logger.debug("Read-only session: could not set PG READ ONLY: %s", e)
+        yield ReadOnlySessionWrapper(session)
+
+
 async def get_read_only_db(request: Request) -> AsyncGenerator[ReadOnlySessionWrapper, None]:
     """
     FastAPI Depends용 비동기 읽기 전용(Read-Only) DB 세션 생성기.
@@ -348,15 +366,8 @@ async def get_read_only_db(request: Request) -> AsyncGenerator[ReadOnlySessionWr
     쓰기 금지: flush/commit 호출 시 RuntimeError 발생. 쓰기가 필요하면 get_db를 사용하세요.
     """
     maker = getattr(request.app.state, "async_session_maker", None)
-    if not maker:
-        raise RuntimeError("Database not initialized. Set DATABASE_URL.")
-
-    async with maker(execution_options={"isolation_level": "AUTOCOMMIT"}) as session:
-        try:
-            await session.execute(text("SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY"))
-        except Exception as e:
-            logger.debug("Read-only session: could not set PG READ ONLY: %s", e)
-        yield ReadOnlySessionWrapper(session)
+    async with read_only_session_cm(maker) as session:
+        yield session
 
 
 @asynccontextmanager

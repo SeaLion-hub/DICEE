@@ -11,10 +11,10 @@ from pydantic import SecretStr
 
 def test_crawl_stats_masks_error_message(client, monkeypatch):
     """GET /internal/crawl-stats 응답에서 error_message는 제거되고 has_error만 노출된다."""
+    from contextlib import asynccontextmanager
     from unittest.mock import AsyncMock
 
     from app.api import internal as internal_module
-    from app.core.database import get_read_only_db
     from app.main import app
 
     # 인증 우회: 이 테스트는 응답 마스킹만 검증
@@ -49,17 +49,15 @@ def test_crawl_stats_masks_error_message(client, monkeypatch):
         _fake_get_recent_crawl_runs,
     )
 
-    # DB 의존성은 더미 세션으로 대체해, DATABASE_URL 없이도 테스트 가능하게 한다. (crawl-stats는 get_read_only_db 사용)
-    async def _fake_get_read_only_db():
+    # get_crawl_stats는 세션을 Depends가 아닌 read_only_session_cm으로 지연 획득하므로, CM을 더미로 대체
+    @asynccontextmanager
+    async def _fake_read_only_session_cm(maker):
         class _DummySession: ...
 
         yield _DummySession()
 
-    app.dependency_overrides[get_read_only_db] = _fake_get_read_only_db
-    try:
-        response = client.get("/internal/crawl-stats")
-    finally:
-        app.dependency_overrides.pop(get_read_only_db, None)
+    monkeypatch.setattr(internal_module, "read_only_session_cm", _fake_read_only_session_cm)
+    response = client.get("/internal/crawl-stats")
     assert response.status_code == 200
     data = response.json()
     assert "runs" in data
@@ -426,25 +424,18 @@ def test_invalid_forwarded_header_returns_400(client, monkeypatch):
 
 
 def test_trigger_crawl_all_enqueues_fail_returns_503(client, monkeypatch):
-    """POST /internal/trigger-crawl에서 enqueue가 전부 실패하면 503 + ALL_ENQUEUES_FAILED (P0 회귀 방지)."""
+    """POST /internal/trigger-crawl에서 enqueue가 전부 실패하면 200 + ALL_ENQUEUES_FAILED (부분 실패 정책)."""
     from unittest.mock import AsyncMock, MagicMock
 
     from app.api import internal as internal_module
-    from app.core.database import get_db
     from app.core.deps import get_redis_trigger_lock
     from app.main import app
 
-    # 인증 우회: 이 테스트는 enqueue 실패 시 503 반환만 검증
+    # 인증 우회: 이 테스트는 enqueue 실패 시 200 + 실패 코드 반환 검증
     def _noop_authorize(request, x_secret, auth):
         pass
 
     monkeypatch.setattr(internal_module, "_authorize_internal_trigger", _noop_authorize)
-
-    async def _fake_get_db():
-        class _DummySession:
-            pass
-
-        yield _DummySession()
 
     # Redis 락 단계 통과용 mock (None이면 REDIS_LOCK_UNAVAILABLE 반환됨)
     _mock_redis = MagicMock()
@@ -455,11 +446,10 @@ def test_trigger_crawl_all_enqueues_fail_returns_503(client, monkeypatch):
     async def _fake_redis():
         yield _mock_redis
 
-    app.dependency_overrides[get_db] = _fake_get_db
     app.dependency_overrides[get_redis_trigger_lock] = _fake_redis
 
     def _apply_async_raise(*args, **kwargs):
-        raise RuntimeError("simulated broker failure")
+        raise ConnectionError("simulated broker failure")
 
     monkeypatch.setattr("app.services.tasks.crawl_college_task.apply_async", _apply_async_raise)
     # InternalCrawlService가 사용하는 락 함수 패치
@@ -478,15 +468,11 @@ def test_trigger_crawl_all_enqueues_fail_returns_503(client, monkeypatch):
             params={"college_code": "engineering"},
         )
     finally:
-        app.dependency_overrides.pop(get_db, None)
         app.dependency_overrides.pop(get_redis_trigger_lock, None)
-    assert response.status_code == 503
+    assert response.status_code == 200
     data = response.json()
-    assert (
-        data.get("code") == "ALL_ENQUEUES_FAILED"
-        or "enqueue" in (data.get("detail") or "").lower()
-        or "crawl" in (data.get("detail") or "").lower()
-    )
+    assert data.get("code") == "ALL_ENQUEUES_FAILED"
+    assert "failed" in data or "enqueued" in data
 
 
 def test_trigger_crawl_skipped_then_retry_with_same_idempotency_key_not_stuck(client, monkeypatch):

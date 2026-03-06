@@ -51,7 +51,7 @@ from app.repositories.notice_repository import (
     update_ai_result_sync,
     update_notice_content_url_sync,
 )
-from app.schemas.ai import NoticeAIExtraction, NoticeCategory
+from app.domain.contracts.ai_extraction import NoticeAIExtraction, NoticeCategory
 from app.services.ai_pipeline import extract_notice_info, project_extraction_to_notice_fields
 from app.services.crawl_service import handle_crawl_failure_composite, run_crawl_job_sync
 

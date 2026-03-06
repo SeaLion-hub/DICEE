@@ -2,7 +2,10 @@
 
 import hashlib
 import logging
+import uuid as uuid_mod
 from collections.abc import Callable
+
+import sentry_sdk
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -113,8 +116,6 @@ async def get_current_user_id(
     redis_blocklist=Depends(get_redis_blocklist),
 ):
     """Bearer Access JWT 검증 후 user_id(UUID) 반환. Blocklist/Redis 장애 정책. 성공 시 user_id_hash·Sentry 설정."""
-    import uuid as uuid_mod
-
     if not credentials:
         raise HTTPException(status_code=401, detail="Missing or invalid Authorization")
     try:
@@ -127,8 +128,6 @@ async def get_current_user_id(
         try:
             user_id_hash = compute_user_id_hash(user_id)
             set_request_context(user_id_hash=user_id_hash)
-            import sentry_sdk
-
             sentry_sdk.set_user({"id": user_id_hash})
         except Exception:
             logger.debug("user_id_hash/Sentry set_user failed; continuing.", exc_info=True)
@@ -147,8 +146,6 @@ async def get_current_user_id_and_jti(
     redis_blocklist=Depends(get_redis_blocklist),
 ):
     """Access JWT 검증 후 (user_id UUID, jti) 반환. 로그아웃 Blocklist 등록용. 성공 시 user_id_hash·Sentry 설정."""
-    import uuid as uuid_mod
-
     if not credentials:
         raise HTTPException(status_code=401, detail="Missing or invalid Authorization")
     try:
@@ -161,8 +158,6 @@ async def get_current_user_id_and_jti(
         try:
             user_id_hash = compute_user_id_hash(user_id)
             set_request_context(user_id_hash=user_id_hash)
-            import sentry_sdk
-
             sentry_sdk.set_user({"id": user_id_hash})
         except Exception:
             logger.debug("user_id_hash/Sentry set_user failed; continuing.", exc_info=True)

@@ -15,8 +15,8 @@ from app.core.api_rate_limit import (
     check_rate_limit,
 )
 from app.core.config import settings
+from app.core.database import read_only_session_cm
 from app.core.deps import (
-    ReadOnlySessionDep,
     get_crawl_stats_service,
     get_internal_crawl_service,
     get_redis_trigger_lock,
@@ -41,6 +41,7 @@ from app.domain.contracts.internal_contracts import (
 )
 from app.schemas.internal import CrawlRunStatsItem, CrawlStatsResponse
 from app.services.crawl_stats_service import CrawlStatsService
+from app.services.internal_crawl_service import _normalize_idempotency_key
 
 router = APIRouter(prefix="/internal", tags=["internal"])
 logger = logging.getLogger(__name__)
@@ -54,7 +55,9 @@ def _map_result_to_status(result: TriggerCrawlResult) -> int:
         return 202
     if result.result_kind == TriggerCrawlResultKind.success:
         return 200
-    return 503  # partial_failure, infra_unavailable
+    if result.result_kind == TriggerCrawlResultKind.partial_failure:
+        return 200
+    return 503  # infra_unavailable
 
 
 def _rate_limit_headers() -> dict[str, str]:
@@ -264,7 +267,7 @@ async def post_trigger_crawl(
             headers=_rate_limit_headers(),
         )
 
-    key_stripped = idempotency_key.strip() if idempotency_key and idempotency_key.strip() else None
+    key_stripped = _normalize_idempotency_key(idempotency_key)
     cmd = TriggerCrawlCmd(
         college_code=college_code,
         idempotency_key=key_stripped,
@@ -278,7 +281,6 @@ async def post_trigger_crawl(
 @router.get("/crawl-stats")
 async def get_crawl_stats(
     request: Request,
-    session: ReadOnlySessionDep,
     limit: int = Query(50, ge=1, le=200, description="최근 N건"),
     x_crawl_trigger_secret: str | None = Header(None, alias="X-Crawl-Trigger-Secret"),
     authorization: str | None = Header(None),
@@ -360,7 +362,9 @@ async def get_crawl_stats(
     if should_refresh and lock_token is not None:
         metrics.increment(metrics.READ_CACHE_MISS_TOTAL if cached is None else metrics.READ_CACHE_STALE_HIT_TOTAL)
         metrics.increment(metrics.READ_CACHE_REFRESH_TOTAL)
-        result = await crawl_stats_service.get_crawl_stats(session, limit=limit)
+        maker = getattr(request.app.state, "async_session_maker", None)
+        async with read_only_session_cm(maker) as session:
+            result = await crawl_stats_service.get_crawl_stats(session, limit=limit)
         response = CrawlStatsResponse(
             runs=[
                 CrawlRunStatsItem(

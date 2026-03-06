@@ -30,6 +30,14 @@ from app.domain.contracts.internal_contracts import (
 logger = logging.getLogger(__name__)
 
 
+def _normalize_idempotency_key(value: str | None) -> str | None:
+    """멱등 키 전처리: strip 후 빈 문자열이면 None."""
+    if not value:
+        return None
+    stripped = value.strip()
+    return stripped if stripped else None
+
+
 def _resolve_college_codes(college_code: str | None) -> list[str]:
     """college_code 정규화·검증 후 코드 목록. 미등록 단일 코드 시 CollegeNotFoundError."""
     normalized = college_code.strip() if college_code and college_code.strip() else None
@@ -56,7 +64,7 @@ class InternalCrawlService:
         """
         codes = _resolve_college_codes(cmd.college_code)
         idempotency_scope = codes[0] if len(codes) == 1 else "all"
-        key_stripped = cmd.idempotency_key.strip() if cmd.idempotency_key and cmd.idempotency_key.strip() else None
+        key_stripped = _normalize_idempotency_key(cmd.idempotency_key)
 
         claimed = False
         should_clear_claim = False
@@ -108,7 +116,8 @@ class InternalCrawlService:
                             code,
                             extra={"college_code": code},
                         )
-                        raise
+                        failed.append(code)
+                        continue
                     if not acquired:
                         skipped.append(code)
                         continue
