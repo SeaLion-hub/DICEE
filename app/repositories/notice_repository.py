@@ -190,10 +190,11 @@ def update_ai_result_sync(
     eligibility: list[str] | None = None,
     hashtags: list[str] | None = None,
     category: str | None = None,
+    sub_category: str | None = None,
 ) -> None:
     """
     AI 처리 완료 시 ai_status='done', ai_extracted_json 및 투영 필드 저장 (동기, 워커용).
-    dates/eligibility/hashtags/category는 NoticeAIExtraction 투영 시 전달.
+    dates/eligibility/hashtags/category/sub_category는 NoticeAIExtraction 투영 시 전달.
     """
     values: dict[str, Any] = {"ai_status": "done", "ai_extracted_json": ai_extracted_json}
     if dates is not None:
@@ -204,6 +205,8 @@ def update_ai_result_sync(
         values["hashtags"] = hashtags
     if category is not None:
         values["category"] = category
+    if sub_category is not None:
+        values["sub_category"] = sub_category
     stmt = update(Notice).where(Notice.id == notice_id).values(**values)
     session.execute(stmt)
     session.flush()

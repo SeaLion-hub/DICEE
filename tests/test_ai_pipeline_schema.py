@@ -6,20 +6,22 @@ from app.services.ai_pipeline import project_extraction_to_notice_fields
 
 def test_project_extraction_to_notice_fields_stub():
     """스텁 NoticeAIExtraction을 DB 투영 필드 dict로 변환."""
-    stub = NoticeAIExtraction(notice_category=NoticeCategory.OTHER)
+    stub = NoticeAIExtraction()
     projected = project_extraction_to_notice_fields(stub)
     assert projected["ai_extracted_json"] is not None
-    assert projected["ai_extracted_json"].get("notice_category") == "other"
+    assert "notice_category" not in projected["ai_extracted_json"]
     assert projected["dates"] == []
     assert projected["eligibility"] == []
     assert projected["hashtags"] == []
-    assert projected["category"] == "other"
+    assert projected["category"] == NoticeCategory.OTHER.value
+    assert projected["sub_category"] is None
 
 
 def test_project_extraction_to_notice_fields_with_schedules():
-    """schedules가 있으면 dates에 직렬화된 list[dict]로 투영."""
+    """schedules가 있으면 dates에 직렬화된 list[dict]로 투영. category/sub_category 포함."""
     extraction = NoticeAIExtraction(
-        notice_category=NoticeCategory.RECRUITMENT,
+        category=NoticeCategory.SCHOLARSHIP,
+        sub_category="국가장학금",
         schedules=[
             ScheduleItem(kind=ScheduleKind.APPLICATION_DEADLINE, label="서류 마감"),
             ScheduleItem(kind=ScheduleKind.INTERVIEW, label="1차 면접", date_raw="11월 중순"),
@@ -28,7 +30,8 @@ def test_project_extraction_to_notice_fields_with_schedules():
         hashtags=["장학금", "인턴"],
     )
     projected = project_extraction_to_notice_fields(extraction)
-    assert projected["category"] == "recruitment"
+    assert projected["category"] == "scholarship"
+    assert projected["sub_category"] == "국가장학금"
     assert len(projected["dates"]) == 2
     assert projected["dates"][0]["kind"] == "application_deadline"
     assert projected["dates"][0]["label"] == "서류 마감"

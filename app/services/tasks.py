@@ -51,7 +51,7 @@ from app.repositories.notice_repository import (
     update_ai_result_sync,
     update_notice_content_url_sync,
 )
-from app.domain.contracts.ai_extraction import NoticeAIExtraction, NoticeCategory
+from app.domain.contracts.ai_extraction import NoticeAIExtraction
 from app.services.ai_pipeline import extract_notice_info, project_extraction_to_notice_fields
 from app.services.crawl_service import handle_crawl_failure_composite, run_crawl_job_sync
 
@@ -272,7 +272,8 @@ def process_notice_ai_task(self, notice_id: str):
                 dates=projected["dates"],
                 eligibility=projected["eligibility"],
                 hashtags=projected["hashtags"],
-                category=projected["category"],
+                category=projected.get("category"),
+                sub_category=projected.get("sub_category"),
             )
 
 

@@ -46,10 +46,26 @@ def _reject_placeholder_date_raw(v: str | None) -> str | None:
     return v
 
 
+def _sub_category_max_len(v: str | None) -> str | None:
+    if v is None:
+        return v
+    t = (v or "").strip()
+    if not t:
+        return None
+    if len(t) > 64:
+        raise ValueError("sub_category must not exceed 64 characters.")
+    return t
+
+
 class NoticeCategory(str, Enum):
-    RECRUITMENT = "recruitment"
-    INFO = "info"
+    """공지 대분류. AI가 본문 기준으로 선택. DB notices.category에 저장."""
+
+    SCHOLARSHIP = "scholarship"
+    EMPLOYMENT = "employment"
     EVENT = "event"
+    ACADEMIC = "academic"
+    ADMISSION = "admission"
+    INTERNATIONAL = "international"
     OTHER = "other"
 
 
@@ -69,6 +85,10 @@ class TargetGrade(str, Enum):
     FIVE = "5"
     SIX = "6"
     ALL = "all"
+    GRAD_MASTER = "grad_master"
+    GRAD_PHD = "grad_phd"
+    GRAD_ALL = "grad_all"
+    OTHER = "other"
 
 
 _AI_EXTRACTION_CONFIG = ConfigDict(
@@ -111,6 +131,16 @@ class ScheduleItem(BaseModel):
         Field(default=None, description="파싱 불가/애매한 날짜의 원문 (예: '11월 중순', '추후 공지')"),
         AfterValidator(_reject_placeholder_date_raw),
     ] = None
+    start_date_raw: Annotated[
+        str | None,
+        Field(default=None, description="시작일만 모호할 때 원문 보존 (비대칭 처리)"),
+        AfterValidator(_reject_placeholder_date_raw),
+    ] = None
+    end_date_raw: Annotated[
+        str | None,
+        Field(default=None, description="종료일만 모호할 때 원문 보존 (비대칭 처리)"),
+        AfterValidator(_reject_placeholder_date_raw),
+    ] = None
 
     @model_validator(mode="after")
     def _normalize_all_day(self) -> ScheduleItem:
@@ -135,7 +165,7 @@ class NoticeAIExtraction(BaseModel):
     4·5·6단계 공통 AI 출력 스키마.
     - Instructor response_model 로 사용.
     - DB notices.ai_extracted_json 에 그대로 저장.
-    - 일부 필드는 Notice.dates / eligibility / hashtags / category 로 투영.
+    - 일부 필드는 Notice.dates / eligibility / hashtags / category / sub_category 로 투영.
 
     자격 요건 블록은 Schema-driven CoT: raw_eligibility_text → eligibility_rules
     → target_departments → target_grades 순서로 두어 환각을 줄인다.
@@ -143,10 +173,15 @@ class NoticeAIExtraction(BaseModel):
 
     model_config = _AI_EXTRACTION_CONFIG
 
-    notice_category: NoticeCategory = Field(
+    category: NoticeCategory = Field(
         default=NoticeCategory.OTHER,
-        description="공지 상위 카테고리 (모집/안내/행사 등)",
+        description="공지 대분류 (장학, 취업, 행사, 학사, 입시, 국제, 기타). 본문 기준으로 하나만 선택.",
     )
+    sub_category: Annotated[
+        str | None,
+        Field(default=None, description="대분류 하위 라벨, 최대 64자 (예: 국가장학금, 인턴 모집)"),
+        AfterValidator(_sub_category_max_len),
+    ] = None
 
     summary: str | None = Field(
         default=None,

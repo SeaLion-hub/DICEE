@@ -12,6 +12,9 @@
 
 - [작성 규칙](#작성-규칙)
 - [작성 형식](#작성-형식)
+- [2026-03-07](#2026-03-07)
+- [2026-03-06](#2026-03-06)
+- [2026-03-05](#2026-03-05)
 - [2026-03-02](#2026-03-02)
 - [2026-03-01](#2026-03-01)
 - [2026-02-28](#2026-02-28)
@@ -50,6 +53,14 @@
 - [Instructor 이슈 해결: Validation·Retries·실제 LLM 호출] **Validation**: app/schemas/ai.py에 Annotated·AfterValidator 추가 — target_departments 플레이스홀더("없음","알 수 없음" 등) 거부, ScheduleItem.date_raw 길이·플레이스홀더 검증. **AI 파이프라인**: app/services/ai_pipeline.py에 extract_notice_info(html_content) 구현 — instructor.from_provider("google/{model}")·client.create(response_model=NoticeAIExtraction, max_retries=3), InstructorRetryException/ValidationError 시 Sentry 로깅 후 NoticeAIExtraction(notice_category=OTHER) Fallback 반환. **tasks**: process_notice_ai_task에서 스텁 제거, _get_notice_html_for_ai(notice)로 content_url HTTP GET 또는 title fallback 후 extract_notice_info 호출. **설정**: app/core/config/base.py에 gemini_api_key·gemini_model 추가. **의존성**: requirements.txt에 instructor[google-genai]. notice_repository.get_notice_for_ai_sync에 selectinload(Notice.notice_content). tests/test_ai_pipeline_schema.py 2건 통과.
 
 - [4단계 AI 스키마·파이프라인 초석] `app/schemas/ai.py`에 NoticeAIExtraction/NoticeCategory/ScheduleItem/TargetGrade Pydantic 스키마 추가(자격 요건 Schema-driven CoT: raw_eligibility_text → eligibility_rules → target_departments → target_grades, 일정 date_raw/label 포함). `app/models/notice.py`에 category/sub_category ORM 필드 추가(DDL과 정합). `app/services/ai_pipeline.py`에 NoticeAIExtraction → Notice 필드 투영 유틸(project_extraction_to_notice_fields) 구현, `app/repositories/notice_repository.update_ai_result_sync`를 dates/eligibility/hashtags/category까지 저장하도록 확장. `app/services/tasks.py`의 process_notice_ai_task에서 is_manual_edited 보호 및 스텁 NoticeAIExtraction 기반 투영 적용(나중에 Instructor+Gemini 연동 시 동일 흐름 사용). `docs/decisions/ai-extraction-schema.md` ADR 작성, ROADMAP/ROADMAP_PHASES 관련 문서 링크 갱신, `tests/test_ai_pipeline_schema.py`로 투영 로직 단위 테스트 2건 추가(Pytest 통과, import-linter·보안 테스트 일부는 기존 환경 이슈 그대로 유지).
+
+## 2026-03-07
+
+- [4단계 정책 변경: 대분류·소분류 AI 추출] **ADR** docs/decisions/ai-extraction-schema.md: "카테고리는 파이프라인 앞단" → "대분류·소분류는 AI가 추출"로 정책 변경. **도메인** app/domain/contracts/ai_extraction.py: NoticeCategory Enum(scholarship, employment, event, academic, admission, international, other), NoticeAIExtraction에 category(기본 OTHER), sub_category(str \| None, 최대 64자) 추가. **추출기** app/services/ai/extractor.py: EXTRACTOR_SYSTEM_PROMPT에 category/sub_category 설명 추가. **파이프라인** project_extraction_to_notice_fields에서 category·sub_category 반환. **리포지토리** update_ai_result_sync에 sub_category 인자 추가. **태스크** process_notice_ai_task에서 category/sub_category 전달. tests/test_ai_pipeline_schema.py 투영·Enum 검증 보강. pytest test_ai_pipeline_schema 2건 통과.
+
+## 2026-03-05
+
+- [PDF 품질 평가 반영·Critical Overrides] **스키마**: `NoticeCategory` 및 `notice_category` 제거(카테고리는 파이프라인 앞단 가정). `TargetGrade`에 grad_master/grad_phd/grad_all/other 추가. `ScheduleItem`에 start_date_raw/end_date_raw 추가(비대칭 날짜 처리). **추출기**: `app/services/ai/extractor.py` 신규 — instructor+Gemini 1.5 Flash, `EXTRACTOR_SYSTEM_PROMPT`에 비대칭 날짜·제한 조건 기반 자격 추출(단순 수신 대상자 미추출) 명시. **파이프라인**: ai_pipeline은 extract_notice_structured 호출·재시도·폴백, project_extraction_to_notice_fields에서 category 제거. tasks·schemas·tests·docs/decisions/ai-extraction-schema.md 반영. tests/test_ai_pipeline_schema.py 2건 통과.
 
 ## 2026-03-02
 

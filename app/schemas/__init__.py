@@ -1,7 +1,6 @@
 # Pydantic schemas (2단계~)
 from app.schemas.ai import (
     NoticeAIExtraction,
-    NoticeCategory,
     ScheduleItem,
     ScheduleKind,
     TargetGrade,
@@ -15,7 +14,6 @@ __all__ = [
     "IdType",
     "NameType",
     "NoticeAIExtraction",
-    "NoticeCategory",
     "RefreshTokenPayload",
     "ScheduleItem",
     "ScheduleKind",
