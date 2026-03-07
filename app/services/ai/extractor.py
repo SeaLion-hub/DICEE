@@ -10,6 +10,7 @@ from __future__ import annotations
 from app.core.config import settings
 from app.domain.contracts.ai_extraction import NoticeAIExtraction
 
+EXTRACTION_MAX_RETRIES = 3
 
 EXTRACTOR_SYSTEM_PROMPT = """당신은 대학 공지 HTML에서 구조화된 정보를 추출하는 도우미입니다.
 한국 대학 공지이므로 모든 날짜·시간은 **KST(Asia/Seoul)** 기준으로 해석하세요.
@@ -59,8 +60,8 @@ def _get_instructor_client():
         api_key = settings.gemini_api_key.get_secret_value()
     provider = f"google/{settings.gemini_model}"
     if api_key:
-        return instructor.from_provider(provider, api_key=api_key, max_retries=0)
-    return instructor.from_provider(provider, max_retries=0)
+        return instructor.from_provider(provider, api_key=api_key, max_retries=EXTRACTION_MAX_RETRIES)
+    return instructor.from_provider(provider, max_retries=EXTRACTION_MAX_RETRIES)
 
 
 def extract_notice_structured(html_content: str) -> NoticeAIExtraction:
@@ -75,6 +76,6 @@ def extract_notice_structured(html_content: str) -> NoticeAIExtraction:
             {"role": "user", "content": html_content[:100_000] or "(내용 없음)"},
         ],
         response_model=NoticeAIExtraction,
-        max_retries=0,
+        max_retries=EXTRACTION_MAX_RETRIES,
     )
     return response
