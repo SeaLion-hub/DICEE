@@ -42,7 +42,7 @@
 - `- [단계 또는 영역] 무엇을 했는지 (어떤 파일/기능). 왜 또는 결과 한 줄.`
 
 ---
-## 2026-03-06
+## 2026-03-09
 
 - [아키텍처 import 규칙 수정] **Services must not import schemas** 위반 제거: `NoticeAIExtraction`, `NoticeCategory`, `ScheduleItem`, `ScheduleKind`, `TargetGrade` 및 검증 로직을 `app.domain.contracts.ai_extraction`으로 이동(Pydantic BaseModel + ConfigDict). `app.schemas.ai`는 해당 도메인 모듈 re-export만 수행. `app.services.ai_pipeline`, `app.services.tasks`는 `app.domain.contracts.ai_extraction`에서 import. lint-imports 2 kept 0 broken, pytest 194 passed.
 
