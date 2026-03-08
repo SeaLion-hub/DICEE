@@ -21,15 +21,18 @@ logger = logging.getLogger(__name__)
 EXTRACTION_MAX_RETRIES = 3
 
 
-def extract_notice_info(html_content: str) -> NoticeAIExtraction:
+def extract_notice_info(
+    html_content: str,
+    image_urls: list[str] | None = None,
+) -> NoticeAIExtraction:
     """
-    HTML 공지 본문에서 NoticeAIExtraction 구조화 추출.
+    HTML 공지 본문(및 선택적 이미지 URL)에서 NoticeAIExtraction 구조화 추출.
     extract_notice_structured 호출, 검증 실패 시 최대 EXTRACTION_MAX_RETRIES 재시도 후 폴백 반환.
     """
     last_error: Exception | None = None
     for _ in range(EXTRACTION_MAX_RETRIES + 1):
         try:
-            return extract_notice_structured(html_content)
+            return extract_notice_structured(html_content, image_urls=image_urls)
         except (ValidationError, Exception) as e:  # noqa: BLE001
             last_error = e
             try:

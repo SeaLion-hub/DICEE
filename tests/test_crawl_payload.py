@@ -1,5 +1,6 @@
 """crawl_payload 순수 함수 검증: URL 파싱, 날짜 형식, 해시, build_notice_payload."""
 
+import base64
 import uuid
 from unittest.mock import patch
 
@@ -8,6 +9,7 @@ from app.services.crawl_payload import (
     _content_hash_from_title_and_html,
     _external_id_from_url,
     _parse_published_at,
+    _resolve_notice_images,
     build_notice_payload,
 )
 
@@ -154,3 +156,35 @@ def test_build_notice_payload_returns_payload(mock_upload):
     assert payload.published_at is not None
     assert payload.published_at.year == 2024
     mock_upload.assert_called_once()
+
+
+def test_resolve_notice_images_url_only():
+    """URL만 있는 이미지는 업로드 없이 { url, name }으로 정규화."""
+    college_id = uuid.uuid4()
+    images = [
+        {"type": "url", "data": "https://example.com/img.jpg", "name": "poster.jpg"},
+    ]
+    out = _resolve_notice_images(images, college_id=college_id, external_id="ext-1", ctx=None)
+    assert len(out) == 1
+    assert out[0]["url"] == "https://example.com/img.jpg"
+    assert out[0]["name"] == "poster.jpg"
+
+
+@patch("app.services.crawl_payload.upload_notice_image")
+def test_resolve_notice_images_base64_uploads_and_returns_url(mock_upload_image):
+    """base64 이미지는 업로드 후 반환 URL이 들어간다."""
+    mock_upload_image.return_value = "https://storage/college/ext1/images/0_abc.jpg"
+    college_id = uuid.uuid4()
+    raw = b"\x89PNG\r\n\x1a\n"
+    b64 = base64.b64encode(raw).decode("ascii")
+    images = [{"type": "base64", "data": b64, "name": "image_1.png"}]
+    out = _resolve_notice_images(images, college_id=college_id, external_id="ext-1", ctx=None)
+    assert len(out) == 1
+    assert out[0]["url"] == "https://storage/college/ext1/images/0_abc.jpg"
+    assert out[0]["name"] == "image_1.png"
+    mock_upload_image.assert_called_once()
+    call_kw = mock_upload_image.call_args[1]
+    assert call_kw["college_id"] == college_id
+    assert call_kw["external_id"] == "ext-1"
+    assert call_kw["index"] == 0
+    assert call_kw["filename_hint"] == "image_1.png"

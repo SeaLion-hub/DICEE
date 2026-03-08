@@ -14,6 +14,7 @@ EXTRACTION_MAX_RETRIES = 3
 
 EXTRACTOR_SYSTEM_PROMPT = """당신은 대학 공지 HTML에서 구조화된 정보를 추출하는 도우미입니다.
 한국 대학 공지이므로 모든 날짜·시간은 **KST(Asia/Seoul)** 기준으로 해석하세요.
+제공된 이미지(포스터·첨부 등)가 있으면 그 내용도 참고하여 일정·자격·날짜를 추출하세요.
 
 ## 출력 필드 개요
 - category: 공지 대분류. scholarship, employment, event, academic, admission, international, other 중 하나만. 분류 불가 시 other.
@@ -64,16 +65,31 @@ def _get_instructor_client():
     return instructor.from_provider(provider, max_retries=EXTRACTION_MAX_RETRIES)
 
 
-def extract_notice_structured(html_content: str) -> NoticeAIExtraction:
+def extract_notice_structured(
+    html_content: str,
+    image_urls: list[str] | None = None,
+) -> NoticeAIExtraction:
     """
-    HTML 공지 본문에서 NoticeAIExtraction 구조화 추출.
-    Instructor + Gemini 사용. 검증 실패 시 호출자가 처리(재시도/폴백).
+    HTML 공지 본문(및 선택적 이미지 URL)에서 NoticeAIExtraction 구조화 추출.
+    Instructor + Gemini 사용. image_urls가 있으면 Image.from_url로 멀티모달 입력.
     """
+    from instructor.processing.multimodal import Image
+
+    text = html_content[:100_000] or "(내용 없음)"
+    urls = (image_urls or [])[:5]
+    if not urls:
+        user_content: str | list = text
+    else:
+        user_content = [
+            text,
+            "아래 이미지는 공지 본문(포스터·첨부 등)입니다. HTML과 함께 참고하여 지원자격·일정·날짜를 추출하세요.",
+        ] + [Image.from_url(u) for u in urls if u and (u.startswith("http://") or u.startswith("https://"))]
+
     client = _get_instructor_client()
     response = client.create(
         messages=[
             {"role": "system", "content": EXTRACTOR_SYSTEM_PROMPT},
-            {"role": "user", "content": html_content[:100_000] or "(내용 없음)"},
+            {"role": "user", "content": user_content},
         ],
         response_model=NoticeAIExtraction,
         max_retries=EXTRACTION_MAX_RETRIES,

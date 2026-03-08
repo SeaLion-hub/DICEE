@@ -143,6 +143,122 @@ def _object_key(college_id: uuid.UUID, external_id: str, content_hash: str | Non
     return f"{college_id}/{digest}_{safe_ext}.html"
 
 
+_IMAGE_EXT_FROM_MIME: dict[str, str] = {
+    "image/jpeg": "jpg",
+    "image/jpg": "jpg",
+    "image/png": "png",
+    "image/gif": "gif",
+    "image/webp": "webp",
+}
+
+
+def _image_extension(filename_hint: str | None, content_type: str | None) -> str:
+    if filename_hint:
+        suf = Path(filename_hint).suffix.lstrip(".").lower()
+        if suf in ("jpg", "jpeg", "png", "gif", "webp"):
+            return "jpg" if suf == "jpeg" else suf
+    if content_type:
+        return _IMAGE_EXT_FROM_MIME.get(content_type.strip().lower(), "jpg")
+    return "jpg"
+
+
+def _object_key_image(
+    college_id: uuid.UUID,
+    external_id: str,
+    index: int,
+    ext: str,
+) -> str:
+    safe_ext = _sanitize_external_id_for_key(external_id or "", fallback_seed=str(college_id))
+    short = hashlib.sha256(f"{college_id}{external_id}{index}".encode()).hexdigest()[:8]
+    prefix = (settings.s3_content_prefix or "").strip().strip("/")
+    if prefix:
+        return f"{prefix}/{college_id}/{safe_ext}/images/{index}_{short}.{ext}"
+    return f"{college_id}/{safe_ext}/images/{index}_{short}.{ext}"
+
+
+def upload_notice_image(
+    image_bytes: bytes,
+    *,
+    college_id: uuid.UUID,
+    external_id: str,
+    index: int,
+    content_type: str | None = None,
+    filename_hint: str | None = None,
+) -> str | None:
+    """Upload notice image bytes to storage; return public URL or None on failure."""
+    if not image_bytes:
+        return None
+    ext = _image_extension(filename_hint, content_type)
+    key = _object_key_image(college_id, external_id, index, ext)
+    try:
+        if (settings.content_storage_type or "").lower() == "s3" and settings.s3_bucket:
+            return _upload_s3_image(image_bytes, key, content_type or "image/jpeg")
+        return _upload_local_image(image_bytes, key)
+    except Exception as e:
+        logger.warning("upload_notice_image failed: key=%s error=%s", key, e, exc_info=True)
+        increment(CONTENT_UPLOAD_FAILURE_TOTAL)
+        if (settings.content_upload_failure_policy or "").strip().lower() == "fail":
+            raise
+        return None
+
+
+def _upload_s3_image(body_bytes: bytes, key: str, content_type: str) -> str | None:
+    try:
+        import boto3
+        from botocore.exceptions import ClientError
+    except ImportError:
+        logger.warning("boto3 not installed; cannot upload image to S3.")
+        return None
+
+    bucket = settings.s3_bucket
+    if not bucket:
+        return None
+
+    try:
+        client = boto3.client("s3", region_name=settings.s3_region)
+        put_kw: dict[str, Any] = {
+            "Bucket": bucket,
+            "Key": key,
+            "Body": body_bytes,
+            "ContentType": content_type or "image/jpeg",
+            "ServerSideEncryption": "aws:kms",
+        }
+        kms_key_id = settings.s3_sse_kms_key_id
+        if kms_key_id and str(kms_key_id).strip():
+            put_kw["SSEKMSKeyId"] = str(kms_key_id).strip()
+        client.put_object(**put_kw)
+        return f"https://{bucket}.s3.{settings.s3_region}.amazonaws.com/{key}"
+    except ClientError as e:
+        logger.exception("S3 image upload failed: key=%s error=%s", key, e)
+        increment(CONTENT_UPLOAD_FAILURE_TOTAL)
+        if (settings.content_upload_failure_policy or "").strip().lower() == "fail":
+            raise
+        return None
+
+
+def _upload_local_image(body_bytes: bytes, key: str) -> str | None:
+    base = Path(settings.content_storage_local_path or "storage/contents").resolve()
+    path = (base / key).resolve()
+
+    try:
+        path.relative_to(base)
+    except ValueError:
+        logger.error("Local image path escaped base: base=%s key=%s path=%s", base, key, path)
+        increment(CONTENT_UPLOAD_FAILURE_TOTAL)
+        policy = (settings.content_upload_failure_policy or "").strip().lower()
+        if policy == "fail":
+            raise ValueError("Invalid image key; escaped storage base directory")
+        return None
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(body_bytes)
+
+    base_url = (settings.content_storage_base_url or "").strip()
+    if base_url:
+        return f"{base_url.rstrip('/')}/{key}"
+    return f"/{key}"
+
+
 def _upload_s3(html_content: str, key: str) -> str | None:
     try:
         import boto3

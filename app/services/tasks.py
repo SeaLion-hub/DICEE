@@ -77,6 +77,24 @@ def _get_notice_html_for_ai(notice) -> str:
     return f"<title>{title}</title>" if title else ""
 
 
+MAX_IMAGES_FOR_AI = 5
+
+
+def _get_notice_image_urls_for_ai(notice, max_count: int = MAX_IMAGES_FOR_AI) -> list[str]:
+    """공지 이미지 URL 목록 반환. AI 추출 시 Image.from_url 입력용. 최대 max_count개."""
+    images = getattr(notice, "images", None)
+    if not images or not isinstance(images, list):
+        return []
+    urls: list[str] = []
+    for item in images[:max_count]:
+        if not isinstance(item, dict):
+            continue
+        u = (item.get("url") or item.get("src") or "").strip()
+        if u and (u.startswith("http://") or u.startswith("https://")):
+            urls.append(u)
+    return urls
+
+
 def _set_task_context(task_id: str | None, college_code: str | None = None):
     """Sentry·로그인 컨텍스트. task_id·college_code로 4차 분류 등 식별. Fail-open: Sentry 예외 시 로그만 하고 계속."""
     try:
@@ -263,7 +281,8 @@ def process_notice_ai_task(self, notice_id: str):
             )
         else:
             html_content = _get_notice_html_for_ai(notice)
-            extraction = extract_notice_info(html_content)
+            image_urls = _get_notice_image_urls_for_ai(notice)
+            extraction = extract_notice_info(html_content, image_urls=image_urls)
             projected = project_extraction_to_notice_fields(extraction)
             update_ai_result_sync(
                 session,

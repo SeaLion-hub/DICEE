@@ -133,6 +133,7 @@
 * `CHECK (ai_extracted_json IS NULL OR (jsonb_typeof(ai_extracted_json) = 'object'))`
 
 * **GIN Index**: `eligibility`, `hashtags` (fastupdate=on, gin_pending_list_limit=4MB)
+* **이미지 저장**: 공지 이미지는 스토리지(S3/로컬)에 파일로 업로드하고, `images` JSONB에는 URL만 저장. base64는 크롤 파이프라인에서 업로드 후 URL로 치환.
 
 ### 6.3 notice_contents (본문 S3 분리)
 

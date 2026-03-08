@@ -3,6 +3,7 @@
 HTTP/DB 미의존. crawl_service 오케스트레이터에서 import해 사용.
 """
 
+import base64
 import hashlib
 import logging
 import re
@@ -14,7 +15,7 @@ from urllib.parse import parse_qs, urlparse, urlunparse
 
 from bs4 import BeautifulSoup
 
-from app.core.storage import upload_notice_html
+from app.core.storage import upload_notice_html, upload_notice_image
 from app.domain.contracts.crawl_contracts import CrawlLogContext, LinkItem, NoticeDraft
 
 logger = logging.getLogger(__name__)
@@ -109,6 +110,58 @@ def _filter_valid_urls(items: list[dict]) -> list[dict]:
             continue
         out.append(item)
     return out
+
+
+def _resolve_notice_images(
+    images: list,
+    *,
+    college_id: uuid.UUID,
+    external_id: str,
+    ctx: CrawlLogContext | None = None,
+) -> list[dict]:
+    """
+    크롤러 images를 스토리지 URL 기준으로 정규화.
+    base64 → 업로드 후 URL; 이미 URL인 항목은 { url, name } 형태로 통일.
+    """
+    resolved: list[dict] = []
+    for idx, item in enumerate(images or []):
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or f"image_{idx + 1}.jpg").strip() or f"image_{idx + 1}.jpg"
+        itype = (item.get("type") or "").strip().lower()
+        data = item.get("data")
+
+        if itype == "base64" and data:
+            try:
+                raw = base64.b64decode(data, validate=True)
+            except Exception as e:
+                if ctx:
+                    logger.debug(
+                        "base64 decode failed for image idx=%s: %s",
+                        idx,
+                        e,
+                        extra=ctx.extra_for_log(),
+                    )
+                continue
+            content_type = (item.get("content_type") or "image/jpeg").strip() or "image/jpeg"
+            url = upload_notice_image(
+                raw,
+                college_id=college_id,
+                external_id=external_id,
+                index=idx,
+                content_type=content_type,
+                filename_hint=name,
+            )
+            if url:
+                resolved.append({"url": url, "name": name})
+            continue
+
+        url_str = (item.get("url") or item.get("src") or "").strip()
+        if not url_str and data and isinstance(data, str):
+            url_str = data.strip()
+        if _is_valid_url_scheme(url_str):
+            resolved.append({"url": url_str, "name": name})
+    return resolved
 
 
 def _external_id_from_url(url: str, ctx: CrawlLogContext | None = None) -> str:
@@ -247,14 +300,20 @@ def build_notice_payload(
         return None
     external_id_value = external_id or post.get("no") or _external_id_from_url(detail_url, ctx=ctx)
     att_dicts = _attachments_to_dicts(attachments or [])
-    images_filtered = _filter_valid_urls(images or [])
+    images_resolved = _resolve_notice_images(
+        images or [],
+        college_id=college_id,
+        external_id=external_id_value,
+        ctx=ctx,
+    )
+    images_filtered = _filter_valid_urls(images_resolved)
     att_dicts = [a for a in att_dicts if "url" not in a or _is_valid_url_scheme(a.get("url") or "")]
     content_hash = _content_hash_from_title_and_html(
         title,
         html_content,
         body_text_for_hash,
         attachments=attachments or [],
-        images=images or [],
+        images=images_resolved,
     )
     published_at = _parse_published_at(date_str, ctx=ctx)
     content_url = upload_notice_html(

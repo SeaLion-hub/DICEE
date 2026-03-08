@@ -56,6 +56,8 @@
 
 ## 2026-03-07
 
+- [4단계 AI 이미지 입력 100% 완료] **추출기** app/services/ai/extractor.py: extract_notice_structured(html_content, image_urls=None) 추가, image_urls 있으면 user content를 [html, 안내문구] + Image.from_url(url) 리스트로 구성·시스템 프롬프트에 "제공된 이미지 참고하여 추출" 반영. **파이프라인** app/services/ai_pipeline.py: extract_notice_info(html_content, image_urls=None) 시그니처·재시도 루프에서 image_urls 전달. **태스크** app/services/tasks.py: _get_notice_image_urls_for_ai(notice, max_count=5) 추가(notice.images에서 url/src로 http(s) URL만 최대 5개), process_notice_ai_task에서 image_urls 수집 후 extract_notice_info(html_content, image_urls=image_urls) 호출. 테스트: test_get_notice_image_urls_for_ai_* 4건, test_extract_notice_info_passes_image_urls·passes_empty_image_urls 2건. DB·스토리지(Notice.images URL 저장)는 기존 crawl_payload _resolve_notice_images로 이미 완료. pytest 201 passed(아키텍처 import 1건 제외).
+
 - [4단계 정책 변경: 대분류·소분류 AI 추출] **ADR** docs/decisions/ai-extraction-schema.md: "카테고리는 파이프라인 앞단" → "대분류·소분류는 AI가 추출"로 정책 변경. **도메인** app/domain/contracts/ai_extraction.py: NoticeCategory Enum(scholarship, employment, event, academic, admission, international, other), NoticeAIExtraction에 category(기본 OTHER), sub_category(str \| None, 최대 64자) 추가. **추출기** app/services/ai/extractor.py: EXTRACTOR_SYSTEM_PROMPT에 category/sub_category 설명 추가. **파이프라인** project_extraction_to_notice_fields에서 category·sub_category 반환. **리포지토리** update_ai_result_sync에 sub_category 인자 추가. **태스크** process_notice_ai_task에서 category/sub_category 전달. tests/test_ai_pipeline_schema.py 투영·Enum 검증 보강. pytest test_ai_pipeline_schema 2건 통과.
 
 ## 2026-03-05

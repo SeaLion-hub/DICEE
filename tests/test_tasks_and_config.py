@@ -88,6 +88,62 @@ def test_crawl_college_task_releases_execution_claim_in_finally():
     assert isinstance(task_id, str) and task_id
 
 
+def test_get_notice_image_urls_for_ai_empty():
+    """notice.images 없거나 비어 있으면 빈 리스트."""
+    from app.services.tasks import _get_notice_image_urls_for_ai
+
+    class EmptyImages:
+        images = None
+
+    assert _get_notice_image_urls_for_ai(EmptyImages()) == []
+    EmptyImages.images = []
+    assert _get_notice_image_urls_for_ai(EmptyImages()) == []
+
+
+def test_get_notice_image_urls_for_ai_from_url_and_src():
+    """notice.images에서 url 또는 src 키로 http(s) URL만 수집."""
+    from app.services.tasks import _get_notice_image_urls_for_ai
+
+    class NoticeWithImages:
+        images = [
+            {"url": "https://cdn.example.com/a.png", "name": "a"},
+            {"src": "https://cdn.example.com/b.jpg"},
+            {"url": "http://example.com/c.gif"},
+        ]
+    got = _get_notice_image_urls_for_ai(NoticeWithImages())
+    assert got == [
+        "https://cdn.example.com/a.png",
+        "https://cdn.example.com/b.jpg",
+        "http://example.com/c.gif",
+    ]
+
+
+def test_get_notice_image_urls_for_ai_max_count():
+    """최대 max_count개만 반환."""
+    from app.services.tasks import _get_notice_image_urls_for_ai
+
+    class NoticeMany:
+        images = [{"url": f"https://ex.co/{i}.png"} for i in range(10)]
+    got = _get_notice_image_urls_for_ai(NoticeMany(), max_count=3)
+    assert len(got) == 3
+    assert got == ["https://ex.co/0.png", "https://ex.co/1.png", "https://ex.co/2.png"]
+
+
+def test_get_notice_image_urls_for_ai_filters_non_http():
+    """http/https가 아닌 URL은 제외."""
+    from app.services.tasks import _get_notice_image_urls_for_ai
+
+    class NoticeMixed:
+        images = [
+            {"url": "https://ok.com/a.png"},
+            {"url": "ftp://skip.com/b.png"},
+            {"url": ""},
+            {"src": "javascript:void(0)"},
+        ]
+    got = _get_notice_image_urls_for_ai(NoticeMixed())
+    assert got == ["https://ok.com/a.png"]
+
+
 def test_production_fail_fast_requires_ip_hmac_key():
     """environment=production이고 IP_HMAC_KEY가 비어 있으면 Settings 로드 시 ValueError."""
     with patch.dict(
