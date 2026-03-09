@@ -44,6 +44,8 @@
 ---
 ## 2026-03-09
 
+- [크롤러] SeaLion-hub/crawler 미등록 9개 사이트 이식: yonsei_chemistry, yonsei_dongari, yonsei_dormitory, yonsei_igee, yonsei_international, yonsei_library, yonsei_physics, yonsei_startup, yonsei_main. fetch_html/fetch_html_detail_cached·CRAWLER_SPEC·ScrapeResult 계약 준수, pytest 35 passed·등록 16개.
+
 - [아키텍처 import 규칙 수정] **Services must not import schemas** 위반 제거: `NoticeAIExtraction`, `NoticeCategory`, `ScheduleItem`, `ScheduleKind`, `TargetGrade` 및 검증 로직을 `app.domain.contracts.ai_extraction`으로 이동(Pydantic BaseModel + ConfigDict). `app.schemas.ai`는 해당 도메인 모듈 re-export만 수행. `app.services.ai_pipeline`, `app.services.tasks`는 `app.domain.contracts.ai_extraction`에서 import. lint-imports 2 kept 0 broken, pytest 194 passed.
 
 - [Trigger·Crawl-Stats 감사 반영] **P0** app/services/internal_crawl_service.py: RedisLockUnavailableError 시 raise 제거, failed.append(code); continue로 부분 실패 처리해 멱등 클레임 유지·중복 트리거 방지. **선택** app/api/internal.py: _map_result_to_status에서 partial_failure → 200. **P1** app/core/database.py: read_only_session_cm 추가, get_read_only_db가 해당 CM 사용하도록 리팩터; app/api/internal.py get_crawl_stats에서 session Depends 제거, should_refresh·lock_token 시에만 read_only_session_cm으로 지연 세션 획득(캐시 히트 시 DB 풀 미사용). **P2** internal_crawl_service: _normalize_idempotency_key 헬퍼 추가·key_stripped 정규화; internal.py·서비스에서 해당 헬퍼 사용; app/api/v1/auth.py: uuid·sentry_sdk late import를 모듈 상단으로 이동. 테스트: test_crawl_stats_masks_error_message는 read_only_session_cm 패치로 수정, test_trigger_crawl_all_enqueues_fail_returns_503은 200+ALL_ENQUEUES_FAILED 기대·ConnectionError 시뮬레이션으로 변경, test_trigger_crawl_failed_enqueue_clears_idempotency_claim은 첫 요청 200+실패 코드·ConnectionError로 수정. pytest 193 passed (아키텍처 import 테스트 1건 제외).

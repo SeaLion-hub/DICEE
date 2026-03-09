@@ -310,8 +310,8 @@ class Settings(BaseSettings):
             _POSTGRES_DSN_ADAPTER.validate_python(normalized)
         except Exception as exc:
             raise ValueError(
-                "DATABASE_URL must use postgresql://, postgresql+psycopg://, "
-                "postgresql+psycopg2://, or postgresql+asyncpg://"
+                "DATABASE_URL must use postgresql:// or postgresql+psycopg://. "
+                "Runtime uses psycopg only (asyncpg URL is converted to psycopg)."
             ) from exc
         parsed = urlparse(normalized)
         if not parsed.hostname:

@@ -1,6 +1,6 @@
 """
 Celery 앱은 실행·작업(Task) 정의.
-동기 DB(psycopg2)·crawl_service.run_crawl_job_sync 사용. "Too many connections" 방지.
+동기 DB(psycopg)·crawl_service.run_crawl_job_sync 사용. "Too many connections" 방지.
 """
 
 import logging
