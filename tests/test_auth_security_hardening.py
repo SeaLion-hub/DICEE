@@ -280,4 +280,4 @@ def test_production_requires_user_id_hmac_key() -> None:
         from app.core.config.base import Settings
 
         with pytest.raises(ValueError, match="Production environment requires USER_ID_HMAC_KEY"):
-            Settings()
+            Settings()  # type: ignore[reportCallIssue]

@@ -95,12 +95,14 @@ def get_crawl_retry_wait(retry_state: RetryCallState) -> float:
     otherwise exponential+jitter fallback.
     """
     exc = retry_state.outcome.exception() if retry_state.outcome else None
-    if exc is not None and hasattr(exc, "response") and exc.response is not None:
-        code = getattr(exc.response, "status_code", None)
-        if code == 429:
-            secs = parse_retry_after_seconds(exc.response)
-            if secs is not None:
-                return secs
+    if exc is not None:
+        response = getattr(exc, "response", None)
+        if response is not None:
+            code = getattr(response, "status_code", None)
+            if code == 429:
+                secs = parse_retry_after_seconds(response)
+                if secs is not None:
+                    return secs
     return _crawl_retry_wait(retry_state)
 
 

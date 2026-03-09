@@ -10,7 +10,7 @@ import re
 import time
 import uuid
 from datetime import UTC, datetime
-from typing import Literal
+from typing import Any, Literal
 from urllib.parse import parse_qs, urlparse, urlunparse
 
 from bs4 import BeautifulSoup
@@ -263,7 +263,7 @@ def _attachments_to_dicts(attachments: list) -> list[dict]:
 
 def build_notice_payload(
     college_id: uuid.UUID,
-    post: LinkItem,
+    post: LinkItem | dict[str, Any],
     detail_url: str,
     title: str,
     date_str: str | None,

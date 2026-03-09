@@ -1,4 +1,4 @@
-﻿"""CrawlDispatcherPort implementation backed by Celery apply_async."""
+"""CrawlDispatcherPort implementation backed by Celery apply_async."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import asyncio
 import logging
 import math
 from dataclasses import dataclass
+from typing import Any, Protocol
 
 from app.core.config import settings
 from app.core.metrics import (
@@ -31,6 +32,16 @@ class _ResourceSnapshot:
 class CeleryCrawlDispatcher:
     """CrawlDispatcherPort implementation with lightweight resource-aware backpressure."""
 
+    class _CeleryTaskProtocol(Protocol):
+        def apply_async(
+            self,
+            args: list[Any] | None = None,
+            kwargs: dict[str, Any] | None = None,
+            countdown: int | None = None,
+            **options: Any,
+        ) -> Any:
+            ...
+
     async def enqueue(
         self,
         college_code: str,
@@ -40,6 +51,8 @@ class CeleryCrawlDispatcher:
     ) -> str:
         """Dispatch crawl task and return task_id while preserving existing method contract."""
         from app.services.tasks import crawl_college_task
+
+        task: CeleryCrawlDispatcher._CeleryTaskProtocol = crawl_college_task  # type: ignore[assignment]
 
         labels = {"college_code": college_code}
         snapshot = await asyncio.to_thread(_collect_resource_snapshot)
@@ -63,7 +76,7 @@ class CeleryCrawlDispatcher:
             )
 
         result = await asyncio.to_thread(
-            crawl_college_task.apply_async,
+            task.apply_async,
             args=[college_code, lock_token],
             kwargs={"enqueued_at": enqueued_at},
             countdown=effective_countdown,

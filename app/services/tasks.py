@@ -282,8 +282,12 @@ def process_notice_ai_task(self, notice_id: str):
         else:
             html_content = _get_notice_html_for_ai(notice)
             image_urls = _get_notice_image_urls_for_ai(notice)
-            extraction = extract_notice_info(html_content, image_urls=image_urls)
-            projected = project_extraction_to_notice_fields(extraction)
+            envelope = extract_notice_info(html_content, image_urls=image_urls)
+            envelope_meta = {**envelope.meta, "usage": envelope.usage}
+            projected = project_extraction_to_notice_fields(
+                envelope.result,
+                envelope_meta=envelope_meta,
+            )
             update_ai_result_sync(
                 session,
                 notice_uuid,

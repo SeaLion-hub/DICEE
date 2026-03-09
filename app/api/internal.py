@@ -4,8 +4,10 @@ Query 파라미터 시크릿 미지원(Access Log 유출 방지). college별 분
 """
 
 import logging
+from typing import cast
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
+from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi.responses import JSONResponse, Response
 from redis.asyncio import Redis as RedisAsyncio
 
@@ -364,7 +366,8 @@ async def get_crawl_stats(
         metrics.increment(metrics.READ_CACHE_REFRESH_TOTAL)
         maker = getattr(request.app.state, "async_session_maker", None)
         async with read_only_session_cm(maker) as session:
-            result = await crawl_stats_service.get_crawl_stats(session, limit=limit)
+            # ReadOnlySessionWrapper는 AsyncSession을 래핑하므로 타입 체커를 위해 캐스팅한다.
+            result = await crawl_stats_service.get_crawl_stats(cast(AsyncSession, session), limit=limit)
         response = CrawlStatsResponse(
             runs=[
                 CrawlRunStatsItem(

@@ -4,8 +4,11 @@ import uuid
 from unittest.mock import MagicMock, patch
 
 import pytest
+from requests import Response
+from sqlalchemy.orm import Session
+
 from app.core.constants import CrawlRunStatus
-from app.domain.contracts.crawl_contracts import NoticeDraft
+from app.domain.contracts.crawl_contracts import LinkItem, NoticeDraft
 
 
 def test_run_crawl_job_sync_rollback_then_failed_on_commit_failure():
@@ -174,7 +177,7 @@ def test_run_crawl_pipeline_sync_uses_chunk_size_for_flush():
             for i in range(5):
                 yield _make_draft(college_id, i)
 
-        def upsert_chunk(self, _session, chunk):
+        def upsert_chunk(self, session: Session, chunk: list[NoticeDraft]) -> list[uuid.UUID]:
             self.flush_sizes.append(len(chunk))
             return [uuid.uuid4() for _ in chunk]
 
@@ -337,7 +340,7 @@ def test_scrape_one_sync_returns_exception_in_tuple_on_value_error():
     """_scrape_one_sync: ValueError 발생 시 ScrapeAttemptResult.exc에 담겨 반환된다."""
     from app.services.crawl.collect_sync import _scrape_one_sync
 
-    post = {"url": "https://example.com/1", "no": "ext-1"}
+    post: LinkItem = {"url": "https://example.com/1", "no": "ext-1"}
 
     def scrape_raise(_url):
         raise ValueError("parser error")
@@ -354,7 +357,7 @@ def test_scrape_one_sync_keyboard_interrupt_propagates():
     """_scrape_one_sync: KeyboardInterrupt 발생 시 메인 스레드에서 함수 밖으로 전파된다."""
     from app.services.crawl.collect_sync import _scrape_one_sync
 
-    post = {"url": "https://example.com/1"}
+    post: LinkItem = {"url": "https://example.com/1"}
 
     def scrape_raise(_url):
         raise KeyboardInterrupt()
@@ -387,7 +390,7 @@ def test_collect_payloads_sync_applies_rate_limit_in_worker_thread(monkeypatch):
 
     from app.domain.contracts.crawl_contracts import CrawlLogContext
 
-    links = [{"no": "1", "url": "https://example.com/post/1", "title": "title"}]
+    links: list[LinkItem] = [{"no": "1", "url": "https://example.com/post/1"}]
     payloads = list(
         _collect_payloads_sync(
             links,
@@ -419,7 +422,7 @@ def test_collect_payloads_sync_pre_dedup_reduces_scrape_calls():
         scrape_calls.append(url)
         return ScrapeResult("t", "2024-01-01", "<p>x</p>", [], [])
 
-    links = [
+    links: list[LinkItem] = [
         {"no": "same-id", "url": "https://example.com/1"},
         {"no": "same-id", "url": "https://example.com/2"},
     ]
@@ -453,7 +456,7 @@ def test_collect_payloads_sync_pre_dedup_many_duplicates_no_recursion():
         return ScrapeResult("t", "2024-01-01", "<p>x</p>", [], [])
 
     n = 1500
-    links = [{"no": "dup", "url": f"https://example.com/{i}"} for i in range(n)]
+    links: list[LinkItem] = [{"no": "dup", "url": f"https://example.com/{i}"} for i in range(n)]
     seen: set[str] = {"dup"}
     payloads = list(
         _collect_payloads_sync(
@@ -503,7 +506,7 @@ def test_scrape_one_sync_with_sem_retries_request_exception_and_succeeds(monkeyp
             raise RequestException("transient")
         return ScrapeResult("ok", "2024.01.01", "<p>ok</p>", [], [])
 
-    post = {"url": "https://example.com/post/1"}
+    post: LinkItem = {"url": "https://example.com/post/1"}
     result = _scrape_one_sync_with_sem(
         post,
         _scrape,
@@ -536,7 +539,7 @@ def test_scrape_one_sync_with_sem_retries_request_exception_until_limit(monkeypa
         calls["scrape"] += 1
         raise RequestException("network down")
 
-    post = {"url": "https://example.com/post/1"}
+    post: LinkItem = {"url": "https://example.com/post/1"}
     result = _scrape_one_sync_with_sem(
         post,
         _scrape,
@@ -567,10 +570,11 @@ def test_retry_policy_404_skippable_no_retry(monkeypatch):
 
     def _scrape(_url: str):
         calls["scrape"] += 1
-        resp = type("R", (), {"status_code": 404})()
+        resp = Response()
+        resp.status_code = 404
         raise HTTPError("404", response=resp)
 
-    post = {"url": "https://example.com/post/1"}
+    post: LinkItem = {"url": "https://example.com/post/1"}
     result = _scrape_one_sync_with_sem(
         post,
         _scrape,
@@ -602,11 +606,12 @@ def test_retry_policy_429_retried(monkeypatch):
     def _scrape(_url: str):
         calls["scrape"] += 1
         if calls["scrape"] < 2:
-            resp = type("R", (), {"status_code": 429})()
+            resp = Response()
+            resp.status_code = 429
             raise HTTPError("429", response=resp)
         return ScrapeResult("ok", "2024.01.01", "<p>ok</p>", [], [])
 
-    post = {"url": "https://example.com/post/1"}
+    post: LinkItem = {"url": "https://example.com/post/1"}
     result = _scrape_one_sync_with_sem(
         post,
         _scrape,
@@ -635,8 +640,9 @@ def test_process_scrape_result_parser_threshold_aborts():
     got_threshold = None
 
     for i in range(PARSER_CONSECUTIVE_FAILURES_THRESHOLD + 2):
+        post: LinkItem = {"url": "https://example.com/1", "no": f"n{i}"}
         payload, raise_exc = _process_scrape_result(
-            {"url": "https://example.com/1", "no": f"n{i}"},
+            post,
             "https://example.com/1",
             None,
             ValueError("parse failed"),
@@ -673,8 +679,9 @@ def test_process_scrape_result_increments_threshold_metric_on_trigger(monkeypatc
 
     monkeypatch.setattr("app.services.crawl.collect_sync.increment", _capture_increment)
     for i in range(PARSER_CONSECUTIVE_FAILURES_THRESHOLD + 2):
+        post: LinkItem = {"url": "https://example.com/1", "no": f"n{i}"}
         payload, raise_exc = _process_scrape_result(
-            {"url": "https://example.com/1", "no": f"n{i}"},
+            post,
             "https://example.com/1",
             None,
             ValueError("parse failed"),

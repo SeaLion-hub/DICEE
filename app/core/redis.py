@@ -418,7 +418,8 @@ def renew_trigger_lock_sync(college_code: str, lock_token: str | None) -> bool:
         return False
     try:
         key = f"{TRIGGER_LOCK_KEY_PREFIX}{college_code}"
-        n = client.eval(LUA_RENEW_IF_OWNER, 1, key, lock_token, ttl)
+        # Redis eval ARGV는 문자열 기반이므로 TTL을 str로 캐스팅해 전달한다.
+        n = client.eval(LUA_RENEW_IF_OWNER, 1, key, lock_token, str(ttl))
         return bool(n == 1)
     except Exception as e:
         logger.warning("Trigger lock renew failed (college=%s): %s", college_code, e, exc_info=True)

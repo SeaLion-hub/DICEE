@@ -16,13 +16,8 @@ EXTRACTOR_SYSTEM_PROMPT = """당신은 대학 공지 HTML에서 구조화된 정
 한국 대학 공지이므로 모든 날짜·시간은 **KST(Asia/Seoul)** 기준으로 해석하세요.
 제공된 이미지(포스터·첨부 등)가 있으면 그 내용도 참고하여 일정·자격·날짜를 추출하세요.
 
-## 출력 필드 개요
-- category: 공지 대분류. scholarship, employment, event, academic, admission, international, other 중 하나만. 분류 불가 시 other.
-- sub_category: 대분류 하위 라벨(최대 64자). 예: "국가장학금", "인턴 모집". 없으면 null.
-- summary: 공지 요약(선택).
-- schedules: 일정 목록. 아래 "비대칭 날짜 처리" 규칙을 따르세요. 각 항목에 kind(일정 종류), label(예: 서류 마감, 1차 면접), starts_at/ends_at 또는 *_date_raw 포함.
-- raw_eligibility_text, eligibility_rules, target_departments, target_grades: 아래 "자격 요건 추출" 규칙과 **필드 순서**를 지키세요.
-- hashtags, pipeline_version("v1"), metadata.
+JSON 출력 스키마(필드 이름과 설명)는 시스템에 이미 정의되어 있습니다.
+필드는 스키마에 정의된 것만 사용하고, 정의되지 않은 임의의 필드는 절대 추가하지 마세요.
 
 ---
 
@@ -46,7 +41,7 @@ EXTRACTOR_SYSTEM_PROMPT = """당신은 대학 공지 HTML에서 구조화된 정
 2. **추출하지 않는 경우**: "안내를 받아야 하는 대상", "대상자에게 안내"처럼 **판별 조건 없이 수신 대상만** 언급된 경우.
    - 이 경우 raw_eligibility_text=null, eligibility_rules=[], target_departments=[], target_grades=[] 로 두세요.
 
-**필드 순서(Schema-driven CoT)** — 자격을 채울 때는 반드시 아래 순서로 채우세요. 원문을 먼저 발췌한 뒤 분절·학과·학년을 채우면 환각이 줄어듭니다.
+**필드 순서(Schema-driven CoT)** — 자격을 채울 때는 반드시 아래 순서로 채우세요.
 1. raw_eligibility_text: 본문의 자격 관련 문장을 **가공 없이 그대로** 발췌. 없으면 null.
 2. eligibility_rules: 위 원문을 바탕으로 분절한 자격 조건 리스트.
 3. target_departments: 위 자격 요건에 명시된 학과 리스트. "없음", "알 수 없음", "해당없음" 등 플레이스홀더 사용 금지. 해당 없으면 빈 리스트.
@@ -54,26 +49,31 @@ EXTRACTOR_SYSTEM_PROMPT = """당신은 대학 공지 HTML에서 구조화된 정
 
 
 def _get_instructor_client():
-    import instructor
+    """
+    Instructor 클라이언트 팩토리.
+
+    - Gemini 1.5 Flash 기반 구조화 출력 전용.
+    - 재시도 정책(max_retries)은 Instructor 레이어에서만 관리하고,
+      상위 ai_pipeline 레이어에서는 별도 재시도를 수행하지 않는다.
+    """
+    import instructor  # type: ignore[import]
 
     api_key = None
     if settings.gemini_api_key:
         api_key = settings.gemini_api_key.get_secret_value()
     provider = f"google/{settings.gemini_model}"
+    kwargs: dict[str, object] = {"max_retries": EXTRACTION_MAX_RETRIES}
     if api_key:
-        return instructor.from_provider(provider, api_key=api_key, max_retries=EXTRACTION_MAX_RETRIES)
-    return instructor.from_provider(provider, max_retries=EXTRACTION_MAX_RETRIES)
+        kwargs["api_key"] = api_key
+    return instructor.from_provider(provider, **kwargs)
 
 
-def extract_notice_structured(
+def _messages_and_content(
     html_content: str,
     image_urls: list[str] | None = None,
-) -> NoticeAIExtraction:
-    """
-    HTML 공지 본문(및 선택적 이미지 URL)에서 NoticeAIExtraction 구조화 추출.
-    Instructor + Gemini 사용. image_urls가 있으면 Image.from_url로 멀티모달 입력.
-    """
-    from instructor.processing.multimodal import Image
+) -> tuple[list[dict[str, object]], str | list]:
+    """공통 메시지·user_content 구성 (extract_notice_structured / extract_notice_structured_with_usage)."""
+    from instructor.processing.multimodal import Image  # type: ignore[import]
 
     text = html_content[:100_000] or "(내용 없음)"
     urls = (image_urls or [])[:5]
@@ -84,14 +84,61 @@ def extract_notice_structured(
             text,
             "아래 이미지는 공지 본문(포스터·첨부 등)입니다. HTML과 함께 참고하여 지원자격·일정·날짜를 추출하세요.",
         ] + [Image.from_url(u) for u in urls if u and (u.startswith("http://") or u.startswith("https://"))]
+    messages = [
+        {"role": "system", "content": EXTRACTOR_SYSTEM_PROMPT},
+        {"role": "user", "content": user_content},
+    ]
+    return messages, user_content
 
+
+def _usage_from_completion(completion: object) -> dict[str, int]:
+    """completion.usage를 {prompt_tokens, completion_tokens, total_tokens} dict로 변환."""
+    out: dict[str, int] = {
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "total_tokens": 0,
+    }
+    usage = getattr(completion, "usage", None)
+    if usage is None:
+        return out
+    out["prompt_tokens"] = int(getattr(usage, "prompt_tokens", 0) or 0)
+    out["completion_tokens"] = int(getattr(usage, "completion_tokens", 0) or 0)
+    out["total_tokens"] = int(getattr(usage, "total_tokens", 0) or 0)
+    if out["total_tokens"] == 0 and (out["prompt_tokens"] or out["completion_tokens"]):
+        out["total_tokens"] = out["prompt_tokens"] + out["completion_tokens"]
+    return out
+
+
+def extract_notice_structured_with_usage(
+    html_content: str,
+    image_urls: list[str] | None = None,
+) -> tuple[NoticeAIExtraction, dict[str, int]]:
+    """
+    HTML(및 선택적 이미지)에서 NoticeAIExtraction 추출 + usage 반환.
+    파이프라인에서 envelope.usage·메트릭 채우기 위해 사용.
+    """
+    messages, _ = _messages_and_content(html_content, image_urls)
     client = _get_instructor_client()
-    response = client.create(
-        messages=[
-            {"role": "system", "content": EXTRACTOR_SYSTEM_PROMPT},
-            {"role": "user", "content": user_content},
-        ],
+    if hasattr(client, "create_with_completion"):
+        extraction, completion = client.create_with_completion(
+            messages=messages,
+            response_model=NoticeAIExtraction,
+        )
+        return extraction, _usage_from_completion(completion)
+    extraction = client.create(
+        messages=messages,
         response_model=NoticeAIExtraction,
-        max_retries=EXTRACTION_MAX_RETRIES,
     )
-    return response
+    return extraction, {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+
+
+def extract_notice_structured(
+    html_content: str,
+    image_urls: list[str] | None = None,
+) -> NoticeAIExtraction:
+    """
+    HTML 공지 본문(및 선택적 이미지 URL)에서 NoticeAIExtraction 구조화 추출.
+    Instructor + Gemini 사용. image_urls가 있으면 Image.from_url로 멀티모달 입력.
+    """
+    extraction, _ = extract_notice_structured_with_usage(html_content, image_urls=image_urls)
+    return extraction

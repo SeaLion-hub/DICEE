@@ -2,8 +2,7 @@
 
 import logging
 import uuid
-
-from redis.asyncio import Redis as RedisAsyncio
+from typing import Protocol
 
 logger = logging.getLogger(__name__)
 
@@ -11,7 +10,13 @@ OAUTH_STATE_KEY_PREFIX = "dicee:oauth_state:"
 OAUTH_STATE_TTL_SECONDS = 600
 
 
-async def store_state(client: RedisAsyncio | None, state: str) -> bool:
+class _OAuthStateClient(Protocol):
+    async def set(self, key: str, val: str, ex: int | None = None) -> bool: ...
+
+    async def delete(self, key: str) -> int: ...
+
+
+async def store_state(client: _OAuthStateClient | None, state: str) -> bool:
     """state를 Redis에 저장. 성공 시 True, client가 None이면 False."""
     if client is None or not (state or "").strip():
         return False
@@ -24,7 +29,7 @@ async def store_state(client: RedisAsyncio | None, state: str) -> bool:
         return False
 
 
-async def consume_state(client: RedisAsyncio | None, state: str) -> bool:
+async def consume_state(client: _OAuthStateClient | None, state: str) -> bool:
     """
     state가 존재하면 삭제 후 True 반환(1회용 소비). 없거나 이미 소비됐으면 False.
     client가 None이면 False.

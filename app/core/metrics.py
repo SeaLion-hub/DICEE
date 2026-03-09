@@ -61,6 +61,14 @@ REQUEST_TOTAL = "request_total"
 REQUEST_ERROR_TOTAL = "request_error_total"
 REQUEST_DURATION_SECONDS = "request_duration_seconds"
 
+# AI 추출 (라벨: status=ok|fallback|error, reason=validation_error|validation_retry_exhausted|provider_error|raw_substring_validation_failed)
+AI_EXTRACTION_ATTEMPT_TOTAL = "ai_extraction_attempt_total"
+AI_EXTRACTION_SUCCESS_TOTAL = "ai_extraction_success_total"
+AI_EXTRACTION_FALLBACK_TOTAL = "ai_extraction_fallback_total"
+AI_EXTRACTION_VALIDATION_ERROR_TOTAL = "ai_extraction_validation_error_total"
+AI_EXTRACTION_PROVIDER_ERROR_TOTAL = "ai_extraction_provider_error_total"
+AI_EXTRACTION_TOKENS_TOTAL = "ai_extraction_tokens_total"
+
 ALLOWED_REQUEST_LABELS = frozenset({"endpoint_template", "status_class", "method"})
 
 

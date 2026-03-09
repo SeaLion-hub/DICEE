@@ -86,3 +86,54 @@ LLM이 JSON을 **위에서부터 순서대로** 생성한다는 점을 이용해
 
 - "Instructor 기반 4단계 AI 파이프라인" 계획의 **스키마 설계** 섹션은 본 문서(ai-extraction-schema.md)를 SSOT로 참조한다.  
 - `app/schemas/ai.py` 구현 시 위 Enum·필드·validator를 반영한다.
+
+---
+
+## 5. 관측성 및 메타 저장 정책
+
+### 5.1 DB에 영속 저장되는 내용
+
+- `notices.ai_extracted_json` 컬럼에는 **NoticeAIExtraction 전체 JSON** 이 그대로 저장된다.
+  - 비즈니스 필드: `category`, `sub_category`, `schedules`, `raw_eligibility_text`, `eligibility_rules`, `target_departments`, `target_grades`, `hashtags`, `pipeline_version` 등.
+  - 메타데이터 필드: `metadata` 딕셔너리 내부에 `_envelope_meta` 네임스페이스를 둔다.
+- `_envelope_meta`는 **AI 실행 단위 운영 메타**를 포함하며, 구조는 다음과 같다.
+  - `pipeline_version`: 파이프라인/프롬프트 버전 (NoticeAIExtraction.pipeline_version와 동일 값).
+  - `provider`: `"google/{model}"` 형식의 프로바이더 식별자.
+  - `model`: Gemini 모델 이름(예: `gemini-1.5-flash`).
+  - `fallback_reason`: `None` 또는 `"validation_error"`, `"validation_retry_exhausted"`, `"provider_error"` 등 고정 문자열.
+  - `html_raw_len`: 전처리 전 HTML 길이(문자 수).
+  - `html_clean_len`: 전처리 후 프롬프트로 사용된 텍스트 길이(문자 수).
+  - `image_count`: 멀티모달 입력에 사용된 이미지 개수.
+  - `elapsed_ms`: `extract_notice_info` 기준 end-to-end 처리 시간(ms).
+  - `usage`: 토큰 사용량 딕셔너리  
+    - `prompt_tokens`: 입력(prompt) 토큰 수(집계용).  
+    - `completion_tokens`: 출력(completion) 토큰 수(집계용).  
+    - `total_tokens`: `prompt_tokens + completion_tokens`.  
+- **테스트 계약**  
+  - `tests/test_ai_pipeline_schema.py::test_project_extraction_to_notice_fields_includes_envelope_meta` 에서 `_envelope_meta`가 `metadata` 안에 네임스페이스로만 저장되고, 위 키들이 round-trip 가능한 shape으로 유지되는지 검증한다.
+  - `tests/test_ai_pipeline_schema.py::test_ai_extracted_json_round_trips_through_notice_ai_extraction` 에서 DB에 저장된 `ai_extracted_json`이 `DomainNoticeAIExtraction.model_validate()`로 항상 복원 가능해야 함을 고정한다 (extra=\"forbid\" 유지).
+
+### 5.2 로그·메트릭으로만 남기는 내용 (운영 SSOT)
+
+- **집계·모니터링용 SSOT는 메트릭/로그** 로 두고, DB는 개별 notice 단위 디버깅/리플레이 목적에 한정한다.
+- 메트릭 레이어(`app/core/metrics.py` 및 관련 테스트)에서는 다음을 집계한다.
+  - 추출 시도/성공/폴백/프로바이더 오류 카운트 (예: `ai_extraction_attempt_total`, `ai_extraction_success_total` 등).
+  - 토큰 사용량 총합 (`ai_extraction_tokens_total` 등, `usage.total_tokens` 기준).
+  - 라벨 카디널리티는 `provider`, `model`, `status`, `reason` 등 **고정 enum 값**만 허용하며, `notice_id` 등 high-cardinality 값은 절대 사용하지 않는다.
+- 구조화 로그(예: `"ai_extraction_completed"`)는 `_envelope_meta`의 서브셋만 포함하며, 개별 notice 단위 분석/디버깅을 보조한다.
+
+### 5.3 설계 원칙 요약
+
+- **비즈니스 payload** (`NoticeAIExtraction`의 도메인 필드)는 DB SSOT로서 항상 round-trip 가능해야 한다.
+- **운영 메타** (`_envelope_meta`)는
+  - per-notice 수준에선 DB `metadata._envelope_meta`에 보존해 디버깅과 회귀 분석에 활용하고,
+  - 집계/알람/대시보드 수준에선 메트릭·로그만을 SSOT로 사용한다.
+- `_envelope_meta`의 필드가 추가/변경되더라도
+  - `metadata` 네임스페이스 안에만 위치해야 하며,
+  - 도메인 스키마(extra=\"forbid\")를 깨지 않도록 테스트를 통해 회귀를 방지한다.
+
+### 5.4 raw substring 검증과 멀티모달
+
+- **ai_extraction_enforce_raw_substrings** 가 True여도, **image_urls가 비어 있지 않으면** raw substring 검증을 수행하지 않는다.
+- 이유: 모델은 이미지(포스터·첨부)까지 참고해 일정/자격을 추출하므로, 이미지에만 있는 문구는 HTML 본문(prompt_html)에 없을 수 있다. 이때 텍스트만 source로 검증하면 정상 추출이 거짓 fallback( raw_substring_validation_failed )으로 처리된다.
+- 따라서 substring 검증은 **텍스트 전용 입력일 때만** 적용하며, 멀티모달 경로와 검증 규칙이 충돌하지 않도록 한다.

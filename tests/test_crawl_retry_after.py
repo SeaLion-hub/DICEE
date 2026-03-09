@@ -2,6 +2,7 @@
 
 import pytest
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from app.services.crawl.runtime import (
     CRAWL_RETRY_BASE_SEC,
@@ -63,7 +64,7 @@ def test_parse_retry_after_none_response_returns_none():
 
 def test_get_crawl_retry_wait_429_with_retry_after_uses_value():
     class Exc(Exception):
-        pass
+        response: Any | None = None
     class Res:
         headers = {"Retry-After": "20"}
         status_code = 429
@@ -85,7 +86,7 @@ def test_get_crawl_retry_wait_non_429_delegates_to_fallback(monkeypatch):
         return fallback_ret
     monkeypatch.setattr(runtime, "_crawl_retry_wait", _fake_wait)
     class Exc(Exception):
-        pass
+        response: Any | None = None
     class Res:
         headers = {}
         status_code = 503

@@ -1,4 +1,4 @@
-﻿"""Downloader middleware stack inspired by Scrapy's request/response hooks."""
+"""Downloader middleware stack inspired by Scrapy's request/response hooks."""
 
 from __future__ import annotations
 
@@ -17,6 +17,8 @@ from requests.exceptions import Timeout as RequestsTimeout
 
 from app.core.config import settings
 from app.core.crawl_rate_limit import (
+    HostRateLimiter,
+    RedisHostRateLimiterAsync,
     get_host_rate_limiter_async,
     get_host_rate_limiter_sync,
     host_from_url,
@@ -128,14 +130,12 @@ class AsyncHostRateLimitMiddleware:
     """Per-host politeness limiter for async downloader paths."""
 
     def __init__(self, min_interval_sec: float) -> None:
-        self._limiter = get_host_rate_limiter_async(min_interval_sec)
+        self._limiter: HostRateLimiter | RedisHostRateLimiterAsync = get_host_rate_limiter_async(min_interval_sec)
 
     async def process_request(self, request: DownloadRequest) -> DownloadRequest:
         host = host_from_url(request.url)
         if host:
-            wait_async = getattr(self._limiter, "wait_async", None)
-            if callable(wait_async):
-                await wait_async(host)
+            await self._limiter.wait_async(host)
         return request
 
     async def process_response(self, request: DownloadRequest, response: DownloadResponse) -> DownloadResponse:

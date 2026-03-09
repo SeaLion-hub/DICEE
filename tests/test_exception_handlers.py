@@ -1,5 +1,7 @@
 """전역 예외 핸들러·5xx 응답 정제 검증. 스택/민감정보 누출 방지."""
 
+from typing import cast
+
 
 async def test_global_exception_handler_never_leaks_stack_or_message():
     """5xx 응답 body에 예외 메시지·Traceback이 포함되지 않음을 검증(프레임워크 레벨 원천 차단)."""
@@ -15,7 +17,7 @@ async def test_global_exception_handler_never_leaks_stack_or_message():
     response = await global_exception_handler(request, exc)
 
     assert response.status_code == 500
-    body = response.body.decode("utf-8")
+    body = cast(bytes, response.body).decode("utf-8")
     data = __import__("json").loads(body)
     assert data.get("detail") == "Internal server error"
     assert data.get("code") == "INTERNAL_ERROR"
@@ -62,7 +64,7 @@ async def test_sanitize_5xx_replaces_body_without_forwarding_unsafe_headers():
         )
 
     response = await middleware.dispatch(request, _call_next)
-    body = response.body.decode("utf-8")
+    body = cast(bytes, response.body).decode("utf-8")
 
     assert response.status_code == 500
     assert response.headers.get("x-test-header") == "ok"

@@ -8,21 +8,21 @@ from app.core.config.base import Settings
 def test_settings_strips_database_url_on_load(monkeypatch):
     """Settings 로드 시 database_url 앞뒤 공백이 strip 되어 저장된다."""
     monkeypatch.setenv("APP_ENTRY", "celery")
-    s = Settings(database_url="  postgresql://localhost/mydb  ")
+    s = Settings(database_url="  postgresql://localhost/mydb  ")  # type: ignore[reportCallIssue]
     assert s.database_url == "postgresql://localhost/mydb"
 
 
 def test_settings_strips_redis_url_on_load(monkeypatch):
     """Settings 로드 시 redis_url 앞뒤 공백이 strip 되어 저장된다."""
     monkeypatch.setenv("APP_ENTRY", "celery")
-    s = Settings(redis_url="  redis://localhost:6379/0  ")
+    s = Settings(redis_url="  redis://localhost:6379/0  ")  # type: ignore[reportCallIssue]
     assert s.redis_url == "redis://localhost:6379/0"
 
 
 def test_settings_strips_jwt_secret_on_load(monkeypatch):
     """Settings 로드 시 jwt_secret 앞뒤 공백·개행이 strip 되어 저장된다."""
     monkeypatch.setenv("APP_ENTRY", "celery")
-    s = Settings(jwt_secret="  my-secret\n  ")
+    s = Settings(jwt_secret="  my-secret\n  ")  # type: ignore[reportCallIssue]
     assert s.jwt_secret.get_secret_value() == "my-secret"
 
 

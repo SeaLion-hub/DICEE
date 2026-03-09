@@ -216,7 +216,7 @@ class RedisHostRateLimiterAsync:
                 pass
 
 
-def get_host_rate_limiter_async(min_interval_sec: float):
+def get_host_rate_limiter_async(min_interval_sec: float) -> HostRateLimiter | RedisHostRateLimiterAsync:
     """비동기 크롤용 limiter. Redis URL 있으면 RedisHostRateLimiterAsync, 없으면 HostRateLimiter."""
     try:
         from app.core.config import settings

@@ -1,14 +1,17 @@
-﻿"""Tests for Scrapy-style crawler refactor building blocks."""
+"""Tests for Scrapy-style crawler refactor building blocks."""
 
 import asyncio
 from types import SimpleNamespace
 
 import pytest
+from requests import Response
 from requests.exceptions import HTTPError
 
 
 def _http_error(status_code: int) -> HTTPError:
-    return HTTPError(str(status_code), response=SimpleNamespace(status_code=status_code))
+    resp = Response()
+    resp.status_code = status_code
+    return HTTPError(str(status_code), response=resp)
 
 
 def test_sync_downloader_retry_403_allowed_host_retries_once():
@@ -136,7 +139,18 @@ def test_default_notice_pipeline_resolves_external_id_and_marks_seen(monkeypatch
     monkeypatch.setattr("app.services.crawl.item_pipeline.build_notice_payload", _fake_build)
 
     seen: set[str] = set()
-    pipeline = DefaultNoticeItemPipeline(seen)
+
+    class _SeenAdapter:
+        def __init__(self, backing: set[str]) -> None:
+            self._backing = backing
+
+        def add(self, x: str) -> None:
+            self._backing.add(x)
+
+        def __contains__(self, x: str) -> bool:  # type: ignore[override]
+            return x in self._backing
+
+    pipeline = DefaultNoticeItemPipeline(_SeenAdapter(seen))
     college_id = uuid.uuid4()
     item = RawNoticeItem(
         college_id=college_id,
@@ -193,7 +207,7 @@ def test_celery_dispatcher_applies_memory_backpressure(monkeypatch):
     captured: dict[str, int] = {}
 
     def _apply_async(*args, **kwargs):
-        captured["countdown"] = kwargs.get("countdown")
+        captured["countdown"] = int(kwargs.get("countdown") or 0)
         return SimpleNamespace(id="task-123")
 
     monkeypatch.setattr("app.services.tasks.crawl_college_task.apply_async", _apply_async)
@@ -223,7 +237,7 @@ def test_celery_dispatcher_snapshot_fail_open_keeps_original_countdown(monkeypat
     captured: dict[str, int] = {}
 
     def _apply_async(*args, **kwargs):
-        captured["countdown"] = kwargs.get("countdown")
+        captured["countdown"] = int(kwargs.get("countdown") or 0)
         return SimpleNamespace(id="task-456")
 
     monkeypatch.setattr("app.services.tasks.crawl_college_task.apply_async", _apply_async)
@@ -249,7 +263,7 @@ def test_base_crawler_scaffold_exports_legacy_callables(monkeypatch):
         display_name = "Demo College"
         start_urls = ("https://demo.example/list",)
 
-        def parse_links(self, html: str, list_url: str):
+        def parse_links(self, html: str, list_url: str) -> list[base_module.LinkItem]:
             assert "list" in html
             assert list_url == "https://demo.example/list"
             return [{"url": "https://demo.example/detail/1", "no": "1"}]
@@ -272,7 +286,7 @@ def test_base_crawler_scaffold_exports_legacy_callables(monkeypatch):
     get_links_fn, scrape_detail_fn = crawler.legacy_exports()
     spec = crawler.to_crawler_spec(get_links_name="get_notice_links", scrape_detail_name="scrape_detail")
 
-    assert links[0]["no"] == "1"
+    assert links[0].get("no") == "1"
     assert scrape_detail_fn("https://demo.example/detail/1").html_content == "<div>detail</div>"
     assert get_links_fn("")[0]["url"] == "https://demo.example/detail/1"
     assert detail.title == "Demo"

@@ -42,6 +42,11 @@
 - `- [단계 또는 영역] 무엇을 했는지 (어떤 파일/기능). 왜 또는 결과 한 줄.`
 
 ---
+## 2026-03-10
+
+- [AI 추출 관측성·스키마·태스크] **P0** ExtractionEnvelope 표준 계약: meta에 provider/model/fallback_reason/elapsed_ms/html_raw_len/html_clean_len/image_count, usage에 prompt_tokens/completion_tokens/total_tokens 필수. **P1** docs/decisions/ai-extraction-schema.md §5 관측성·메타 저장 정책(DB vs 로그/메트릭 SSOT) 명시. **P2** InstructorRetryException·RequestException 경로 테스트 추가(validation→fallback, provider→전파). **P3** _clean_notice_html에 img alt 보존, tests/test_ai_html_cleaning.py 회귀 테스트. **P4** _MAX_TARGET_GRADES/_MAX_HASHTAGS, target_grades cap, ai_extraction_enforce_raw_substrings·validate_extraction_raw_substrings. **P5** metrics.py AI_EXTRACTION_* 상수·extract_notice_info 계측, tests/test_ai_metrics.py. **P6** tests/test_tasks_ai_consistency.py: manual/정상/fallback/provider_error 경로별 update_ai_result_sync 인자 검증. **P7** test_ai_streaming_draft: StopIteration.value로 strict 반환값 검증·round-trip 테스트. test_ai_extraction_domain.py target_departments 누락 린트 수정. pytest 41건(AI 관련) 통과.
+
+---
 ## 2026-03-09
 
 - [크롤러] SeaLion-hub/crawler 미등록 9개 사이트 이식: yonsei_chemistry, yonsei_dongari, yonsei_dormitory, yonsei_igee, yonsei_international, yonsei_library, yonsei_physics, yonsei_startup, yonsei_main. fetch_html/fetch_html_detail_cached·CRAWLER_SPEC·ScrapeResult 계약 준수, pytest 35 passed·등록 16개.
