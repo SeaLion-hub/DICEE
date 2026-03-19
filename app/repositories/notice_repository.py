@@ -10,7 +10,7 @@ from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import and_, or_, select, tuple_, update
+from sqlalchemy import and_, delete, or_, select, tuple_, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session, defer, selectinload
@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session, defer, selectinload
 from app.domain.contracts.crawl_contracts import NoticeDraft
 from app.models.notice import Notice
 from app.models.notice_content import NoticeContent
+from app.models.notice_taxonomy_mapping import NoticeTaxonomyMapping
 
 # 단일 execute당 최대 행 수. 락/WAL·데드락 리스크 완화용.
 BULK_UPSERT_BATCH_SIZE = 500
@@ -169,7 +170,7 @@ def get_notice_for_ai_sync(session: Session, notice_id: uuid.UUID) -> Notice | N
     stmt = (
         select(Notice)
         .where(Notice.id == notice_id, Notice.ai_status == "pending")
-        .options(selectinload(Notice.notice_content))
+        .options(selectinload(Notice.notice_content), selectinload(Notice.college))
         .with_for_update(skip_locked=True)
     )
     result = session.execute(stmt)
@@ -189,12 +190,11 @@ def update_ai_result_sync(
     dates: list[dict[str, Any]] | None = None,
     eligibility: list[str] | None = None,
     hashtags: list[str] | None = None,
-    category: str | None = None,
-    sub_category: str | None = None,
+    taxonomy_rows: list[dict[str, str]] | None = None,
 ) -> None:
     """
     AI 처리 완료 시 ai_status='done', ai_extracted_json 및 투영 필드 저장 (동기, 워커용).
-    dates/eligibility/hashtags/category/sub_category는 NoticeAIExtraction 투영 시 전달.
+    taxonomy_rows가 전달되면 notice_taxonomy_mappings를 notice_id 기준으로 교체한다.
     """
     values: dict[str, Any] = {"ai_status": "done", "ai_extracted_json": ai_extracted_json}
     if dates is not None:
@@ -203,13 +203,52 @@ def update_ai_result_sync(
         values["eligibility"] = eligibility
     if hashtags is not None:
         values["hashtags"] = hashtags
-    if category is not None:
-        values["category"] = category
-    if sub_category is not None:
-        values["sub_category"] = sub_category
     stmt = update(Notice).where(Notice.id == notice_id).values(**values)
     session.execute(stmt)
+    if taxonomy_rows is not None:
+        _replace_notice_taxonomy_rows_sync(
+            session=session,
+            notice_id=notice_id,
+            taxonomy_rows=taxonomy_rows,
+        )
     session.flush()
+
+
+def _replace_notice_taxonomy_rows_sync(
+    *,
+    session: Session,
+    notice_id: uuid.UUID,
+    taxonomy_rows: list[dict[str, str]],
+) -> None:
+    """notice_id의 taxonomy 매핑을 전달된 행 목록으로 완전 교체한다."""
+    session.execute(
+        delete(NoticeTaxonomyMapping).where(NoticeTaxonomyMapping.notice_id == notice_id)
+    )
+    if not taxonomy_rows:
+        return
+
+    cleaned_rows: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for row in taxonomy_rows:
+        main_category = str(row.get("main_category", "")).strip()
+        sub_category = str(row.get("sub_category", "")).strip()
+        if not main_category or not sub_category:
+            continue
+        key = (main_category, sub_category)
+        if key in seen:
+            continue
+        seen.add(key)
+        cleaned_rows.append(
+            {
+                "notice_id": notice_id,
+                "main_category": main_category,
+                "sub_category": sub_category,
+            }
+        )
+    if not cleaned_rows:
+        return
+
+    session.execute(insert(NoticeTaxonomyMapping).values(cleaned_rows))
 
 
 def get_by_college_external_sync(

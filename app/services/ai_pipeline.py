@@ -26,7 +26,11 @@ from app.core.metrics import (
     AI_EXTRACTION_VALIDATION_ERROR_TOTAL,
     increment,
 )
-from app.domain.contracts.ai_extraction import NoticeAIExtraction
+from app.domain.contracts.ai_extraction import (
+    NoticeAIExtraction,
+    NoticeMainCategory,
+    TaxonomyMappingItem,
+)
 from app.services.ai.extractor import extract_notice_structured_with_usage
 
 logger = logging.getLogger(__name__)
@@ -106,9 +110,79 @@ def validate_extraction_raw_substrings(
                     )
 
 
+def validate_and_normalize_taxonomy(
+    extraction: NoticeAIExtraction,
+) -> NoticeAIExtraction:
+    """
+    LLM 출력 직후 taxonomy 무결성을 방어적으로 재검증/정규화한다.
+
+    정책:
+    - main_categories가 0개인 경우는 미분류로 허용한다(폴백 미사용).
+    - main_categories가 하나 이상이면 taxonomy_mappings는 반드시 존재해야 한다.
+    - 캠퍼스생활은 단독 대분류일 때만 허용한다.
+    - 각 대분류는 taxonomy_mappings에 정확히 1번 등장해야 한다.
+    - 소분류는 공백/중복을 정리한 뒤, 비어 있으면 실패 처리한다.
+    - 소분류는 TaxonomyMappingItem 재검증으로 부모 풀 소속을 강제한다.
+    """
+    if not extraction.main_categories:
+        # 0개 대분류는 "미분류"로 간주하고 파이프라인을 계속 진행한다.
+        return extraction
+
+    mains = extraction.main_categories
+    if (
+        NoticeMainCategory.CAMPUS_LIFE in mains
+        and len(mains) > 1
+    ):
+        raise ValueError(
+            "'캠퍼스생활' is a fallback main category and must be assigned as a single category only."
+        )
+    if not extraction.taxonomy_mappings:
+        raise ValueError(
+            "taxonomy_mappings are required when main_categories are provided."
+        )
+
+    normalized_mappings: list[TaxonomyMappingItem] = []
+    seen_mains: set[NoticeMainCategory] = set()
+    for item in extraction.taxonomy_mappings:
+        if item.main_category in seen_mains:
+            raise ValueError(
+                "taxonomy_mappings must not contain duplicate main_category entries."
+            )
+        seen_mains.add(item.main_category)
+
+        deduped_sub_categories: list[str] = []
+        seen_subs: set[str] = set()
+        for sub in item.sub_categories:
+            text = (sub or "").strip()
+            if not text or text in seen_subs:
+                continue
+            seen_subs.add(text)
+            deduped_sub_categories.append(text)
+        if not deduped_sub_categories:
+            raise ValueError(
+                f"taxonomy mapping for '{item.main_category.value}' must include at least one sub-category."
+            )
+
+        normalized_mappings.append(
+            TaxonomyMappingItem(
+                main_category=item.main_category,
+                sub_categories=deduped_sub_categories,
+            )
+        )
+
+    if set(mains) != {item.main_category for item in normalized_mappings}:
+        raise ValueError(
+            "main_categories and taxonomy_mappings must reference the same set of main categories."
+        )
+
+    return extraction.model_copy(update={"taxonomy_mappings": normalized_mappings})
+
+
 def extract_notice_info(
     html_content: str,
     image_urls: list[str] | None = None,
+    title: str | None = None,
+    college_name: str | None = None,
 ) -> ExtractionEnvelope:
     """
     HTML 공지 본문(및 선택적 이미지 URL)에서 NoticeAIExtraction 구조화 추출.
@@ -131,8 +205,32 @@ def extract_notice_info(
     increment(AI_EXTRACTION_ATTEMPT_TOTAL)
     try:
         extraction, usage = extract_notice_structured_with_usage(
-            prompt_html, image_urls=image_urls
+            prompt_html,
+            image_urls=image_urls,
+            title=title,
+            college_name=college_name,
         )
+        try:
+            extraction = validate_and_normalize_taxonomy(extraction)
+        except ValueError:
+            elapsed_ms = int((time.monotonic() - started_at) * 1000)
+            fallback_result = NoticeAIExtraction(target_departments=[])
+            increment(AI_EXTRACTION_FALLBACK_TOTAL)
+            increment(AI_EXTRACTION_VALIDATION_ERROR_TOTAL)
+            return ExtractionEnvelope(
+                status="fallback",
+                result=fallback_result,
+                meta={
+                    "pipeline_version": fallback_result.pipeline_version,
+                    "provider": provider,
+                    "model": model,
+                    "fallback_reason": "taxonomy_validation_failed",
+                    "html_raw_len": html_raw_len,
+                    "html_clean_len": html_clean_len,
+                    "image_count": image_count,
+                    "elapsed_ms": elapsed_ms,
+                },
+            )
         if getattr(settings, "ai_extraction_enforce_raw_substrings", False) and not (
             image_urls or []
         ):
@@ -266,7 +364,7 @@ def project_extraction_to_notice_fields(
     - dates: schedules를 list[dict]로 (Notice.dates)
     - eligibility: eligibility_rules
     - hashtags: hashtags
-    - category / sub_category: AI 대분류·소분류 (DB notices 컬럼에 투영)
+    - taxonomy_rows: notice_taxonomy_mappings 행 단위 매핑(main_category, sub_category)
     """
     raw = extraction.model_dump(mode="json")
     if envelope_meta:
@@ -278,11 +376,28 @@ def project_extraction_to_notice_fields(
         metadata["_envelope_meta"] = envelope_meta
         raw["metadata"] = metadata
     dates = [s.model_dump(mode="json") for s in extraction.schedules]
+    taxonomy_rows: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for item in extraction.taxonomy_mappings:
+        main_value = item.main_category.value
+        for sub in item.sub_categories:
+            sub_value = (sub or "").strip()
+            if not sub_value:
+                continue
+            key = (main_value, sub_value)
+            if key in seen:
+                continue
+            seen.add(key)
+            taxonomy_rows.append(
+                {
+                    "main_category": main_value,
+                    "sub_category": sub_value,
+                }
+            )
     return {
         "ai_extracted_json": raw,
         "dates": dates,
         "eligibility": extraction.eligibility_rules,
         "hashtags": extraction.hashtags,
-        "category": extraction.category.value,
-        "sub_category": extraction.sub_category,
+        "taxonomy_rows": taxonomy_rows,
     }

@@ -11,7 +11,7 @@
 |---|------|------|------|
 | 1 | `target_grades` / `target_departments` 타입 엄격화 | **반영** | ROADMAP_PHASES "학과·학년 값 형식 통일, User 프로필과 비교 가능하도록" 명시. list[str]이면 AI가 "1학년"/"1"/"3+"/ "컴공" 등 제각각 출력해 5단계 매칭 로직이 깨짐. |
 | 2 | Timezone + Fuzzy Date 대비 `date_raw` Fallback | **반영** | DB notice_schedules에 이미 `schedule_text_fallback`(VARCHAR 255) 존재. 파싱 불가("11월 중순", "추후 공지") 시 AI 환각/파싱 에러 방지용 원문 보존 필요. |
-| 3 | 공지 카테고리 플래그 `NoticeCategory` | **반영(정책 변경)** | **대분류·소분류는 AI가 추출.** NoticeAIExtraction에 `category`(Enum), `sub_category`(str \| None, 최대 64자) 포함. DB notices.category / notices.sub_category에 투영. |
+| 3 | 공지 카테고리 플래그 `NoticeCategory` | **반영(정책 변경)** | **대분류·소분류는 AI가 추출.** NoticeAIExtraction에 `category`(Enum), `sub_category`(str \| None, 최대 64자) 포함. 단, DB 영속은 `notice_taxonomy_mappings`(행 단위 매핑)으로 저장하고 단일 대표 컬럼(`notices.category/sub_category`)은 사용하지 않는다. |
 | 4 | `is_all_day`일 때 시간 00:00:00 강제 | **반영** | DB와 프론트 일관성. model_validator로 스키마 단에서 강제하면 AI 모순 출력을 사전 차단. |
 
 ---
@@ -78,7 +78,7 @@ LLM이 JSON을 **위에서부터 순서대로** 생성한다는 점을 이용해
 - **Instructor**: Enum/Literal은 Gemini 제한(문자열 반환) 있으므로, 필요 시 후처리에서 문자열→Enum 변환 허용.  
 - **DB 매핑**:  
   - `notice_schedules.schedule_text_fallback` ← `ScheduleItem.date_raw` / start_date_raw / end_date_raw  
-  - `notices.category` ← NoticeAIExtraction.category (Enum value 문자열), `notices.sub_category` ← NoticeAIExtraction.sub_category.
+  - `notice_taxonomy_mappings(main_category, sub_category)` ← `NoticeAIExtraction.taxonomy_mappings`를 행 단위로 평탄화해 저장.
 
 ---
 
@@ -137,3 +137,7 @@ LLM이 JSON을 **위에서부터 순서대로** 생성한다는 점을 이용해
 - **ai_extraction_enforce_raw_substrings** 가 True여도, **image_urls가 비어 있지 않으면** raw substring 검증을 수행하지 않는다.
 - 이유: 모델은 이미지(포스터·첨부)까지 참고해 일정/자격을 추출하므로, 이미지에만 있는 문구는 HTML 본문(prompt_html)에 없을 수 있다. 이때 텍스트만 source로 검증하면 정상 추출이 거짓 fallback( raw_substring_validation_failed )으로 처리된다.
 - 따라서 substring 검증은 **텍스트 전용 입력일 때만** 적용하며, 멀티모달 경로와 검증 규칙이 충돌하지 않도록 한다.
+
+---
+
+Quality Gates (2026-03-19): `pytest tests/test_ai_pipeline_schema.py tests/test_tasks_ai_consistency.py tests/test_ai_metrics.py tests/test_ai_html_cleaning.py tests/test_ai_extraction_domain.py` → 51 passed, 1 skipped.

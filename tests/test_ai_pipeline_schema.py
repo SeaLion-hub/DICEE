@@ -9,11 +9,19 @@ from requests.exceptions import RequestException
 from app.schemas.ai import NoticeAIExtraction, NoticeCategory, ScheduleItem, ScheduleKind
 from app.domain.contracts.ai_extraction import (
     NoticeAIExtraction as DomainNoticeAIExtraction,
+    NoticeMainCategory,
+    TaxonomyMappingItem,
 )
 from app.services.ai_pipeline import (
     extract_notice_info,
     project_extraction_to_notice_fields,
+    validate_and_normalize_taxonomy,
     validate_extraction_raw_substrings,
+)
+from app.services.ai.extractor import (
+    EXTRACTOR_SYSTEM_PROMPT,
+    MAIN_CATEGORY_SYSTEM_PROMPT,
+    extract_notice_structured_with_usage,
 )
 from app.core.config import settings
 
@@ -27,15 +35,21 @@ def test_project_extraction_to_notice_fields_stub():
     assert projected["dates"] == []
     assert projected["eligibility"] == []
     assert projected["hashtags"] == []
-    assert projected["category"] == NoticeCategory.OTHER.value
-    assert projected["sub_category"] is None
+    assert projected["taxonomy_rows"] == []
 
 
 def test_project_extraction_to_notice_fields_with_schedules():
-    """schedules가 있으면 dates에 직렬화된 list[dict]로 투영. category/sub_category 포함."""
+    """schedules 및 taxonomy_mappings가 있으면 dates/taxonomy_rows로 투영한다."""
     extraction = NoticeAIExtraction(
         category=NoticeCategory.SCHOLARSHIP,
         sub_category="국가장학금",
+        main_categories=[NoticeMainCategory.SCHOLARSHIP_SUPPORT],
+        taxonomy_mappings=[
+            TaxonomyMappingItem(
+                main_category=NoticeMainCategory.SCHOLARSHIP_SUPPORT,
+                sub_categories=["교내/성적장학", "외부장학"],
+            )
+        ],
         raw_eligibility_text="3학년 이상 전공 무관 지원 가능",
         schedules=[
             ScheduleItem(
@@ -50,14 +64,16 @@ def test_project_extraction_to_notice_fields_with_schedules():
         target_departments=["컴퓨터공학과"],
     )
     projected = project_extraction_to_notice_fields(extraction)
-    assert projected["category"] == "scholarship"
-    assert projected["sub_category"] == "국가장학금"
     assert len(projected["dates"]) == 2
     assert projected["dates"][0]["kind"] == "application_deadline"
     assert projected["dates"][0]["label"] == "서류 마감"
     assert projected["dates"][1]["date_raw"] == "11월 중순"
     assert projected["eligibility"] == ["3학년 이상", "전공 무관"]
     assert projected["hashtags"] == ["장학금", "인턴"]
+    assert projected["taxonomy_rows"] == [
+        {"main_category": "장학/지원", "sub_category": "교내/성적장학"},
+        {"main_category": "장학/지원", "sub_category": "외부장학"},
+    ]
     assert "raw_eligibility_text" in projected["ai_extracted_json"]
 
 
@@ -88,7 +104,9 @@ def test_extract_notice_info_passes_empty_image_urls():
     ) as mock_extract:
         result = extract_notice_info("<p>html</p>")
     assert result.result is stub
-    mock_extract.assert_called_once_with("html", image_urls=None)
+    mock_extract.assert_called_once_with(
+        "html", image_urls=None, title=None, college_name=None
+    )
 
 
 def test_project_extraction_to_notice_fields_includes_envelope_meta() -> None:
@@ -331,3 +349,198 @@ def test_extract_notice_info_multimodal_skips_raw_substring_validation(monkeypat
         )
     assert envelope.status == "ok"
     assert envelope.result is stub
+
+
+def test_validate_and_normalize_taxonomy_allows_unclassified_empty_main() -> None:
+    """main_categories가 비어 있으면 미분류 정책으로 통과시킨다."""
+    extraction = NoticeAIExtraction(target_departments=[])
+    normalized = validate_and_normalize_taxonomy(extraction)
+    assert normalized is extraction
+
+
+def test_validate_and_normalize_taxonomy_deduplicates_sub_categories() -> None:
+    """taxonomy 후처리에서 소분류 공백/중복을 정리한다."""
+    mapping = TaxonomyMappingItem.model_construct(
+        main_category=NoticeMainCategory.SCHOLARSHIP_SUPPORT,
+        sub_categories=["교내/성적장학", "교내/성적장학", " ", "외부장학"],
+    )
+    extraction = DomainNoticeAIExtraction.model_construct(
+        main_categories=[NoticeMainCategory.SCHOLARSHIP_SUPPORT],
+        taxonomy_mappings=[mapping],
+        target_departments=[],
+    )
+    normalized = validate_and_normalize_taxonomy(extraction)
+    assert normalized.taxonomy_mappings[0].sub_categories == ["교내/성적장학", "외부장학"]
+
+
+def test_extract_notice_info_taxonomy_validation_failure_returns_fallback() -> None:
+    """taxonomy 구조 위반(main_categories 있음 + taxonomy_mappings 없음)은 fallback 처리한다."""
+    invalid_extraction = DomainNoticeAIExtraction.model_construct(
+        main_categories=[NoticeMainCategory.CAREER_EMPLOYMENT],
+        taxonomy_mappings=[],
+        target_departments=[],
+    )
+    with patch(
+        "app.services.ai_pipeline.extract_notice_structured_with_usage",
+        return_value=(
+            invalid_extraction,
+            {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+        ),
+    ):
+        envelope = extract_notice_info("<p>html</p>")
+    assert envelope.status == "fallback"
+    assert envelope.meta["fallback_reason"] == "taxonomy_validation_failed"
+
+
+def test_taxonomy_case_overseas_scholarship_multi_label_pass() -> None:
+    """해외 파견 장학생 모집: 국제/교류 + 장학/지원 조합은 유효해야 한다."""
+    extraction = DomainNoticeAIExtraction(
+        main_categories=[
+            NoticeMainCategory.INTERNATIONAL_EXCHANGE,
+            NoticeMainCategory.SCHOLARSHIP_SUPPORT,
+        ],
+        taxonomy_mappings=[
+            TaxonomyMappingItem(
+                main_category=NoticeMainCategory.INTERNATIONAL_EXCHANGE,
+                sub_categories=["교환/방문학생"],
+            ),
+            TaxonomyMappingItem(
+                main_category=NoticeMainCategory.SCHOLARSHIP_SUPPORT,
+                sub_categories=["외부장학"],
+            ),
+        ],
+        target_departments=[],
+    )
+    normalized = validate_and_normalize_taxonomy(extraction)
+    assert {c.value for c in normalized.main_categories} == {"국제/교류", "장학/지원"}
+
+
+def test_taxonomy_case_global_startup_hackathon_multi_label_pass() -> None:
+    """글로벌 창업 해커톤: 국제/교류 + 진로/취업 + 대회/공모전 조합은 유효해야 한다."""
+    extraction = DomainNoticeAIExtraction(
+        main_categories=[
+            NoticeMainCategory.INTERNATIONAL_EXCHANGE,
+            NoticeMainCategory.CAREER_EMPLOYMENT,
+            NoticeMainCategory.CONTEST_COMPETITION,
+        ],
+        taxonomy_mappings=[
+            TaxonomyMappingItem(
+                main_category=NoticeMainCategory.INTERNATIONAL_EXCHANGE,
+                sub_categories=["단기연수/캠프"],
+            ),
+            TaxonomyMappingItem(
+                main_category=NoticeMainCategory.CAREER_EMPLOYMENT,
+                sub_categories=["창업지원"],
+            ),
+            TaxonomyMappingItem(
+                main_category=NoticeMainCategory.CONTEST_COMPETITION,
+                sub_categories=["해커톤/아이디어"],
+            ),
+        ],
+        target_departments=[],
+    )
+    normalized = validate_and_normalize_taxonomy(extraction)
+    assert {c.value for c in normalized.main_categories} == {
+        "국제/교류",
+        "진로/취업",
+        "대회/공모전",
+    }
+
+
+def test_taxonomy_case_dongari_expo_as_campus_life_fails() -> None:
+    """동아리 박람회를 캠퍼스생활로 잘못 매핑(교차 소분류)하면 실패해야 한다."""
+    invalid = DomainNoticeAIExtraction.model_construct(
+        main_categories=[NoticeMainCategory.CAMPUS_LIFE],
+        taxonomy_mappings=[
+            TaxonomyMappingItem.model_construct(
+                main_category=NoticeMainCategory.CAMPUS_LIFE,
+                sub_categories=["동아리/학생회"],
+            )
+        ],
+        target_departments=[],
+    )
+    with pytest.raises(ValueError):
+        validate_and_normalize_taxonomy(invalid)
+
+
+def test_taxonomy_case_wifi_notice_campus_life_single_pass() -> None:
+    """Wi-Fi 점검 안내는 캠퍼스생활 단일 + IT/시스템안내로 통과해야 한다."""
+    extraction = DomainNoticeAIExtraction(
+        main_categories=[NoticeMainCategory.CAMPUS_LIFE],
+        taxonomy_mappings=[
+            TaxonomyMappingItem(
+                main_category=NoticeMainCategory.CAMPUS_LIFE,
+                sub_categories=["IT/시스템안내"],
+            )
+        ],
+        target_departments=[],
+    )
+    normalized = validate_and_normalize_taxonomy(extraction)
+    assert [c.value for c in normalized.main_categories] == ["캠퍼스생활"]
+    assert normalized.taxonomy_mappings[0].sub_categories == ["IT/시스템안내"]
+
+
+def test_taxonomy_case_mixed_unselected_parent_subcategory_fails() -> None:
+    """선택되지 않은 부모의 소분류가 섞이면(main set 불일치) 실패해야 한다."""
+    invalid = DomainNoticeAIExtraction.model_construct(
+        main_categories=[NoticeMainCategory.SCHOLARSHIP_SUPPORT],
+        taxonomy_mappings=[
+            TaxonomyMappingItem.model_construct(
+                main_category=NoticeMainCategory.SCHOLARSHIP_SUPPORT,
+                sub_categories=["교내/성적장학"],
+            ),
+            TaxonomyMappingItem.model_construct(
+                main_category=NoticeMainCategory.INTERNATIONAL_EXCHANGE,
+                sub_categories=["어학프로그램"],
+            ),
+        ],
+        target_departments=[],
+    )
+    with pytest.raises(ValueError, match="same set of main categories"):
+        validate_and_normalize_taxonomy(invalid)
+
+
+def test_two_stage_extraction_requires_title_and_college_name() -> None:
+    """2단계 호출은 title/college_name 필수."""
+    with pytest.raises(ValueError, match="title is required"):
+        extract_notice_structured_with_usage(
+            "<p>본문</p>",
+            image_urls=["https://example.com/poster.png"],
+            title=None,
+            college_name="공과대학",
+        )
+    with pytest.raises(ValueError, match="college_name is required"):
+        extract_notice_structured_with_usage(
+            "<p>본문</p>",
+            image_urls=["https://example.com/poster.png"],
+            title="테스트 공지",
+            college_name=None,
+        )
+
+
+def test_two_stage_extraction_requires_body_or_image() -> None:
+    """소분류 단계는 본문/이미지 둘 다 없으면 실행 불가."""
+    with pytest.raises(ValueError, match="html_content or image_urls is required"):
+        extract_notice_structured_with_usage(
+            "",
+            image_urls=[],
+            title="테스트 공지",
+            college_name="경영대학",
+        )
+
+
+def test_stage1_prompt_uses_allowed_main_categories_and_campus_life_gate() -> None:
+    """Stage 1 프롬프트는 허용 대분류 목록과 캠퍼스생활 배타 규칙을 명시해야 한다."""
+    assert "<ALLOWED_MAIN_CATEGORIES>" in MAIN_CATEGORY_SYSTEM_PROMPT
+    assert "오직 [제목]과 [college.name(발신 기관명)]" in MAIN_CATEGORY_SYSTEM_PROMPT
+    assert "캠퍼스생활 배타 게이트" in MAIN_CATEGORY_SYSTEM_PROMPT
+    assert '["캠퍼스생활"]' in MAIN_CATEGORY_SYSTEM_PROMPT
+
+
+def test_stage2_prompt_locks_preselected_main_categories() -> None:
+    """Stage 2 프롬프트는 Stage 1 대분류 고정과 taxonomy pool 검증을 명시해야 한다."""
+    assert "preselected_main_categories" in EXTRACTOR_SYSTEM_PROMPT
+    assert "main_categories는 preselected_main_categories를 그대로 사용" in EXTRACTOR_SYSTEM_PROMPT
+    assert "절대 수정, 삭제, 교체" in EXTRACTOR_SYSTEM_PROMPT
+    assert "Stage 2는 Stage 1의 main_categories를 변경하면 안 됩니다." in EXTRACTOR_SYSTEM_PROMPT
+    assert "<TAXONOMY_POOL>" in EXTRACTOR_SYSTEM_PROMPT

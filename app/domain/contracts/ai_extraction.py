@@ -21,6 +21,8 @@ _MAX_ELIGIBILITY_RULES = 20
 _MAX_TARGET_DEPARTMENTS = 50
 _MAX_TARGET_GRADES = 20
 _MAX_HASHTAGS = 10
+_MAX_MAIN_CATEGORIES = 8
+_MAX_SUBCATEGORIES_PER_MAIN = 8
 
 
 def _reject_placeholder_departments(v: list[str]) -> list[str]:
@@ -62,7 +64,7 @@ def _sub_category_max_len(v: str | None) -> str | None:
 
 
 class NoticeCategory(str, Enum):
-    """공지 대분류. AI가 본문 기준으로 선택. DB notices.category에 저장."""
+    """공지 대분류 대표 라벨. AI 결과 JSON 내부에서 사용."""
 
     SCHOLARSHIP = "scholarship"
     EMPLOYMENT = "employment"
@@ -71,6 +73,58 @@ class NoticeCategory(str, Enum):
     ADMISSION = "admission"
     INTERNATIONAL = "international"
     OTHER = "other"
+
+
+class NoticeMainCategory(str, Enum):
+    """공지 분류 대분류 (Multi-label). online_viewer 리포트 기준."""
+
+    ACADEMIC_GRADUATION = "학사/졸업"
+    SCHOLARSHIP_SUPPORT = "장학/지원"
+    CAREER_EMPLOYMENT = "진로/취업"
+    INTERNATIONAL_EXCHANGE = "국제/교류"
+    RESEARCH_LAB = "연구/실험"
+    CONTEST_COMPETITION = "대회/공모전"
+    CULTURE_EVENT = "문화/행사"
+    CAMPUS_LIFE = "캠퍼스생활"
+
+
+_MAIN_CATEGORY_ORDER: tuple[NoticeMainCategory, ...] = (
+    NoticeMainCategory.ACADEMIC_GRADUATION,
+    NoticeMainCategory.SCHOLARSHIP_SUPPORT,
+    NoticeMainCategory.CAREER_EMPLOYMENT,
+    NoticeMainCategory.INTERNATIONAL_EXCHANGE,
+    NoticeMainCategory.RESEARCH_LAB,
+    NoticeMainCategory.CONTEST_COMPETITION,
+    NoticeMainCategory.CULTURE_EVENT,
+    NoticeMainCategory.CAMPUS_LIFE,
+)
+
+_SUBCATEGORY_POOL: dict[NoticeMainCategory, frozenset[str]] = {
+    NoticeMainCategory.ACADEMIC_GRADUATION: frozenset(
+        {"수강/학점", "휴학/복학", "전공/이중전공", "졸업/수료", "학사일정"}
+    ),
+    NoticeMainCategory.SCHOLARSHIP_SUPPORT: frozenset(
+        {"교내/성적장학", "가계지원/국가장학", "근로/활동장학", "외부장학"}
+    ),
+    NoticeMainCategory.CAREER_EMPLOYMENT: frozenset(
+        {"채용/인턴", "진로/프로그램", "고시/자격증", "창업지원"}
+    ),
+    NoticeMainCategory.INTERNATIONAL_EXCHANGE: frozenset(
+        {"교환/방문학생", "단기연수/캠프", "유학생지원", "어학프로그램"}
+    ),
+    NoticeMainCategory.RESEARCH_LAB: frozenset(
+        {"학부연구생(인턴)", "대학원진학", "연구과제/참여", "실험실안전"}
+    ),
+    NoticeMainCategory.CONTEST_COMPETITION: frozenset(
+        {"교내경진대회", "외부공모전", "해커톤/아이디어"}
+    ),
+    NoticeMainCategory.CULTURE_EVENT: frozenset(
+        {"특강/세미나", "축제/공연", "동아리/학생회", "봉사활동"}
+    ),
+    NoticeMainCategory.CAMPUS_LIFE: frozenset(
+        {"시설/공간대여", "IT/시스템안내", "보건/복지", "기타안내"}
+    ),
+}
 
 
 class ScheduleKind(str, Enum):
@@ -193,6 +247,62 @@ class ScheduleItem(BaseModel):
         return self
 
 
+class TaxonomyMappingItem(BaseModel):
+    """
+    선택된 대분류 1개와 그 하위 소분류 집합.
+    소분류는 반드시 해당 대분류 허용 풀 내에서만 선택되어야 한다.
+    """
+
+    model_config = _AI_EXTRACTION_CONFIG
+
+    main_category: NoticeMainCategory = Field(
+        ...,
+        description="선택된 대분류 (Step 1 결과)",
+    )
+    sub_categories: list[str] = Field(
+        default_factory=list,
+        description="해당 대분류 하위 소분류 목록 (Step 2 결과)",
+    )
+
+    @field_validator("sub_categories", mode="before")
+    @classmethod
+    def _normalize_sub_categories(cls, v: Any) -> list[str]:
+        if v is None:
+            return []
+        if not isinstance(v, list):
+            raise ValueError("sub_categories must be a list of strings.")
+        cleaned: list[str] = []
+        seen: set[str] = set()
+        for item in v:
+            if item is None:
+                continue
+            if not isinstance(item, str):
+                raise ValueError("sub_categories entries must be strings.")
+            t = item.strip()
+            if not t:
+                continue
+            if t in seen:
+                continue
+            seen.add(t)
+            cleaned.append(t)
+        return cleaned[:_MAX_SUBCATEGORIES_PER_MAIN]
+
+    @model_validator(mode="after")
+    def _validate_sub_categories_in_pool(self) -> TaxonomyMappingItem:
+        if not self.sub_categories:
+            raise ValueError(
+                "Each taxonomy mapping must include at least one sub-category."
+            )
+        allowed = _SUBCATEGORY_POOL[self.main_category]
+        invalid = [sub for sub in self.sub_categories if sub not in allowed]
+        if invalid:
+            raise ValueError(
+                f"Invalid sub-categories for '{self.main_category.value}': {invalid}. "
+                "Sub-categories must be selected only from the parent category pool."
+            )
+        return self
+
+
 class NoticeAIExtraction(BaseModel):
     """
     4·5·6단계 공통 AI 출력 스키마.
@@ -205,6 +315,21 @@ class NoticeAIExtraction(BaseModel):
     """
 
     model_config = _AI_EXTRACTION_CONFIG
+
+    main_categories: list[NoticeMainCategory] = Field(
+        default_factory=list,
+        description=(
+            "Step 1 결과 대분류 목록 (multi-label). "
+            "'캠퍼스생활'은 fallback이므로 다른 대분류와 공존 불가."
+        ),
+    )
+    taxonomy_mappings: list[TaxonomyMappingItem] = Field(
+        default_factory=list,
+        description=(
+            "Step 2 결과. main_category별 소분류 매핑 목록. "
+            "교차 매핑(다른 대분류의 소분류 선택) 금지."
+        ),
+    )
 
     category: NoticeCategory = Field(
         default=NoticeCategory.OTHER,
@@ -338,6 +463,63 @@ class NoticeAIExtraction(BaseModel):
     @classmethod
     def _cap_target_grades(cls, v: list[TargetGrade]) -> list[TargetGrade]:
         return v[:_MAX_TARGET_GRADES] if v else []
+
+    @field_validator("main_categories", mode="before")
+    @classmethod
+    def _normalize_main_categories(cls, v: Any) -> list[NoticeMainCategory]:
+        if v is None:
+            return []
+        if not isinstance(v, list):
+            raise ValueError("main_categories must be a list.")
+        cleaned: list[NoticeMainCategory] = []
+        seen: set[NoticeMainCategory] = set()
+        for item in v:
+            enum_item = item
+            if not isinstance(item, NoticeMainCategory):
+                enum_item = NoticeMainCategory(item)
+            if enum_item in seen:
+                continue
+            seen.add(enum_item)
+            cleaned.append(enum_item)
+        return cleaned[:_MAX_MAIN_CATEGORIES]
+
+    @model_validator(mode="after")
+    def _validate_taxonomy_block(self) -> NoticeAIExtraction:
+        mapping_mains: list[NoticeMainCategory] = [
+            item.main_category for item in self.taxonomy_mappings
+        ]
+        if len(mapping_mains) != len(set(mapping_mains)):
+            raise ValueError(
+                "taxonomy_mappings must not contain duplicate main_category entries."
+            )
+
+        main_categories = self.main_categories
+        if not main_categories and mapping_mains:
+            # 모델이 매핑만 채운 경우를 허용하되, 대분류 목록은 자동 정규화한다.
+            ordered = [cat for cat in _MAIN_CATEGORY_ORDER if cat in set(mapping_mains)]
+            self.main_categories = ordered
+            main_categories = ordered
+
+        if main_categories and not self.taxonomy_mappings:
+            raise ValueError(
+                "taxonomy_mappings are required when main_categories are provided."
+            )
+
+        if main_categories:
+            if set(main_categories) != set(mapping_mains):
+                raise ValueError(
+                    "main_categories and taxonomy_mappings must reference the same "
+                    "set of main categories."
+                )
+            if (
+                NoticeMainCategory.CAMPUS_LIFE in main_categories
+                and len(main_categories) > 1
+            ):
+                raise ValueError(
+                    "'캠퍼스생활' is a fallback main category and must be assigned "
+                    "as a single category only."
+                )
+        return self
 
     @model_validator(mode="after")
     def _validate_eligibility_block(self) -> NoticeAIExtraction:

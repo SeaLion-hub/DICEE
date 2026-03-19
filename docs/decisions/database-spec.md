@@ -115,8 +115,6 @@
 | title | VARCHAR(512) | NOT NULL |
 | url | VARCHAR(2048) | NULL |
 | published_at | TIMESTAMPTZ | NULL, INDEX |
-| category | VARCHAR(64) | NULL, INDEX |
-| sub_category | VARCHAR(64) | NULL |
 | content_hash | VARCHAR(64) | NULL, INDEX |
 | eligibility | JSONB | NULL |
 | hashtags | JSONB | NULL |
@@ -134,6 +132,23 @@
 
 * **GIN Index**: `eligibility`, `hashtags` (fastupdate=on, gin_pending_list_limit=4MB)
 * **이미지 저장**: 공지 이미지는 스토리지(S3/로컬)에 파일로 업로드하고, `images` JSONB에는 URL만 저장. base64는 크롤 파이프라인에서 업로드 후 URL로 치환.
+* **taxonomy 저장 정책**: 단일 대표 컬럼(`notices.category`, `notices.sub_category`)은 사용하지 않는다. 대분류-소분류는 `notice_taxonomy_mappings`에 행 단위로 저장한다.
+
+### 6.2-A notice_taxonomy_mappings (공지 taxonomy 정규화)
+
+| 컬럼 | 타입 | 제약 |
+| --- | --- | --- |
+| id | UUID | PK, DEFAULT gen_random_uuid() |
+| notice_id | UUID | NOT NULL, FK(notices.id) ON DELETE CASCADE, INDEX |
+| main_category | VARCHAR(64) | NOT NULL |
+| sub_category | VARCHAR(64) | NOT NULL |
+| created_at | TIMESTAMPTZ | NOT NULL DEFAULT now() |
+| updated_at | TIMESTAMPTZ | NOT NULL DEFAULT now() |
+
+* **Unique Index**: `UNIQUE(notice_id, main_category, sub_category)` (중복 매핑 방지)
+* **Filter Index**:
+  * `(main_category, notice_id)`
+  * `(main_category, sub_category, notice_id)`
 
 ### 6.3 notice_contents (본문 S3 분리)
 
@@ -329,3 +344,5 @@ INNER JOIN colleges c ON n.college_id = c.id AND c.deleted_at IS NULL;
 ---
 
 *(End of Document - Ready for Production Drop)*
+
+Quality Gates (2026-03-19): `pytest tests/test_ai_pipeline_schema.py tests/test_tasks_ai_consistency.py tests/test_ai_metrics.py tests/test_ai_html_cleaning.py tests/test_ai_extraction_domain.py` → 51 passed, 1 skipped.

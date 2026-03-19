@@ -73,7 +73,8 @@ def test_process_notice_ai_task_normal_notice_calls_update_with_projected_fields
     assert "category" in ai_json
     assert call[1]["dates"] is not None
     assert call[1]["eligibility"] is not None
-    assert call[1].get("category") == "scholarship"
+    assert "taxonomy_rows" in call[1]
+    assert call[1]["taxonomy_rows"] == []
 
 
 def test_process_notice_ai_task_fallback_notice_updates_with_fallback_envelope_meta() -> None:

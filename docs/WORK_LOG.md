@@ -12,6 +12,7 @@
 
 - [작성 규칙](#작성-규칙)
 - [작성 형식](#작성-형식)
+- [2026-03-19](#2026-03-19)
 - [2026-03-07](#2026-03-07)
 - [2026-03-06](#2026-03-06)
 - [2026-03-05](#2026-03-05)
@@ -40,6 +41,16 @@
 ## 작성 형식
 
 - `- [단계 또는 영역] 무엇을 했는지 (어떤 파일/기능). 왜 또는 결과 한 줄.`
+
+---
+## 2026-03-19
+
+- [4단계·taxonomy 프롬프트] `app/services/ai/extractor.py`의 Stage 1/Stage 2 시스템 프롬프트를 Deep Research 최종안 기준으로 강화했다. Stage 1은 `<ALLOWED_MAIN_CATEGORIES>`·캠퍼스생활 배타 게이트·학생 수요자 중심 규칙을 명시했고, Stage 2는 `preselected_main_categories` 고정 재사용·`<TAXONOMY_POOL>` 기반 부모 종속 소분류 매핑·교차 매핑 금지를 코드와 테스트에 반영했다.
+- [4단계·taxonomy validator] `app/services/ai_pipeline.py`에 LLM 출력 직후 `validate_and_normalize_taxonomy()` 후처리 계층을 추가했다. 정책은 대분류 0개는 미분류 허용, 그 외에는 캠퍼스생활 단독 규칙/부모-자식 매핑 일치/중복·공백 소분류 정리 및 재검증을 강제하고 위반 시 `taxonomy_validation_failed` fallback으로 처리한다.
+- [4단계·DB 정규화] `notice_taxonomy_mappings` ORM/마이그레이션(`010_notice_taxonomy`)을 추가하고 `notices.category/sub_category` 컬럼을 제거했다. AI 투영은 `project_extraction_to_notice_fields()`에서 `taxonomy_rows`(main_category, sub_category)로 평탄화해 `update_ai_result_sync()`가 행 단위로 교체 저장하도록 변경했으며 관련 테스트를 갱신했다.
+- [Quality Gates] docs/decisions 갱신 동기화: `docs/decisions/ai-extraction-schema.md`, `docs/decisions/database-spec.md`에 taxonomy 정규화 저장 정책 반영. 검증: `pytest` AI 관련 지정 스위트 통과.
+- [4단계·taxonomy 테스트 세트] 작업흐름 5번 기준 케이스 5종(해외 파견 장학생/글로벌 창업 해커톤 다중 라벨 통과, 동아리 박람회 캠퍼스생활 오분류 실패, Wi-Fi 점검 캠퍼스생활 단일 통과, 선택되지 않은 부모 소분류 혼입 실패)을 `tests/test_ai_pipeline_schema.py`의 validator 테스트로 추가했다.
+- [4단계·문서 동기화] `docs/ROADMAP_PHASES.md`의 4단계 항목을 2-step taxonomy 프롬프트/validator/정규화 저장(`notice_taxonomy_mappings`)/테스트 상태로 갱신했다. `docs/decisions/ai-extraction-schema.md`, `docs/decisions/database-spec.md`에는 Quality Gates 1줄(지정 pytest 51 passed, 1 skipped)을 추가해 정책 연속성을 맞췄다.
 
 ---
 ## 2026-03-10
@@ -304,3 +315,11 @@
 - [단계] 무엇을 했는지 (어떤 파일/기능). 왜 또는 결과 한 줄.
 ```
 - [PLAN_OWNER_REMEDIATION 실행(P0+P1)] `app/core/config` 패키지 분해(호환 import 유지), `JWT_SIGNING_MODE(auto|hs256|rs256)` 도입 및 auto RS 우선 규칙/encode-decode 공통 해석 강제, production local spool fail-fast(`CONTENT_SPOOL_ALLOW_EPHEMERAL`) 추가, internal API client IP 미판별 503 fail-closed 적용. `storage.py`에 local/s3 공통 spool 계약(list/read/overwrite/delete/move_to_dlq) 및 retry/last_error/dead-letter 메타데이터 추가, `tasks.py` drain 경로를 backend 공통 처리로 리팩터링. `crawl_service.py`의 Redis 동기 클라이언트 경로를 `app.core.redis.get_shared_sync_redis_client` 공유 경로로 통합. 테스트/검증: `pytest -q`(85 passed, 3 skipped), `ruff check app tests`, `mypy app` 통과.
+
+## 2026-03-18
+
+- [4단계·taxonomy] `app/domain/contracts/ai_extraction.py`에 multi-label 분류 계약 추가(`main_categories`, `taxonomy_mappings`) 및 대분류 8종·하위 소분류 풀 상수 도입. `캠퍼스생활` 단일 할당(fallback)·부모 종속 소분류·교차 매핑 금지 validator를 스키마 레벨에서 강제.
+- [4단계·taxonomy] `app/services/ai/extractor.py`의 시스템 프롬프트를 2-step 분류 규칙(대분류 다중 할당, 소분류 종속, 캠퍼스생활 fallback)으로 개편. 입력 컨텍스트에 `title`, `college.name` 메타정보를 추가하여 분류 정확도 향상.
+- [4단계·taxonomy] Deep Research 결과를 반영해 taxonomy 프롬프트를 방어형 구조로 강화(수요자 중심 원칙, Step 0 캠퍼스생활 배타 게이트, 대분류 최대 3개 하드 리밋, 의사코드형 분기 규칙).
+- [4단계·taxonomy] 2단계 호출로 리팩터링: 1차 대분류 전용 호출은 `title+college.name`만 사용, 2차 소분류/전체 추출 호출은 `title+college.name+본문+이미지+1차 대분류`를 입력으로 사용하도록 `extractor`·`ai_pipeline`·`tasks` 연동 갱신.
+- [4단계·taxonomy] 입력 제약 강화: `title`·`college.name`을 1/2단계 공통 필수값으로 강제하고, 2단계(소분류/전체 추출)는 본문과 이미지가 둘 다 비어 있으면 즉시 실패하도록 검증 로직 및 테스트를 추가.

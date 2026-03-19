@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from app.models.college import College
     from app.models.notice_content import NoticeContent
+    from app.models.notice_taxonomy_mapping import NoticeTaxonomyMapping
     from app.models.user_calendar_event import UserCalendarEvent
 
 from sqlalchemy import DateTime, ForeignKey, Index, String, UniqueConstraint, text
@@ -40,9 +41,6 @@ class Notice(Base):
     title: Mapped[str] = mapped_column(String(512), nullable=False)
     url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
-
-    category: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
-    sub_category: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     # 1. 원본 데이터 보존 (본문은 notice_contents.content_url로 S3 등에 분리 저장)
     images: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB, nullable=True)
@@ -76,5 +74,10 @@ class Notice(Base):
     college: Mapped["College"] = relationship("College", back_populates="notices")
     notice_content: Mapped["NoticeContent | None"] = relationship(
         "NoticeContent", back_populates="notice", uselist=False, cascade="all, delete-orphan"
+    )
+    taxonomy_mappings: Mapped[list["NoticeTaxonomyMapping"]] = relationship(
+        "NoticeTaxonomyMapping",
+        back_populates="notice",
+        cascade="all, delete-orphan",
     )
     user_calendar_events: Mapped[list["UserCalendarEvent"]] = relationship("UserCalendarEvent", back_populates="notice")

@@ -282,7 +282,15 @@ def process_notice_ai_task(self, notice_id: str):
         else:
             html_content = _get_notice_html_for_ai(notice)
             image_urls = _get_notice_image_urls_for_ai(notice)
-            envelope = extract_notice_info(html_content, image_urls=image_urls)
+            college_name = getattr(getattr(notice, "college", None), "name", None)
+            if not college_name or not str(college_name).strip():
+                raise ValueError("college.name is required for AI taxonomy extraction.")
+            envelope = extract_notice_info(
+                html_content,
+                image_urls=image_urls,
+                title=notice.title,
+                college_name=str(college_name),
+            )
             envelope_meta = {**envelope.meta, "usage": envelope.usage}
             projected = project_extraction_to_notice_fields(
                 envelope.result,
@@ -295,8 +303,7 @@ def process_notice_ai_task(self, notice_id: str):
                 dates=projected["dates"],
                 eligibility=projected["eligibility"],
                 hashtags=projected["hashtags"],
-                category=projected.get("category"),
-                sub_category=projected.get("sub_category"),
+                taxonomy_rows=projected.get("taxonomy_rows"),
             )
 
 
