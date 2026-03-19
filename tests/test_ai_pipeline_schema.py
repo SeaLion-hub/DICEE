@@ -105,7 +105,7 @@ def test_extract_notice_info_passes_empty_image_urls():
         result = extract_notice_info("<p>html</p>")
     assert result.result is stub
     mock_extract.assert_called_once_with(
-        "html", image_urls=None, title=None, college_name=None
+        "<p>html</p>", image_urls=None, title=None, college_name=None
     )
 
 
@@ -160,8 +160,8 @@ def test_extract_notice_info_validation_error_produces_fallback_envelope() -> No
     assert envelope.status == "fallback"
     assert envelope.meta["fallback_reason"] == "validation_error"
     assert envelope.meta["html_raw_len"] == len("<p>html</p>")
-    # _clean_notice_html는 태그를 제거해 "html"을 반환하므로 길이는 4이다.
-    assert envelope.meta["html_clean_len"] == 4
+    # _clean_notice_html는 slim_html을 반환하므로 "<p>html</p>" 길이(11)를 유지한다.
+    assert envelope.meta["html_clean_len"] == len("<p>html</p>")
     assert "elapsed_ms" in envelope.meta
     assert "image_count" in envelope.meta
     assert envelope.meta["provider"] == f"google/{settings.gemini_model}"

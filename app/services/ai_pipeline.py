@@ -13,7 +13,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, Comment
 from pydantic import ValidationError
 
 from app.core.config import settings
@@ -34,6 +34,56 @@ from app.domain.contracts.ai_extraction import (
 from app.services.ai.extractor import extract_notice_structured_with_usage
 
 logger = logging.getLogger(__name__)
+
+_AI_INPUT_HTML_CHAR_LIMIT = 12_000
+_ALLOWED_SLIM_HTML_TAGS = {
+    "article",
+    "section",
+    "main",
+    "div",
+    "p",
+    "br",
+    "ul",
+    "ol",
+    "li",
+    "table",
+    "thead",
+    "tbody",
+    "tfoot",
+    "tr",
+    "th",
+    "td",
+    "strong",
+    "b",
+    "em",
+    "i",
+    "u",
+    "span",
+    "a",
+    "img",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "blockquote",
+    "pre",
+    "code",
+}
+_DROP_HTML_TAGS = {
+    "script",
+    "style",
+    "nav",
+    "footer",
+    "noscript",
+}
+_ALLOWED_HTML_ATTRS: dict[str, set[str]] = {
+    "a": {"href", "title"},
+    "img": {"src", "alt", "title"},
+    "th": {"colspan", "rowspan", "scope"},
+    "td": {"colspan", "rowspan"},
+}
 
 
 @dataclass
@@ -64,28 +114,73 @@ class ExtractionEnvelope:
 
 def _clean_notice_html(html_content: str) -> str:
     """
-    공지 HTML에서 본문 텍스트만 추출하고 길이를 제한해 토큰 사용량을 줄인다.
+    공지 HTML을 slim_html(구조 보존 + 노이즈 제거)로 정제한다.
 
     - script/style/nav/footer/noscript 제거
-    - img alt 텍스트는 본문에 포함해 포스터·첨부 이미지 정보가 손실되지 않도록 함
-    - 공백/빈 줄 정리, 최종 텍스트를 12k자 수준으로 제한
+    - 허용 태그 집합만 남기고, 나머지 태그는 unwrap
+    - 태그별 허용 속성만 유지하여 노이즈(class/style/on*) 제거
+    - img alt 텍스트를 본문에 주입해 이미지 기반 정보 손실 방지
+    - 최종 slim_html 문자열 길이를 상한으로 제한
     """
-    if not html_content:
+    if not html_content or not html_content.strip():
         return ""
 
     soup = BeautifulSoup(html_content, "html.parser")
-    for tag in soup(["script", "style", "nav", "footer", "noscript"]):
+    for tag in soup(_DROP_HTML_TAGS):
         tag.decompose()
+
+    for node in soup.find_all(string=lambda t: isinstance(t, Comment)):
+        node.extract()
 
     for img in soup.find_all("img"):
         alt = (img.get("alt") or "").strip()
         if alt:
             img.insert_before(f"[이미지: {alt}]")
 
+    root = soup.body or soup
+    for tag in list(root.find_all(True)):
+        if tag.name not in _ALLOWED_SLIM_HTML_TAGS:
+            tag.unwrap()
+            continue
+
+        allowed_attrs = _ALLOWED_HTML_ATTRS.get(tag.name, set())
+        for attr in list(tag.attrs):
+            if attr not in allowed_attrs:
+                del tag.attrs[attr]
+
+        if tag.name == "a":
+            href = (tag.get("href") or "").strip()
+            if href:
+                tag["href"] = href
+            elif "href" in tag.attrs:
+                del tag.attrs["href"]
+        elif tag.name == "img":
+            src = (tag.get("src") or "").strip()
+            alt = (tag.get("alt") or "").strip()
+            if src:
+                tag["src"] = src
+            elif "src" in tag.attrs:
+                del tag.attrs["src"]
+            if alt:
+                tag["alt"] = alt
+            elif "alt" in tag.attrs:
+                del tag.attrs["alt"]
+
+    if getattr(root, "name", None) == "body":
+        slim_html = root.decode_contents(formatter="html").strip()
+    else:
+        slim_html = str(root).strip()
+    return slim_html[:_AI_INPUT_HTML_CHAR_LIMIT]
+
+
+def _normalize_html_for_substring_validation(source_html: str) -> str:
+    """substring 검증용: HTML을 안정적인 텍스트 표현으로 정규화."""
+    if not source_html:
+        return ""
+    soup = BeautifulSoup(source_html, "html.parser")
     body_text = soup.get_text("\n")
     lines = [line.strip() for line in body_text.splitlines() if line.strip()]
-    text = "\n".join(lines)
-    return text[:12_000]
+    return "\n".join(lines)
 
 
 def validate_extraction_raw_substrings(
@@ -187,7 +282,7 @@ def extract_notice_info(
     """
     HTML 공지 본문(및 선택적 이미지 URL)에서 NoticeAIExtraction 구조화 추출.
 
-    - HTML을 전처리해 불필요한 태그·푸터 등을 제거하고 길이를 제한한다.
+    - HTML을 slim_html로 전처리해 구조를 보존하면서 노이즈를 줄인다.
     - Instructor 레이어(_get_instructor_client)에서 max_retries로 self-correction 수행.
     - 여기서는 별도 재시도를 수행하지 않고, ValidationError/InstructorRetryException을
       fallback Envelope로 변환한다.
@@ -195,10 +290,12 @@ def extract_notice_info(
     started_at = time.monotonic()
     raw_html = html_content or ""
     html_raw_len = len(raw_html)
-    cleaned_html = _clean_notice_html(raw_html)
-    html_clean_len = len(cleaned_html)
-    # 전처리 결과가 비어 있으면 raw_html로 폴백하고, 그렇지 않으면 항상 전처리 텍스트를 사용한다.
-    prompt_html = cleaned_html or raw_html
+    slim_html = _clean_notice_html(raw_html)
+    # html_clean_len 키는 하위 호환을 위해 유지하고, 값은 slim_html 길이 기준으로 해석한다.
+    html_clean_len = len(slim_html)
+    # 전처리 결과가 비어 있으면 raw_html로 폴백하고, 그렇지 않으면 slim_html을 사용한다.
+    prompt_html = slim_html or raw_html
+    validation_source = _normalize_html_for_substring_validation(prompt_html)
     image_count = len(image_urls or [])
     provider = f"google/{settings.gemini_model}"
     model = settings.gemini_model
@@ -235,7 +332,7 @@ def extract_notice_info(
             image_urls or []
         ):
             try:
-                validate_extraction_raw_substrings(extraction, prompt_html)
+                validate_extraction_raw_substrings(extraction, validation_source)
             except ValueError:
                 elapsed_ms = int((time.monotonic() - started_at) * 1000)
                 fallback_result = NoticeAIExtraction(target_departments=[])

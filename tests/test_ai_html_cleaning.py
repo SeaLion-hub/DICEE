@@ -1,4 +1,4 @@
-"""HTML 전처리(_clean_notice_html) 품질·회귀 테스트."""
+"""HTML 전처리(_clean_notice_html, slim_html) 품질·회귀 테스트."""
 
 import pytest
 
@@ -62,7 +62,7 @@ def test_clean_preserves_short_notice_key_phrases() -> None:
 
 
 def test_clean_preserves_long_notice_key_phrases() -> None:
-    """긴 공지에서 일정·자격·첨부 안내가 유지된다."""
+    """긴 공지에서 일정·자격·첨부 안내 문구가 유지된다."""
     cleaned = _clean_notice_html(LONG_NOTICE_HTML)
     assert "4학년" in cleaned or "대학원생" in cleaned
     assert "학점 3.0" in cleaned or "지원 자격" in cleaned
@@ -75,6 +75,15 @@ def test_clean_includes_img_alt() -> None:
     """img alt 텍스트가 본문에 포함되어 이미지 기반 정보가 손실되지 않는다."""
     cleaned = _clean_notice_html(LONG_NOTICE_HTML)
     assert "[이미지:" in cleaned and "채용 포스터" in cleaned
+
+
+def test_clean_preserves_table_structure_in_slim_html() -> None:
+    """slim_html은 표 구조(table/tr/th/td)를 유지한다."""
+    cleaned = _clean_notice_html(LONG_NOTICE_HTML)
+    assert "<table" in cleaned
+    assert "<tr" in cleaned
+    assert "<th" in cleaned
+    assert "<td" in cleaned
 
 
 def test_clean_strips_script_nav_footer() -> None:

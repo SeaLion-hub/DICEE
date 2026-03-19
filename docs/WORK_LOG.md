@@ -45,6 +45,8 @@
 ---
 ## 2026-03-19
 
+- [4단계·AI 입력 slim_html 전환] `app/services/ai_pipeline.py`의 `_clean_notice_html`을 구조 보존 slim_html 전처리로 변경하고(`table/tr/th/td` 유지, 노이즈 태그 제거, 허용 속성 화이트리스트), `html_clean_len` 키는 유지한 채 의미를 slim_html 길이 기준으로 전환했다. raw substring 검증은 HTML 태그 영향으로 거짓 실패가 나지 않도록 비교용 텍스트 정규화 경로를 분리했다. 테스트/문서 동기화: `tests/test_ai_html_cleaning.py`, `tests/test_ai_pipeline_schema.py`, `docs/decisions/ai-extraction-schema.md` 갱신, `pytest tests/test_ai_html_cleaning.py tests/test_ai_pipeline_schema.py tests/test_tasks_ai_consistency.py` 통과(37 passed, 1 skipped).
+- [4단계·Stage2 프롬프트 최소 보강] `app/services/ai/extractor.py`의 `EXTRACTOR_SYSTEM_PROMPT` 상단에 slim_html 입력·표/리스트 구조 해석·태그 복사 금지 3문장만 추가해 taxonomy/날짜/자격 본문은 유지했다. 검증: `pytest tests/test_ai_pipeline_schema.py` 통과(26 passed, 1 skipped).
 - [4단계·taxonomy 프롬프트] `app/services/ai/extractor.py`의 Stage 1/Stage 2 시스템 프롬프트를 Deep Research 최종안 기준으로 강화했다. Stage 1은 `<ALLOWED_MAIN_CATEGORIES>`·캠퍼스생활 배타 게이트·학생 수요자 중심 규칙을 명시했고, Stage 2는 `preselected_main_categories` 고정 재사용·`<TAXONOMY_POOL>` 기반 부모 종속 소분류 매핑·교차 매핑 금지를 코드와 테스트에 반영했다.
 - [4단계·taxonomy validator] `app/services/ai_pipeline.py`에 LLM 출력 직후 `validate_and_normalize_taxonomy()` 후처리 계층을 추가했다. 정책은 대분류 0개는 미분류 허용, 그 외에는 캠퍼스생활 단독 규칙/부모-자식 매핑 일치/중복·공백 소분류 정리 및 재검증을 강제하고 위반 시 `taxonomy_validation_failed` fallback으로 처리한다.
 - [4단계·DB 정규화] `notice_taxonomy_mappings` ORM/마이그레이션(`010_notice_taxonomy`)을 추가하고 `notices.category/sub_category` 컬럼을 제거했다. AI 투영은 `project_extraction_to_notice_fields()`에서 `taxonomy_rows`(main_category, sub_category)로 평탄화해 `update_ai_result_sync()`가 행 단위로 교체 저장하도록 변경했으며 관련 테스트를 갱신했다.

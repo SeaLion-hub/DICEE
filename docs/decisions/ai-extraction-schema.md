@@ -102,7 +102,7 @@ LLM이 JSON을 **위에서부터 순서대로** 생성한다는 점을 이용해
   - `model`: Gemini 모델 이름(예: `gemini-1.5-flash`).
   - `fallback_reason`: `None` 또는 `"validation_error"`, `"validation_retry_exhausted"`, `"provider_error"` 등 고정 문자열.
   - `html_raw_len`: 전처리 전 HTML 길이(문자 수).
-  - `html_clean_len`: 전처리 후 프롬프트로 사용된 텍스트 길이(문자 수).
+  - `html_clean_len`: 전처리 후 프롬프트로 사용된 slim_html 길이(문자 수). (키 이름은 하위 호환을 위해 유지)
   - `image_count`: 멀티모달 입력에 사용된 이미지 개수.
   - `elapsed_ms`: `extract_notice_info` 기준 end-to-end 처리 시간(ms).
   - `usage`: 토큰 사용량 딕셔너리  
@@ -141,3 +141,4 @@ LLM이 JSON을 **위에서부터 순서대로** 생성한다는 점을 이용해
 ---
 
 Quality Gates (2026-03-19): `pytest tests/test_ai_pipeline_schema.py tests/test_tasks_ai_consistency.py tests/test_ai_metrics.py tests/test_ai_html_cleaning.py tests/test_ai_extraction_domain.py` → 51 passed, 1 skipped.
+Quality Gates (2026-03-19, slim_html): `pytest tests/test_ai_html_cleaning.py tests/test_ai_pipeline_schema.py tests/test_tasks_ai_consistency.py` → 37 passed, 1 skipped.
