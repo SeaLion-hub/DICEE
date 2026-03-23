@@ -6,7 +6,6 @@ from unittest.mock import MagicMock, patch
 import pytest
 from requests.exceptions import RequestException
 
-from app.core.config import settings
 from app.domain.contracts.ai_extraction import NoticeAIExtraction, NoticeCategory
 from app.services.tasks import process_notice_ai_task
 
@@ -20,7 +19,7 @@ def test_process_notice_ai_task_manual_edited_calls_update_with_existing_json_on
     mock_notice.ai_extracted_json = existing_json
 
     with (
-        patch.object(settings, "ai_pipeline_enabled", True),
+        patch("app.core.config.settings.ai_pipeline_enabled", True),
         patch("app.services.tasks.get_sync_session") as mock_session_ctx,
         patch("app.services.tasks.get_notice_for_ai_sync", return_value=mock_notice) as mock_get,
         patch("app.services.tasks.update_ai_result_sync") as mock_update,
@@ -55,7 +54,7 @@ def test_process_notice_ai_task_normal_notice_calls_update_with_projected_fields
     envelope.usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
 
     with (
-        patch.object(settings, "ai_pipeline_enabled", True),
+        patch("app.core.config.settings.ai_pipeline_enabled", True),
         patch("app.services.tasks.get_sync_session") as mock_session_ctx,
         patch("app.services.tasks.get_notice_for_ai_sync", return_value=mock_notice),
         patch("app.services.tasks.update_ai_result_sync") as mock_update,
@@ -99,7 +98,7 @@ def test_process_notice_ai_task_fallback_notice_updates_with_fallback_envelope_m
     envelope.usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
 
     with (
-        patch.object(settings, "ai_pipeline_enabled", True),
+        patch("app.core.config.settings.ai_pipeline_enabled", True),
         patch("app.services.tasks.get_sync_session") as mock_session_ctx,
         patch("app.services.tasks.get_notice_for_ai_sync", return_value=mock_notice),
         patch("app.services.tasks.update_ai_result_sync") as mock_update,
@@ -124,7 +123,7 @@ def test_process_notice_ai_task_provider_error_does_not_call_update_and_raises()
     mock_notice.notice_content = None
 
     with (
-        patch.object(settings, "ai_pipeline_enabled", True),
+        patch("app.core.config.settings.ai_pipeline_enabled", True),
         patch("app.services.tasks.get_sync_session") as mock_session_ctx,
         patch("app.services.tasks.get_notice_for_ai_sync", return_value=mock_notice),
         patch("app.services.tasks.update_ai_result_sync") as mock_update,
@@ -145,3 +144,45 @@ def test_process_notice_ai_task_provider_error_does_not_call_update_and_raises()
             process_notice_ai_task.apply(args=(notice_id,), throw=True)
 
     mock_update.assert_not_called()
+
+
+def test_process_notice_ai_task_invalid_notice_id_returns_without_db() -> None:
+    """UUID가 아닌 notice_id는 경고 후 종료(세션 미사용)."""
+    with (
+        patch("app.core.config.settings.ai_pipeline_enabled", True),
+        patch("app.services.tasks.get_sync_session") as mock_session_ctx,
+        patch("app.services.tasks.get_notice_for_ai_sync") as mock_get,
+    ):
+        process_notice_ai_task.apply(args=("not-a-uuid",), throw=True)
+    mock_session_ctx.assert_not_called()
+    mock_get.assert_not_called()
+
+
+def test_process_notice_ai_task_missing_college_name_stores_fallback() -> None:
+    """college.name 비어 있으면 LLM 호출 없이 폴백 투영으로 done 처리."""
+    notice_id = str(uuid.uuid4())
+    mock_notice = MagicMock()
+    mock_notice.is_manual_edited = False
+    mock_notice.title = "공지"
+    mock_notice.notice_content = None
+    mock_college = MagicMock()
+    mock_college.name = ""
+    mock_notice.college = mock_college
+
+    with (
+        patch("app.core.config.settings.ai_pipeline_enabled", True),
+        patch("app.services.tasks.get_sync_session") as mock_session_ctx,
+        patch("app.services.tasks.get_notice_for_ai_sync", return_value=mock_notice),
+        patch("app.services.tasks.update_ai_result_sync") as mock_update,
+        patch("app.services.tasks.extract_notice_info") as mock_extract,
+        patch("app.services.tasks._get_notice_html_for_ai", return_value="<p>x</p>"),
+        patch("app.services.tasks._get_notice_image_urls_for_ai", return_value=[]),
+    ):
+        session = MagicMock()
+        mock_session_ctx.return_value.__enter__.return_value = session
+        process_notice_ai_task.apply(args=(notice_id,), throw=True)
+
+    mock_extract.assert_not_called()
+    mock_update.assert_called_once()
+    ai_json = mock_update.call_args[0][2]
+    assert ai_json.get("metadata", {}).get("_envelope_meta", {}).get("fallback_reason") == "missing_college_name"

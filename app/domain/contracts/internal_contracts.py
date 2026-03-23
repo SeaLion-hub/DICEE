@@ -9,8 +9,10 @@ class TriggerCrawlResultKind(str, Enum):
     """트리거 결과 종류. Router가 이 값만 보고 200/202/503을 결정."""
 
     cached = "cached"  # 202, Idempotency-Key 캐시 hit
-    success = "success"  # 200, 전부 enqueue 성공
-    partial_failure = "partial_failure"  # 503, 일부 실패/스킵
+    # 200: 브로커에 college별 크롤 태스크 enqueue 시도 결과. 일부 college는 락 미획득으로 skipped일 수 있음(성공 종류 유지).
+    success = "success"
+    # 503: 최소 한 college에 대해 브로커 enqueue 자체가 실패(failed). 스킵만 있는 경우는 success.
+    partial_failure = "partial_failure"
     infra_unavailable = "infra_unavailable"  # 503, Redis 락/멱등 등 인프라 장애
 
 

@@ -16,6 +16,7 @@ from app.core.celery_app import app
 from app.core.config import settings
 from app.core.database_sync import get_sync_session
 from app.core.metrics import (
+    AI_ENQUEUE_FAILED_TOTAL,
     CRAWL_DURATION_SECONDS,
     CRAWL_FAILURE_TOTAL,
     CRAWL_SUCCESS_TOTAL,
@@ -59,6 +60,12 @@ logger = logging.getLogger(__name__)
 
 TRIGGER_LOCK_HEARTBEAT_INTERVAL_SECONDS = 60
 NOTICE_HTML_FETCH_TIMEOUT = 30
+
+# crawl_college_task → process_notice_ai_task.delay() 브로커 일시 장애 시 짧은 백오프 재시도
+_AI_ENQUEUE_MAX_ATTEMPTS = 4
+_AI_ENQUEUE_BASE_DELAY_SEC = 0.25
+_AI_ENQUEUE_MAX_DELAY_SEC = 4.0
+
 
 
 def _get_notice_html_for_ai(notice) -> str:
@@ -117,6 +124,25 @@ def _heartbeat_loop(
     while not stop_event.wait(TRIGGER_LOCK_HEARTBEAT_INTERVAL_SECONDS):
         if renew_trigger_lock_sync(college_code, lock_token):
             logger.debug("Trigger lock heartbeat renewed: college=%s", college_code)
+
+
+def _delay_process_notice_ai_with_backoff(notice_id: str) -> None:
+    """process_notice_ai_task.delay() 호출. 일시 실패 시 지수 백오프로 재시도."""
+    last_exc: Exception | None = None
+    delay_sec = _AI_ENQUEUE_BASE_DELAY_SEC
+    for attempt in range(_AI_ENQUEUE_MAX_ATTEMPTS):
+        try:
+            process_notice_ai_task.delay(notice_id)
+            return
+        except Exception as e:
+            last_exc = e
+            if attempt == _AI_ENQUEUE_MAX_ATTEMPTS - 1:
+                break
+            time.sleep(min(delay_sec, _AI_ENQUEUE_MAX_DELAY_SEC))
+            delay_sec = min(delay_sec * 2.0, _AI_ENQUEUE_MAX_DELAY_SEC)
+    if last_exc is not None:
+        raise last_exc
+    raise RuntimeError("AI enqueue retry exhausted without exception")
 
 
 # Retryable: timeout, 5xx, 408, 409, 425, 429, 네트워크 일시 오류. Fatal(그 외 4xx 등)은 autoretry_for에 넣지 않음.
@@ -178,10 +204,11 @@ def crawl_college_task(
             nonlocal enqueued_ai, failed_enqueues
             for nid in ids:
                 try:
-                    process_notice_ai_task.delay(str(nid))
+                    _delay_process_notice_ai_with_backoff(str(nid))
                     enqueued_ai += 1
                 except Exception as e:
                     failed_enqueues += 1
+                    increment(AI_ENQUEUE_FAILED_TOTAL, 1, labels={"college_code": college_code})
                     logger.warning(
                         "Failed to enqueue AI task for notice_id=%s (task_id=%s college=%s): %s",
                         nid,
@@ -200,11 +227,23 @@ def crawl_college_task(
                 failure_publisher=lambda ev: handle_crawl_failure_composite(session, ev),
             )
         increment(CRAWL_SUCCESS_TOTAL, 1, labels=labels)
-        msg = (
-            f"Crawling {college_code} completed. Upserted {count} notices, "
-            f"enqueued AI for {enqueued_ai} (failed_enqueues={failed_enqueues})."
+        logger.info(
+            "crawl_college_completed",
+            extra={
+                "task_id": task_id,
+                "college_code": college_code,
+                "upserted": count,
+                "enqueued_ai": enqueued_ai,
+                "failed_enqueues": failed_enqueues,
+            },
         )
-        logger.info(msg)
+        logger.info(
+            "Crawling %s completed. Upserted %s notices, enqueued AI for %s (failed_enqueues=%s).",
+            college_code,
+            count,
+            enqueued_ai,
+            failed_enqueues,
+        )
         return {
             "upserted": count,
             "enqueued_ai": enqueued_ai,
@@ -261,7 +300,15 @@ def process_notice_ai_task(self, notice_id: str):
             notice_id,
         )
         return
-    notice_uuid = uuid_mod.UUID(notice_id)
+    try:
+        notice_uuid = uuid_mod.UUID(notice_id)
+    except ValueError:
+        logger.warning(
+            "process_notice_ai_task: invalid notice_id (not a UUID), ignoring task_id=%s raw=%r",
+            getattr(self.request, "id", None) or "",
+            notice_id,
+        )
+        return
     task_id = getattr(self.request, "id", None) or ""
     _set_task_context(str(task_id) if task_id else None)
     with get_sync_session() as session:
@@ -284,7 +331,30 @@ def process_notice_ai_task(self, notice_id: str):
             image_urls = _get_notice_image_urls_for_ai(notice)
             college_name = getattr(getattr(notice, "college", None), "name", None)
             if not college_name or not str(college_name).strip():
-                raise ValueError("college.name is required for AI taxonomy extraction.")
+                logger.warning(
+                    "process_notice_ai_task: missing college.name; storing fallback extraction notice_id=%s",
+                    notice_id,
+                )
+                fallback = NoticeAIExtraction(target_departments=[])
+                envelope_meta = {
+                    "provider": "none",
+                    "model": "none",
+                    "fallback_reason": "missing_college_name",
+                }
+                projected = project_extraction_to_notice_fields(
+                    fallback,
+                    envelope_meta=envelope_meta,
+                )
+                update_ai_result_sync(
+                    session,
+                    notice_uuid,
+                    projected["ai_extracted_json"],
+                    dates=projected["dates"],
+                    eligibility=projected["eligibility"],
+                    hashtags=projected["hashtags"],
+                    taxonomy_rows=projected.get("taxonomy_rows"),
+                )
+                return
             envelope = extract_notice_info(
                 html_content,
                 image_urls=image_urls,

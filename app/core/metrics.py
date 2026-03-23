@@ -69,6 +69,9 @@ AI_EXTRACTION_VALIDATION_ERROR_TOTAL = "ai_extraction_validation_error_total"
 AI_EXTRACTION_PROVIDER_ERROR_TOTAL = "ai_extraction_provider_error_total"
 AI_EXTRACTION_TOKENS_TOTAL = "ai_extraction_tokens_total"
 
+# 크롤 완료 후 process_notice_ai_task.delay() 브로커 적재 실패 (라벨: college_code)
+AI_ENQUEUE_FAILED_TOTAL = "ai_enqueue_failed_total"
+
 ALLOWED_REQUEST_LABELS = frozenset({"endpoint_template", "status_class", "method"})
 
 

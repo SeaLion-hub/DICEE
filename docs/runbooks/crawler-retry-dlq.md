@@ -15,6 +15,16 @@
 - **Data Platform**: 큐·재시도 정책·배치 운영
 - **Backend**: 크롤러·셀렉터·HTTP 정책 수정
 
+## AI 태스크 큐 적재 실패 (크롤은 성공·AI만 미적재)
+
+크롤 `crawl_college_task`는 공지 upsert까지 완료한 뒤 `process_notice_ai_task.delay()`로 AI 큐에 넣습니다. **브로커 일시 장애** 등으로 `delay()`가 모두 실패하면 크롤 태스크는 여전히 성공으로 끝나고, 로그에 `failed_enqueues`·메트릭 `ai_enqueue_failed_total`이 증가합니다.
+
+1. 로그에서 `crawl_college_completed`의 `failed_enqueues` 또는 `Failed to enqueue AI task` 경고 확인. `/internal/metrics`(또는 메트릭 엔드포인트)에서 `ai_enqueue_failed_total` 급증 여부 확인.
+2. 브로커(Redis)·Celery worker·`ai` 큐 소비 상태 확인. 일시 장애 복구 후 **해당 college 재크롤**(`trigger-crawl`)로 `content_hash`가 바뀐 공지에 대해 AI 태스크가 다시 enqueue되는지 확인(정책은 파이프라인·upsert 로직에 따름).
+3. 반복 시: 워커 `ai` 큐 라우팅·rate_limit(10/m)·브로커 가시성 타임아웃을 점검.
+
+---
+
 ## 기본 절차
 
 1. DLQ 큐 깊이·유입률 확인. Sentry/로그에서 실패 원인(429, 5xx, timeout, Fatal 4xx) 분류.

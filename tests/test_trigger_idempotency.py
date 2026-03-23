@@ -278,3 +278,58 @@ def test_trigger_crawl_unknown_college_then_same_idempotency_key_succeeds(client
         assert data.get("detail") != "in_progress"
     finally:
         app.dependency_overrides.pop(get_redis_trigger_lock, None)
+
+
+async def test_internal_crawl_idempotency_caches_when_skipped_only(monkeypatch):
+    """락 미획득으로 skipped만 있고 failed 없으면 멱등 결과를 Redis에 저장한다."""
+    from unittest.mock import AsyncMock
+
+    from app.core.crawler_config import COLLEGE_CODE_TO_MODULE
+    from app.domain.contracts.internal_contracts import TriggerCrawlCmd, TriggerCrawlResultKind
+    from app.services import internal_crawl_service as ics
+    from app.services.internal_crawl_service import InternalCrawlService
+
+    code = next(iter(COLLEGE_CODE_TO_MODULE.keys()))
+
+    class MockRedis:
+        def __init__(self) -> None:
+            self.stored: dict = {}
+
+        async def set(self, key, value, nx=False, ex=None):
+            if nx and key in self.stored:
+                return False
+            self.stored[key] = value
+            return True
+
+        async def get(self, key):
+            return self.stored.get(key)
+
+        async def eval(self, script, numkeys, key, value):
+            if self.stored.get(key) == value:
+                del self.stored[key]
+                return 1
+            return 0
+
+    mock_redis = MockRedis()
+
+    class Dispatcher:
+        async def enqueue(self, college_code, lock_token, countdown, enqueued_at):
+            return "tid"
+
+    captured: list = []
+
+    async def capture_set(redis, key, scope, payload):
+        captured.append(payload)
+
+    monkeypatch.setattr(ics, "try_claim_trigger_idempotency", AsyncMock(return_value=True))
+    monkeypatch.setattr(ics, "acquire_trigger_lock", AsyncMock(return_value=(False, None)))
+    monkeypatch.setattr(ics, "release_trigger_lock", AsyncMock(return_value=True))
+    monkeypatch.setattr(ics, "set_trigger_idempotency_result", capture_set)
+    monkeypatch.setattr(ics, "clear_trigger_idempotency_in_progress", AsyncMock(return_value=True))
+
+    svc = InternalCrawlService(mock_redis, Dispatcher())
+    cmd = TriggerCrawlCmd(college_code=code, idempotency_key="k-skip-cache", client_ip="127.0.0.1")
+    result = await svc.trigger(cmd)
+    assert result.result_kind == TriggerCrawlResultKind.success
+    assert len(captured) == 1
+    assert "skipped" in captured[0]

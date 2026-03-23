@@ -162,16 +162,17 @@ class InternalCrawlService:
                 )
 
             has_failed = bool(failed)
-            has_failed_or_skipped = has_failed or bool(skipped)
             if has_failed:
                 result_kind = TriggerCrawlResultKind.partial_failure
             else:
                 result_kind = TriggerCrawlResultKind.success
+                # 멱등 캐시: 브로커 enqueue 실패(failed)가 없으면 저장. 락 스킵(skipped)만 있는 경우에도
+                # 동일 키 재요청 시 동일 payload로 수렴하도록 허용(부분 성공 캐시).
                 if (
                     claimed
                     and self._redis is not None
                     and key_stripped is not None
-                    and not has_failed_or_skipped
+                    and not has_failed
                     and out
                 ):
                     await set_trigger_idempotency_result(self._redis, key_stripped, idempotency_scope, out)

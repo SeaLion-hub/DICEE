@@ -6,6 +6,21 @@
 from collections.abc import Sequence
 
 
+def first_element_str(seq: Sequence[str] | str | None, *, default: str = "") -> str:
+    """
+    시퀀스의 첫 요소를 str로 반환. BeautifulSoup 등에서 빈 결과·단일 str에 대응.
+    None·빈 시퀀스면 default.
+    """
+    if seq is None:
+        return default
+    if isinstance(seq, str):
+        return seq
+    if len(seq) == 0:
+        return default
+    first = seq[0]
+    return first if isinstance(first, str) else str(first)
+
+
 def ensure_str_attr(attr: str | Sequence[str] | None) -> str:
     """
     BeautifulSoup 태그의 get("href")/get("src") 등 결과를 str로 반환.

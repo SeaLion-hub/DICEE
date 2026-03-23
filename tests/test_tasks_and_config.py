@@ -589,3 +589,60 @@ def test_drain_content_spool_moves_to_dlq_with_dead_letter_metadata(tmp_path, mo
     payload = json.loads(dlq_files[0].read_text(encoding="utf-8"))
     assert payload["dead_letter_reason"] == "max_retries_exceeded"
     assert "dead_lettered_at" in payload
+
+
+def test_delay_process_notice_ai_with_backoff_succeeds_after_transient_failure():
+    """브로커 일시 오류 후 재시도로 delay 성공."""
+    from app.services import tasks as tasks_module
+    from app.services.tasks import _delay_process_notice_ai_with_backoff
+
+    calls = {"n": 0}
+
+    def delay_side_effect(_nid: str):
+        calls["n"] += 1
+        if calls["n"] < 2:
+            raise ConnectionError("broker")
+        m = MagicMock()
+        m.id = "celery-task"
+        return m
+
+    mock_task = MagicMock()
+    mock_task.delay = MagicMock(side_effect=delay_side_effect)
+    with (
+        patch.object(tasks_module, "process_notice_ai_task", mock_task),
+        patch("app.services.tasks.time.sleep", lambda _s: None),
+    ):
+        _delay_process_notice_ai_with_backoff("550e8400-e29b-41d4-a716-446655440000")
+    assert calls["n"] == 2
+    assert mock_task.delay.call_count == 2
+
+
+def test_crawl_college_task_on_chunk_enqueue_failure_increments_ai_enqueue_failed_metric():
+    """on_chunk에서 AI delay 영구 실패 시 ai_enqueue_failed_total 증가."""
+    import uuid as uuid_mod
+
+    from app.core.metrics import AI_ENQUEUE_FAILED_TOTAL, get_counter
+    from app.services import tasks as tasks_module
+    from app.services.tasks import crawl_college_task
+
+    nid = uuid_mod.uuid4()
+    before = get_counter(AI_ENQUEUE_FAILED_TOTAL, labels={"college_code": "engineering"})
+
+    def fake_run(session, college_code, task_id, on_chunk, failure_publisher=None):
+        on_chunk([nid])
+        return (1, None)
+
+    mock_session_cm = MagicMock()
+    mock_session_cm.__enter__.return_value = MagicMock()
+    mock_session_cm.__exit__.return_value = None
+
+    with (
+        patch.object(tasks_module, "run_crawl_job_sync", side_effect=fake_run),
+        patch.object(tasks_module, "get_sync_session", return_value=mock_session_cm),
+        patch.object(tasks_module, "release_trigger_lock_sync"),
+        patch.object(tasks_module, "_delay_process_notice_ai_with_backoff", side_effect=ConnectionError("fail")),
+    ):
+        crawl_college_task.apply(args=("engineering", None), throw=True)
+
+    after = get_counter(AI_ENQUEUE_FAILED_TOTAL, labels={"college_code": "engineering"})
+    assert after == before + 1
