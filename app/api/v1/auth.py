@@ -5,9 +5,8 @@ import logging
 import uuid as uuid_mod
 from collections.abc import Callable
 
-import sentry_sdk
-
 import httpx
+import sentry_sdk
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 

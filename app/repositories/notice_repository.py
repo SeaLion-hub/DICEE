@@ -63,9 +63,11 @@ async def list_notices_paginated(
     cursor: str | None = None,
     college_id: uuid.UUID | None = None,
     load_college: bool = True,
+    load_taxonomy_mappings: bool = False,
 ) -> tuple[list[Notice], str | None]:
     """
     공지 목록 페이지네이션 조회. N+1 방지: NOTICE_LIST_DEFER_OPTIONS + selectinload(Notice.college).
+    응답에 taxonomy_mappings가 필요하면 load_taxonomy_mappings=True로 selectinload(Notice.taxonomy_mappings) 적용.
     cursor 있으면 keyset 기반 다음 페이지; 없으면 offset/limit. 반환 (rows, next_cursor).
     5단계 목록 API. deleted_at IS NULL만 반환.
     """
@@ -120,6 +122,8 @@ async def list_notices_paginated(
 
     if load_college:
         stmt = stmt.options(selectinload(Notice.college))
+    if load_taxonomy_mappings:
+        stmt = stmt.options(selectinload(Notice.taxonomy_mappings))
     if college_id is not None:
         stmt = stmt.where(Notice.college_id == college_id)
 

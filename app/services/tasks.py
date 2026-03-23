@@ -7,7 +7,9 @@ import logging
 import threading
 import time
 import uuid as uuid_mod
+from dataclasses import asdict, is_dataclass
 from pathlib import Path
+from typing import Any, cast
 
 import requests
 from requests.exceptions import RequestException
@@ -46,17 +48,26 @@ from app.core.storage import (
     spool_read_s3,
     upload_notice_html,
 )
+from app.domain.contracts.ai_extraction import NoticeAIExtraction
 from app.repositories.crawl_run_repository import close_stale_running_runs_sync
 from app.repositories.notice_repository import (
     get_notice_for_ai_sync,
     update_ai_result_sync,
     update_notice_content_url_sync,
 )
-from app.domain.contracts.ai_extraction import NoticeAIExtraction
 from app.services.ai_pipeline import extract_notice_info, project_extraction_to_notice_fields
 from app.services.crawl_service import handle_crawl_failure_composite, run_crawl_job_sync
 
 logger = logging.getLogger(__name__)
+
+
+def _coerce_dataclass_or_dict_to_plain_dict(obj: object) -> dict[str, Any]:
+    if is_dataclass(obj) and not isinstance(obj, type):
+        return cast(dict[str, Any], asdict(obj))
+    if isinstance(obj, dict):
+        return cast(dict[str, Any], obj)
+    msg = f"Expected dataclass instance or dict, got {type(obj).__name__}"
+    raise TypeError(msg)
 
 TRIGGER_LOCK_HEARTBEAT_INTERVAL_SECONDS = 60
 NOTICE_HTML_FETCH_TIMEOUT = 30
@@ -361,10 +372,13 @@ def process_notice_ai_task(self, notice_id: str):
                 title=notice.title,
                 college_name=str(college_name),
             )
-            envelope_meta = {**envelope.meta, "usage": envelope.usage}
+            merged_envelope_meta: dict[str, Any] = {
+                **_coerce_dataclass_or_dict_to_plain_dict(envelope.meta),
+                "usage": _coerce_dataclass_or_dict_to_plain_dict(envelope.usage),
+            }
             projected = project_extraction_to_notice_fields(
                 envelope.result,
-                envelope_meta=envelope_meta,
+                envelope_meta=merged_envelope_meta,
             )
             update_ai_result_sync(
                 session,

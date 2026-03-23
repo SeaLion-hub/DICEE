@@ -1,13 +1,12 @@
 from datetime import datetime, timedelta, timezone
 
 import pytest
-from pydantic import ValidationError
-
 from app.domain.contracts.ai_extraction import (
     NoticeAIExtraction,
     ScheduleItem,
     ScheduleKind,
 )
+from pydantic import ValidationError
 
 
 def test_schedule_item_requires_some_date_field() -> None:

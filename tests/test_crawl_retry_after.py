@@ -1,6 +1,5 @@
 """Unit tests for Retry-After parsing (429)."""
 
-import pytest
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -63,15 +62,16 @@ def test_parse_retry_after_none_response_returns_none():
 
 
 def test_get_crawl_retry_wait_429_with_retry_after_uses_value():
-    class Exc(Exception):
+    class DummyHttpError(Exception):
         response: Any | None = None
     class Res:
         headers = {"Retry-After": "20"}
         status_code = 429
-    exc = Exc()
+    exc = DummyHttpError()
     exc.response = Res()
-    from tenacity import RetryCallState
     from unittest.mock import MagicMock
+
+    from tenacity import RetryCallState
     state = MagicMock(spec=RetryCallState)
     state.outcome = MagicMock()
     state.outcome.exception = lambda: exc
@@ -85,12 +85,12 @@ def test_get_crawl_retry_wait_non_429_delegates_to_fallback(monkeypatch):
     def _fake_wait(_state):
         return fallback_ret
     monkeypatch.setattr(runtime, "_crawl_retry_wait", _fake_wait)
-    class Exc(Exception):
+    class DummyHttpError(Exception):
         response: Any | None = None
     class Res:
         headers = {}
         status_code = 503
-    exc = Exc()
+    exc = DummyHttpError()
     exc.response = Res()
     from unittest.mock import MagicMock
     state = MagicMock()

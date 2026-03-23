@@ -10,6 +10,7 @@ from urllib.parse import quote, unquote, urljoin, urlparse, urlunparse
 from bs4 import BeautifulSoup, Tag
 from requests.exceptions import RequestException
 
+from app.core.bs4_utils import as_tag
 from app.core.crawl_http import (
     HtmlTooLargeError,
     fetch_html,
@@ -17,6 +18,7 @@ from app.core.crawl_http import (
 )
 from app.core.crawler_config import CrawlerModuleSpec
 from app.services.crawlers.base import ScrapeResult
+from app.services.crawlers.typing_helpers import class_list_from_tag, ensure_str_attr
 
 logger = logging.getLogger(__name__)
 
@@ -54,13 +56,16 @@ def get_chemistry_links(list_url: str) -> list[dict[str, Any]]:
         links: list[dict[str, Any]] = []
 
         for row in soup.find_all("tr"):
-            row_classes = row.get("class", []) or []
+            row_tag = as_tag(row)
+            if row_tag is None:
+                continue
+            row_classes = class_list_from_tag(row_tag)
             if "nxb-list-table__notice" in row_classes:
                 continue
-            a_tag = row.find("a")
+            a_tag = row_tag.find("a")
             if not a_tag or not isinstance(a_tag, Tag):
                 continue
-            href = a_tag.get("href", "")
+            href = ensure_str_attr(a_tag.get("href"))
             if not href or href == "#" or "javascript:" in href:
                 continue
             full_url = urljoin(list_url, href)
@@ -68,9 +73,10 @@ def get_chemistry_links(list_url: str) -> list[dict[str, Any]]:
             if not title:
                 continue
             num_text = "일반"
-            tds = row.find_all("td")
+            tds = row_tag.find_all("td")
             if tds:
-                first_td_text = tds[0].get_text(strip=True)
+                first_td = as_tag(tds[0])
+                first_td_text = first_td.get_text(strip=True) if first_td is not None else ""
                 if first_td_text.isdigit():
                     num_text = first_td_text
             if not any(d["url"] == full_url for d in links):
@@ -102,8 +108,8 @@ def scrape_chemistry_detail(url: str) -> ScrapeResult:
 
         date = "날짜 없음"
         time_tag = soup.find("time")
-        if time_tag:
-            raw_date = time_tag.get("datetime") or time_tag.get_text(strip=True)
+        if time_tag and isinstance(time_tag, Tag):
+            raw_date = ensure_str_attr(time_tag.get("datetime")) or time_tag.get_text(strip=True)
             date = normalize_date(raw_date)
 
         content_html = ""
@@ -114,7 +120,7 @@ def scrape_chemistry_detail(url: str) -> ScrapeResult:
             for idx, img in enumerate(content_div.find_all("img")):
                 if not isinstance(img, Tag):
                     continue
-                src = img.get("src", "")
+                src = ensure_str_attr(img.get("src"))
                 if not src:
                     continue
                 if src.startswith("data:image"):
@@ -132,7 +138,16 @@ def scrape_chemistry_detail(url: str) -> ScrapeResult:
                         continue
                     unquoted_path = unquote(parsed.path)
                     encoded_path = quote(unquoted_path)
-                    safe_url = urlunparse((parsed.scheme, parsed.netloc, encoded_path, parsed.params, parsed.query, parsed.fragment))
+                    safe_url = urlunparse(
+                        (
+                            parsed.scheme,
+                            parsed.netloc,
+                            encoded_path,
+                            parsed.params,
+                            parsed.query,
+                            parsed.fragment,
+                        )
+                    )
                     fname = os.path.basename(unquoted_path)
                     if not any(d.get("data") == safe_url for d in images):
                         images.append({"type": "url", "data": safe_url, "name": fname or f"image_{idx + 1}.jpg"})
@@ -154,7 +169,13 @@ def scrape_chemistry_detail(url: str) -> ScrapeResult:
             if fname and fname not in attachments:
                 attachments.append(fname)
 
-        return ScrapeResult(title=title, date_str=date, html_content=content_html, images=images, attachments=attachments)
+        return ScrapeResult(
+            title=title,
+            date_str=date,
+            html_content=content_html,
+            images=images,
+            attachments=attachments,
+        )
     except RequestException:
         raise
     except Exception as e:

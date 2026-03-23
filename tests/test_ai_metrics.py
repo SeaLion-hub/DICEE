@@ -3,8 +3,6 @@
 from unittest.mock import patch
 
 import pytest
-from pydantic import ValidationError
-
 from app.core.metrics import (
     AI_EXTRACTION_ATTEMPT_TOTAL,
     AI_EXTRACTION_FALLBACK_TOTAL,
@@ -15,7 +13,9 @@ from app.core.metrics import (
     get_counter,
 )
 from app.domain.contracts.ai_extraction import NoticeAIExtraction
+from app.services.ai.types import TokenUsage
 from app.services.ai_pipeline import extract_notice_info
+from pydantic import ValidationError
 
 
 def test_extract_notice_info_success_increments_attempt_and_success() -> None:
@@ -23,7 +23,7 @@ def test_extract_notice_info_success_increments_attempt_and_success() -> None:
     stub = NoticeAIExtraction(target_departments=[])
     with patch(
         "app.services.ai_pipeline.extract_notice_structured_with_usage",
-        return_value=(stub, {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}),
+        return_value=(stub, TokenUsage()),
     ):
         extract_notice_info("<p>html</p>")
     assert get_counter(AI_EXTRACTION_ATTEMPT_TOTAL) >= 1
@@ -48,15 +48,15 @@ def test_extract_notice_info_validation_fallback_increments_fallback_and_validat
 def test_extract_notice_info_success_populates_usage_and_increments_tokens_total() -> None:
     """성공 시 반환된 usage가 envelope.usage에 들어가고, total_tokens만큼 AI_EXTRACTION_TOKENS_TOTAL이 증가한다."""
     stub = NoticeAIExtraction(target_departments=[])
-    usage = {"prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150}
+    usage = TokenUsage(prompt_tokens=100, completion_tokens=50, total_tokens=150)
     with patch(
         "app.services.ai_pipeline.extract_notice_structured_with_usage",
         return_value=(stub, usage),
     ):
         envelope = extract_notice_info("<p>html</p>")
-    assert envelope.usage["prompt_tokens"] == 100
-    assert envelope.usage["completion_tokens"] == 50
-    assert envelope.usage["total_tokens"] == 150
+    assert envelope.usage.prompt_tokens == 100
+    assert envelope.usage.completion_tokens == 50
+    assert envelope.usage.total_tokens == 150
     assert get_counter(AI_EXTRACTION_TOKENS_TOTAL) >= 150
 
 

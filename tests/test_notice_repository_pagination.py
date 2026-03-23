@@ -68,3 +68,25 @@ async def test_list_notices_paginated_returns_tuple() -> None:
     )
     assert isinstance(rows, list)
     assert next_cursor is None
+
+
+@pytest.mark.asyncio
+async def test_list_notices_paginated_load_taxonomy_mappings_adds_loader_option() -> None:
+    """load_taxonomy_mappings=True이면 ORM loader 옵션이 1개 더 붙는다 (selectinload taxonomy)."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    async def count_with_options(load_taxonomy_mappings: bool) -> int:
+        mock_session = AsyncMock()
+        mock_result = MagicMock()
+        mock_result.scalars.return_value.unique.return_value.all.return_value = []
+        mock_session.execute = AsyncMock(return_value=mock_result)
+        await list_notices_paginated(
+            mock_session,
+            limit=20,
+            offset=0,
+            load_taxonomy_mappings=load_taxonomy_mappings,
+        )
+        stmt = mock_session.execute.await_args.args[0]
+        return len(getattr(stmt, "_with_options", ()))
+
+    assert await count_with_options(True) == await count_with_options(False) + 1

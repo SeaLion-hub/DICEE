@@ -7,10 +7,16 @@ NoticeAIExtraction 구조화 출력. 비대칭 날짜 처리·제한 조건 기�
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, cast
+
 from pydantic import BaseModel, Field
 
 from app.core.config import settings
 from app.domain.contracts.ai_extraction import NoticeAIExtraction, NoticeMainCategory
+from app.services.ai.types import InstructorExtractionClient, TokenUsage
+
+if TYPE_CHECKING:
+    from instructor.processing.multimodal import Image
 
 EXTRACTION_MAX_RETRIES = 3
 
@@ -90,7 +96,8 @@ main_categories는 preselected_main_categories를 그대로 사용해야 합니�
    - 허용 목록 밖의 대분류/소분류를 상상해서 생성하지 마세요.
 4. 수요자 중심 절대 원칙
    - 발신 기관명이나 표면 키워드보다 학생 관점의 핵심 효용을 우선 해석하세요.
-   - 장학 공지에 행사 요소가 섞여 있어도 핵심이 장학이면 장학 중심으로, 취업 공지에 설명회가 붙어도 핵심이 취업이면 취업 중심으로 해석하세요.
+   - 장학 공지에 행사 요소가 섞여 있어도 핵심이 장학이면 장학 중심으로,
+     취업 공지에 설명회가 붙어도 핵심이 취업이면 취업 중심으로 해석하세요.
 5. 캠퍼스생활 fallback 규칙
    - preselected_main_categories가 ["캠퍼스생활"]인 경우에만 캠퍼스생활 taxonomy를 작성하세요.
    - 캠퍼스생활은 fallback이므로 다른 대분류와 공존하지 않습니다.
@@ -111,7 +118,8 @@ main_categories는 preselected_main_categories를 그대로 사용해야 합니�
 [매핑 알고리즘 의사코드]
 Step 1. preselected_main_categories를 읽고, main_categories에 동일한 값을 그대로 복사합니다.
 Step 2. 복사한 각 main_category에 대해 <TAXONOMY_POOL>에서 해당 부모의 하위 배열만 로드합니다.
-Step 3. 본문/이미지 컨텍스트를 분석하여, 로드된 해당 부모 배열 안에서만 가장 적합한 sub_categories를 1개 이상 선택합니다.
+Step 3. 본문/이미지 컨텍스트를 분석하여, 로드된 해당 부모 배열 안에서만
+    가장 적합한 sub_categories를 1개 이상 선택합니다.
 Step 4. 소분류를 출력하기 직전, 선택한 각 sub_category가 정말 그 부모의 하위 목록에 존재하는지 1:1 검증합니다.
 Step 5. 각 main_category는 taxonomy_mappings에 정확히 한 번만 등장하도록 구조화합니다.
 
@@ -119,9 +127,11 @@ Step 5. 각 main_category는 taxonomy_mappings에 정확히 한 번만 등장하
 
 ## 비대칭 날짜 처리 (Asymmetric Fuzzy Date)
 - 시작일과 종료일을 **독립적으로** 평가하세요. 한쪽만 파싱 가능해도 그쪽은 반드시 채우세요.
-- **한쪽만 명확한 경우**: 명확한 쪽은 ISO8601(starts_at 또는 ends_at)로 채우고, 모호한 쪽은 null로 두고 **해당 원문만** start_date_raw 또는 end_date_raw에 보존하세요.
+- **한쪽만 명확한 경우**: 명확한 쪽은 ISO8601(starts_at 또는 ends_at)로 채우고,
+  모호한 쪽은 null로 두고 **해당 원문만** start_date_raw 또는 end_date_raw에 보존하세요.
   - 예: "2026.02.01 ~ 채용 시 마감" → starts_at=2026-02-01T00:00:00+09:00, ends_at=null, end_date_raw="채용 시 마감".
-- **둘 다 모호한 경우**: starts_at/ends_at은 null로 두고, date_raw 또는 start_date_raw/end_date_raw에 원문만 넣으세요(예: "11월 중순", "추후 공지").
+- **둘 다 모호한 경우**: starts_at/ends_at은 null로 두고,
+  date_raw 또는 start_date_raw/end_date_raw에 원문만 넣으세요(예: "11월 중순", "추후 공지").
 - 각 일정은 kind(application_deadline, interview, result, event, other), label(사람이 읽기 좋은 라벨)을 함께 채우세요.
 
 ---
@@ -140,8 +150,10 @@ Step 5. 각 main_category는 taxonomy_mappings에 정확히 한 번만 등장하
 **필드 순서(Schema-driven CoT)** — 자격을 채울 때는 반드시 아래 순서로 채우세요.
 1. raw_eligibility_text: 본문의 자격 관련 문장을 **가공 없이 그대로** 발췌. 없으면 null.
 2. eligibility_rules: 위 원문을 바탕으로 분절한 자격 조건 리스트.
-3. target_departments: 위 자격 요건에 명시된 학과 리스트. "없음", "알 수 없음", "해당없음" 등 플레이스홀더 사용 금지. 해당 없으면 빈 리스트.
-4. target_grades: 위 자격 요건에 명시된 학년. 1~6, all, grad_master, grad_phd, grad_all, other 중 선택. 없으면 빈 리스트."""
+3. target_departments: 위 자격 요건에 명시된 학과 리스트.
+   "없음", "알 수 없음", "해당없음" 등 플레이스홀더 사용 금지. 해당 없으면 빈 리스트.
+4. target_grades: 위 자격 요건에 명시된 학년.
+   1~6, all, grad_master, grad_phd, grad_all, other 중 선택. 없으면 빈 리스트."""
 
 
 class MainCategorySelection(BaseModel):
@@ -165,14 +177,8 @@ def _normalize_image_urls(image_urls: list[str] | None) -> list[str]:
     ]
 
 
-def _get_instructor_client():
-    """
-    Instructor 클라이언트 팩토리.
-
-    - Gemini 1.5 Flash 기반 구조화 출력 전용.
-    - 재시도 정책(max_retries)은 Instructor 레이어에서만 관리하고,
-      상위 ai_pipeline 레이어에서는 별도 재시도를 수행하지 않는다.
-    """
+def _get_instructor_client() -> InstructorExtractionClient:
+    """Instructor 클라이언트 팩토리 (Gemini 구조화 출력, max_retries는 Instructor 전담)."""
     import instructor  # type: ignore[import]
 
     api_key = None
@@ -182,7 +188,10 @@ def _get_instructor_client():
     kwargs: dict[str, object] = {"max_retries": EXTRACTION_MAX_RETRIES}
     if api_key:
         kwargs["api_key"] = api_key
-    return instructor.from_provider(provider, **kwargs)
+    return cast(
+        InstructorExtractionClient,
+        instructor.from_provider(provider, **kwargs),  # type: ignore[call-overload]
+    )
 
 
 def _messages_for_main_categories(
@@ -203,7 +212,7 @@ def _messages_for_main_categories(
 
 
 def _extract_preselected_main_categories(
-    client: object,
+    client: InstructorExtractionClient,
     title: str,
     college_name: str,
 ) -> list[NoticeMainCategory]:
@@ -212,7 +221,7 @@ def _extract_preselected_main_categories(
         messages=messages,
         response_model=MainCategorySelection,
     )
-    return selection.main_categories
+    return cast(list[NoticeMainCategory], selection.main_categories)
 
 
 def _messages_and_content(
@@ -221,13 +230,13 @@ def _messages_and_content(
     title: str | None = None,
     college_name: str | None = None,
     preselected_main_categories: list[NoticeMainCategory] | None = None,
-) -> tuple[list[dict[str, object]], str | list]:
+) -> tuple[list[dict[str, object]], str | list[str | Image]]:
     """공통 메시지·user_content 구성 (extract_notice_structured / extract_notice_structured_with_usage)."""
     from instructor.processing.multimodal import Image  # type: ignore[import]
 
     text = html_content[:100_000] or "(내용 없음)"
     urls = _normalize_image_urls(image_urls)[:5]
-    
+
     context_prefix = ""
     if title or college_name or preselected_main_categories:
         main_text = ", ".join(cat.value for cat in (preselected_main_categories or []))
@@ -241,35 +250,36 @@ def _messages_and_content(
         text = context_prefix + text
 
     if not urls:
-        user_content: str | list = text
+        user_content: str | list[str | Image] = text
     else:
         user_content = [
             text,
             "아래 이미지는 공지 본문(포스터·첨부 등)입니다. HTML과 함께 참고하여 지원자격·일정·날짜를 추출하세요.",
         ] + [Image.from_url(u) for u in urls if u and (u.startswith("http://") or u.startswith("https://"))]
-    messages = [
+    messages: list[dict[str, object]] = [
         {"role": "system", "content": EXTRACTOR_SYSTEM_PROMPT},
         {"role": "user", "content": user_content},
     ]
     return messages, user_content
 
 
-def _usage_from_completion(completion: object) -> dict[str, int]:
-    """completion.usage를 {prompt_tokens, completion_tokens, total_tokens} dict로 변환."""
-    out: dict[str, int] = {
-        "prompt_tokens": 0,
-        "completion_tokens": 0,
-        "total_tokens": 0,
-    }
+def _usage_from_completion(completion: object) -> TokenUsage:
+    """completion.usage를 TokenUsage로 변환."""
+    prompt = 0
+    completion_tokens = 0
+    total = 0
     usage = getattr(completion, "usage", None)
-    if usage is None:
-        return out
-    out["prompt_tokens"] = int(getattr(usage, "prompt_tokens", 0) or 0)
-    out["completion_tokens"] = int(getattr(usage, "completion_tokens", 0) or 0)
-    out["total_tokens"] = int(getattr(usage, "total_tokens", 0) or 0)
-    if out["total_tokens"] == 0 and (out["prompt_tokens"] or out["completion_tokens"]):
-        out["total_tokens"] = out["prompt_tokens"] + out["completion_tokens"]
-    return out
+    if usage is not None:
+        prompt = int(getattr(usage, "prompt_tokens", 0) or 0)
+        completion_tokens = int(getattr(usage, "completion_tokens", 0) or 0)
+        total = int(getattr(usage, "total_tokens", 0) or 0)
+    if total == 0 and (prompt or completion_tokens):
+        total = prompt + completion_tokens
+    return TokenUsage(
+        prompt_tokens=prompt,
+        completion_tokens=completion_tokens,
+        total_tokens=total,
+    )
 
 
 def extract_notice_structured_with_usage(
@@ -277,10 +287,21 @@ def extract_notice_structured_with_usage(
     image_urls: list[str] | None = None,
     title: str | None = None,
     college_name: str | None = None,
-) -> tuple[NoticeAIExtraction, dict[str, int]]:
+) -> tuple[NoticeAIExtraction, TokenUsage]:
     """
     HTML(및 선택적 이미지)에서 NoticeAIExtraction 추출 + usage 반환.
-    파이프라인에서 envelope.usage·메트릭 채우기 위해 사용.
+
+    Args:
+        html_content: slim/raw HTML 본문(이미지 전용 공지는 빈 문자열 가능).
+        image_urls: https URL 목록(선택).
+        title: 공지 제목(필수, 공백만 불가).
+        college_name: 단과대/기관명(필수, 공백만 불가).
+
+    Returns:
+        (구조화 추출 결과, 토큰 사용량).
+
+    Raises:
+        ValueError: title 또는 college_name이 비어 있거나, 본문과 유효 image_urls가 모두 없을 때.
     """
     title_text = _require_non_empty_text(title, field_name="title")
     college_text = _require_non_empty_text(college_name, field_name="college_name")
@@ -304,8 +325,9 @@ def extract_notice_structured_with_usage(
         college_text,
         preselected_main_categories=preselected_main_categories,
     )
-    if hasattr(client, "create_with_completion"):
-        extraction, completion = client.create_with_completion(
+    create_with_completion = getattr(client, "create_with_completion", None)
+    if create_with_completion is not None:
+        extraction, completion = create_with_completion(
             messages=messages,
             response_model=NoticeAIExtraction,
         )
@@ -314,7 +336,7 @@ def extract_notice_structured_with_usage(
         messages=messages,
         response_model=NoticeAIExtraction,
     )
-    return extraction, {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+    return extraction, TokenUsage()
 
 
 def extract_notice_structured(

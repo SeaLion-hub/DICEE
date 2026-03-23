@@ -10,6 +10,7 @@ from urllib.parse import quote, unquote, urljoin, urlparse, urlunparse
 from bs4 import BeautifulSoup, Tag
 from requests.exceptions import RequestException
 
+from app.core.bs4_utils import as_tag
 from app.core.crawl_http import (
     HtmlTooLargeError,
     fetch_html,
@@ -17,6 +18,7 @@ from app.core.crawl_http import (
 )
 from app.core.crawler_config import CrawlerModuleSpec
 from app.services.crawlers.base import ScrapeResult
+from app.services.crawlers.typing_helpers import class_list_from_tag, ensure_str_attr
 
 logger = logging.getLogger(__name__)
 
@@ -59,13 +61,16 @@ def get_library_links(list_url: str) -> list[dict[str, Any]]:
         for row in soup.find_all("tr"):
             if count >= MAX_LINKS:
                 break
-            row_classes = row.get("class", []) or []
+            row_tag = as_tag(row)
+            if row_tag is None:
+                continue
+            row_classes = class_list_from_tag(row_tag)
             if "always" in row_classes:
                 continue
-            a_tag = row.find("a")
+            a_tag = row_tag.find("a")
             if not a_tag or not isinstance(a_tag, Tag):
                 continue
-            href = a_tag.get("href")
+            href = ensure_str_attr(a_tag.get("href"))
             if not href or href == "#" or "javascript:" in href:
                 continue
             full_url = urljoin(list_url, href)
@@ -73,7 +78,7 @@ def get_library_links(list_url: str) -> list[dict[str, Any]]:
             if not title:
                 continue
             num_text = "일반"
-            tds = row.find_all("td")
+            tds = row_tag.find_all("td")
             if tds and isinstance(tds[0], Tag):
                 num_text = tds[0].get_text(strip=True)
             if not any(d["url"] == full_url for d in links):
@@ -124,7 +129,7 @@ def scrape_library_detail(url: str) -> ScrapeResult:
             for idx, img in enumerate(board_content.find_all("img")):
                 if not isinstance(img, Tag):
                     continue
-                src = img.get("src", "")
+                src = ensure_str_attr(img.get("src"))
                 if not src or any(x in src for x in ["icon", "btn", "blank"]):
                     continue
                 if src.startswith("data:image"):
@@ -142,7 +147,16 @@ def scrape_library_detail(url: str) -> ScrapeResult:
                         continue
                     unquoted_path = unquote(parsed.path)
                     encoded_path = quote(unquoted_path)
-                    safe_url = urlunparse((parsed.scheme, parsed.netloc, encoded_path, parsed.params, parsed.query, parsed.fragment))
+                    safe_url = urlunparse(
+                        (
+                            parsed.scheme,
+                            parsed.netloc,
+                            encoded_path,
+                            parsed.params,
+                            parsed.query,
+                            parsed.fragment,
+                        )
+                    )
                     fname = os.path.basename(unquoted_path)
                     if not any(d.get("data") == safe_url for d in images):
                         images.append({"type": "url", "data": safe_url, "name": fname or f"image_{idx + 1}.jpg"})
@@ -156,16 +170,25 @@ def scrape_library_detail(url: str) -> ScrapeResult:
 
         attachments: list[str] = []
         additional_items = soup.find("div", class_="additionalItems")
-        if additional_items:
-            for a_tag in additional_items.find_all("a"):
-                href = a_tag.get("href", "")
+        if additional_items and isinstance(additional_items, Tag):
+            for raw_a in additional_items.find_all("a"):
+                a_tag = as_tag(raw_a)
+                if a_tag is None:
+                    continue
+                href = ensure_str_attr(a_tag.get("href"))
                 if href and not href.startswith("#") and "javascript" not in href:
                     fname = a_tag.get_text(separator=" ", strip=True).strip()
                     fname = re.sub(r"\([\d.,]+\s*(KB|MB|GB|Bytes?)\)", "", fname, flags=re.IGNORECASE).strip()
                     if fname and fname not in attachments:
                         attachments.append(fname)
 
-        return ScrapeResult(title=title, date_str=date, html_content=content_html, images=images, attachments=attachments)
+        return ScrapeResult(
+            title=title,
+            date_str=date,
+            html_content=content_html,
+            images=images,
+            attachments=attachments,
+        )
     except RequestException:
         raise
     except Exception as e:

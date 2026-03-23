@@ -15,7 +15,6 @@ def test_crawl_stats_masks_error_message(client, monkeypatch):
     from unittest.mock import AsyncMock
 
     from app.api import internal as internal_module
-    from app.main import app
 
     # 인증 우회: 이 테스트는 응답 마스킹만 검증
     def _noop_authorize(request, x_secret, auth):

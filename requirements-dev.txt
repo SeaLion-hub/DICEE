@@ -7,4 +7,5 @@ ruff==0.8.4
 mypy==1.13.0
 types-requests==2.32.0.20241016
 types-boto3==1.35.84
+types-psutil>=6.1.0.20241228
 import-linter>=2.0

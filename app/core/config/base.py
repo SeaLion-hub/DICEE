@@ -161,7 +161,10 @@ class Settings(BaseSettings):
     )
     ai_extraction_enforce_raw_substrings: bool = Field(
         False,
-        description="When True (and no images), raw_eligibility_text and schedule date_raw must be substrings of prompt text. Skipped when image_urls are used (multimodal).",
+        description=(
+            "When True (and no images), raw_eligibility_text and schedule date_raw "
+            "must be substrings of prompt text. Skipped when image_urls are used (multimodal)."
+        ),
     )
     celery_worker_prefetch_multiplier: int = Field(1, ge=1, le=16)
     celery_broker_connection_max_retries: int = Field(100, ge=1, le=10000)

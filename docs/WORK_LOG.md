@@ -46,7 +46,14 @@
 ---
 ## 2026-03-23
 
+- [mypy app 0 errors] BeautifulSoup `Tag` 좁히기(`as_tag`, 크롤러 `ensure_str_attr`/`class_list_from_tag`), `ai_pipeline` InstructorRetry 폴백 타입명 분리, `streaming` 모듈 순서·클라이언트 타입, `collect_sync`/`downloader_middleware`·`types-psutil`, 사전 스냅샷 `docs/reports/baselines/MYPY_APP_ERRORS_PRE_REMEDIATION_2026-03-23.md`, `MYPY_BASELINE_BY_MODULE.md` 갱신. Ruff E501/E402/N806/N818 정리(크롤러 `urlunparse`·`ScrapeResult` 줄바꿈, 국제처 리스트 `class_` 헬퍼 등). 검증: `mypy app`, `ruff check app tests`, `pytest` 285 passed, 3 skipped.
+
+- [Notice 조회·DB 성능] `list_notices_paginated`에 `load_taxonomy_mappings` 옵션·`selectinload(Notice.taxonomy_mappings)`, `tests/test_notice_repository_pagination.py`·`docs/ROADMAP_PHASES.md` 보강. Alembic `011_notices_list_indexes_add_id`로 목록 partial 인덱스에 `id DESC` tie-break. `docs/decisions/database-spec.md` §6.2·§8.2 동기화. 트리거 멱등: enqueue 0·skipped만일 때는 Redis 결과 캐시 미저장으로 동일 키 재시도 가능(`internal_crawl_service`, `test_trigger_idempotency`·`test_security_features` 정합). 검증: `pytest` 285 passed, 3 skipped.
+
 - [코드 리뷰 개선 계획] `ai_enqueue_failed_total` 메트릭·`crawl_college_completed` 구조화 로그·`process_notice_ai_task.delay` 백오프 재시도, 트리거 멱등 캐시(스킵만 있어도 저장), 잘못된 UUID 조용히 무시·`college.name` 누락 시 폴백 저장, runbook·`typing_helpers.first_element_str`·테스트 보강. 영향: 운영 가시성·브로커 일시 장애 완화·멱등 재요청 일관성.
+- [AI 타입·문서화] `app/services/ai/types.py`에 `TokenUsage`·`InstructorExtractionClient` 추가, `extractor`/`ai_pipeline`에서 `ExtractionRunMeta`·`NoticeAIProjection`·검증 함수 docstring 보강, `tasks`는 dataclass/dict 겸용 직렬화로 `_envelope_meta` JSON shape 유지. 영향: IDE·정적 분석 친화, DB 저장 계약 동일. 검증: `pytest` AI 관련 37 passed.
+
+- [Auth 보안: user_id HMAC·redirect_uri] `app/core/user_id_hmac.py`: production이고 `APP_ENTRY!=migrate`일 때 키 없으면 `ValueError`(IP_HMAC 정책 정렬), 그 외는 경고+SHA256 폴백. `tests/test_auth_security_hardening.py` 런타임·migrate 예외 테스트. `app/services/auth_service.py`: `_normalize_redirect_uri`를 `httpx.URL`+`InvalidURL` 처리, userinfo는 truthy 검사, raw_path에 `?`/`#` 금지, path에 `?`/`#` 잔존 거부, IDNA(`raw_host`)·기본 포트 정규화. `tests/test_auth_redirect_uri.py` 표 기반 회귀. `.env.example`·`docs/DEPLOYMENT.md` USER_ID_HMAC 런타임 fail-fast 안내.
 
 ---
 ## 2026-03-19

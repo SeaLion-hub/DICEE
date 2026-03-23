@@ -58,7 +58,10 @@ def test_stream_notice_extraction_returns_strict_model_on_completion() -> None:
 
 
 def test_streaming_final_result_round_trips_like_non_streaming() -> None:
-    """스트리밍 최종 결과는 NoticeAIExtraction strict 기준으로 round-trip 가능해야 한다 (non-streaming과 동등한 품질)."""
+    """스트리밍 최종 결과는 NoticeAIExtraction strict 기준으로 round-trip 가능해야 한다.
+
+    (non-streaming과 동등한 품질).
+    """
 
     class DummyPartial:
         def __init__(self, model: NoticeExtractionDraft) -> None:

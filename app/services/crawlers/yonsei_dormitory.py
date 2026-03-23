@@ -10,6 +10,7 @@ from urllib.parse import quote, unquote, urljoin, urlparse, urlunparse
 from bs4 import BeautifulSoup, NavigableString, Tag
 from requests.exceptions import RequestException
 
+from app.core.bs4_utils import as_tag
 from app.core.crawl_http import (
     HtmlTooLargeError,
     fetch_html,
@@ -17,6 +18,7 @@ from app.core.crawl_http import (
 )
 from app.core.crawler_config import CrawlerModuleSpec
 from app.services.crawlers.base import ScrapeResult
+from app.services.crawlers.typing_helpers import ensure_str_attr
 
 logger = logging.getLogger(__name__)
 
@@ -54,13 +56,16 @@ def get_dormitory_links(list_url: str) -> list[dict[str, Any]]:
         links: list[dict[str, Any]] = []
 
         for row in soup.find_all("tr"):
-            title_td = row.find("td", class_=lambda c: c and "bold" in (c or ""))
+            row_tag = as_tag(row)
+            if row_tag is None:
+                continue
+            title_td = row_tag.find("td", class_=lambda c: c and "bold" in (c or ""))
             if not title_td or not isinstance(title_td, Tag):
                 continue
             a_tag = title_td.find("a")
             if not a_tag or not isinstance(a_tag, Tag):
                 continue
-            href = a_tag.get("href", "")
+            href = ensure_str_attr(a_tag.get("href"))
             if not href or href == "#" or "javascript:" in href:
                 continue
             full_url = urljoin(list_url, href)
@@ -68,7 +73,7 @@ def get_dormitory_links(list_url: str) -> list[dict[str, Any]]:
             if not title:
                 continue
             num_text = "공지"
-            tds = row.find_all("td")
+            tds = row_tag.find_all("td")
             if tds:
                 first_td_text = tds[0].get_text(strip=True) if isinstance(tds[0], Tag) else ""
                 if first_td_text.isdigit():
@@ -102,7 +107,7 @@ def scrape_dormitory_detail(url: str) -> ScrapeResult:
 
         date = "날짜 없음"
         info_div = soup.find("div", class_="board-view-info")
-        if info_div:
+        if info_div and isinstance(info_div, Tag):
             info_text = info_div.get_text(separator=" ", strip=True)
             date_match = re.search(r"\d{4}[-./]\d{1,2}[-./]\d{1,2}", info_text)
             if date_match:
@@ -116,7 +121,7 @@ def scrape_dormitory_detail(url: str) -> ScrapeResult:
             for idx, img in enumerate(content_div.find_all("img")):
                 if not isinstance(img, Tag):
                     continue
-                src = img.get("src", "")
+                src = ensure_str_attr(img.get("src"))
                 if not src:
                     continue
                 if src.startswith("data:image"):
@@ -134,8 +139,17 @@ def scrape_dormitory_detail(url: str) -> ScrapeResult:
                         continue
                     unquoted_path = unquote(parsed.path)
                     encoded_path = quote(unquoted_path)
-                    safe_url = urlunparse((parsed.scheme, parsed.netloc, encoded_path, parsed.params, parsed.query, parsed.fragment))
-                    fname = img.get("title") or os.path.basename(unquoted_path)
+                    safe_url = urlunparse(
+                        (
+                            parsed.scheme,
+                            parsed.netloc,
+                            encoded_path,
+                            parsed.params,
+                            parsed.query,
+                            parsed.fragment,
+                        )
+                    )
+                    fname = ensure_str_attr(img.get("title")) or os.path.basename(unquoted_path)
                     if not any(d.get("data") == safe_url for d in images):
                         images.append({"type": "url", "data": safe_url, "name": fname or f"image_{idx + 1}.jpg"})
                 img.decompose()
@@ -151,12 +165,18 @@ def scrape_dormitory_detail(url: str) -> ScrapeResult:
             if not isinstance(p_tag, Tag):
                 continue
             span_tag = p_tag.find("span")
-            if span_tag:
+            if span_tag and isinstance(span_tag, Tag):
                 fname = "".join(node for node in span_tag.contents if isinstance(node, NavigableString)).strip()
                 if fname and fname not in attachments:
                     attachments.append(fname)
 
-        return ScrapeResult(title=title, date_str=date, html_content=content_html, images=images, attachments=attachments)
+        return ScrapeResult(
+            title=title,
+            date_str=date,
+            html_content=content_html,
+            images=images,
+            attachments=attachments,
+        )
     except RequestException:
         raise
     except Exception as e:

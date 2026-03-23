@@ -4,11 +4,10 @@ import uuid
 from unittest.mock import MagicMock, patch
 
 import pytest
-from requests import Response
-from sqlalchemy.orm import Session
-
 from app.core.constants import CrawlRunStatus
 from app.domain.contracts.crawl_contracts import LinkItem, NoticeDraft
+from requests import Response
+from sqlalchemy.orm import Session
 
 
 def test_run_crawl_job_sync_rollback_then_failed_on_commit_failure():

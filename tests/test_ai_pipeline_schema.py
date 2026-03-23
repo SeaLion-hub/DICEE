@@ -3,27 +3,29 @@
 from unittest.mock import patch
 
 import pytest
-from pydantic import ValidationError
-from requests.exceptions import RequestException
-
-from app.schemas.ai import NoticeAIExtraction, NoticeCategory, ScheduleItem, ScheduleKind
+from app.core.config import settings
 from app.domain.contracts.ai_extraction import (
     NoticeAIExtraction as DomainNoticeAIExtraction,
+)
+from app.domain.contracts.ai_extraction import (
     NoticeMainCategory,
     TaxonomyMappingItem,
 )
+from app.schemas.ai import NoticeAIExtraction, NoticeCategory, ScheduleItem, ScheduleKind
+from app.services.ai.extractor import (
+    EXTRACTOR_SYSTEM_PROMPT,
+    MAIN_CATEGORY_SYSTEM_PROMPT,
+    extract_notice_structured_with_usage,
+)
+from app.services.ai.types import TokenUsage
 from app.services.ai_pipeline import (
     extract_notice_info,
     project_extraction_to_notice_fields,
     validate_and_normalize_taxonomy,
     validate_extraction_raw_substrings,
 )
-from app.services.ai.extractor import (
-    EXTRACTOR_SYSTEM_PROMPT,
-    MAIN_CATEGORY_SYSTEM_PROMPT,
-    extract_notice_structured_with_usage,
-)
-from app.core.config import settings
+from pydantic import ValidationError
+from requests.exceptions import RequestException
 
 
 def test_project_extraction_to_notice_fields_stub():
@@ -84,7 +86,7 @@ def test_extract_notice_info_passes_image_urls():
     stub = NoticeAIExtraction(target_departments=[])
     with patch(
         "app.services.ai_pipeline.extract_notice_structured_with_usage",
-        return_value=(stub, {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}),
+        return_value=(stub, TokenUsage()),
     ) as mock_extract:
         result = extract_notice_info("<p>html</p>", image_urls=["https://example.com/img.png"])
     assert result.result is stub
@@ -100,7 +102,7 @@ def test_extract_notice_info_passes_empty_image_urls():
     stub = NoticeAIExtraction(target_departments=[])
     with patch(
         "app.services.ai_pipeline.extract_notice_structured_with_usage",
-        return_value=(stub, {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}),
+        return_value=(stub, TokenUsage()),
     ) as mock_extract:
         result = extract_notice_info("<p>html</p>")
     assert result.result is stub
@@ -158,20 +160,15 @@ def test_extract_notice_info_validation_error_produces_fallback_envelope() -> No
         envelope = extract_notice_info("<p>html</p>")
 
     assert envelope.status == "fallback"
-    assert envelope.meta["fallback_reason"] == "validation_error"
-    assert envelope.meta["html_raw_len"] == len("<p>html</p>")
+    assert envelope.meta.fallback_reason == "validation_error"
+    assert envelope.meta.html_raw_len == len("<p>html</p>")
     # _clean_notice_html는 slim_html을 반환하므로 "<p>html</p>" 길이(11)를 유지한다.
-    assert envelope.meta["html_clean_len"] == len("<p>html</p>")
-    assert "elapsed_ms" in envelope.meta
-    assert "image_count" in envelope.meta
-    assert envelope.meta["provider"] == f"google/{settings.gemini_model}"
-    assert envelope.meta["model"] == settings.gemini_model
-    # usage는 표준 키를 모두 포함해야 한다.
-    assert set(envelope.usage.keys()) == {
-        "prompt_tokens",
-        "completion_tokens",
-        "total_tokens",
-    }
+    assert envelope.meta.html_clean_len == len("<p>html</p>")
+    assert envelope.meta.elapsed_ms >= 0
+    assert envelope.meta.image_count == 0
+    assert envelope.meta.provider == f"google/{settings.gemini_model}"
+    assert envelope.meta.model == settings.gemini_model
+    assert envelope.usage == TokenUsage()
 
 
 def test_extract_notice_info_unexpected_error_is_propagated() -> None:
@@ -191,10 +188,10 @@ def test_extract_notice_info_unexpected_error_is_propagated() -> None:
 def test_extract_notice_info_instructor_retry_exception_produces_fallback_envelope() -> None:
     """InstructorRetryException (재시도 소진) 발생 시 validation 계열 fallback으로 처리된다."""
     instructor_exceptions = pytest.importorskip("instructor.core.exceptions")
-    InstructorRetryException = instructor_exceptions.InstructorRetryException
+    instructor_retry_exc_cls = instructor_exceptions.InstructorRetryException
 
     def _raise_retry_exhausted(*args, **kwargs):
-        raise InstructorRetryException(
+        raise instructor_retry_exc_cls(
             "retry exhausted",
             n_attempts=3,
             total_usage={},
@@ -207,7 +204,7 @@ def test_extract_notice_info_instructor_retry_exception_produces_fallback_envelo
         envelope = extract_notice_info("<p>html</p>")
 
     assert envelope.status == "fallback"
-    assert envelope.meta["fallback_reason"] == "validation_retry_exhausted"
+    assert envelope.meta.fallback_reason == "validation_retry_exhausted"
 
 
 def test_extract_notice_info_provider_error_is_propagated() -> None:
@@ -231,24 +228,19 @@ def test_extract_notice_info_success_meta_includes_provider() -> None:
     stub = NoticeAIExtraction(target_departments=[])
     with patch(
         "app.services.ai_pipeline.extract_notice_structured_with_usage",
-        return_value=(stub, {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}),
+        return_value=(stub, TokenUsage()),
     ):
         envelope = extract_notice_info("<p>html</p>")
 
     assert envelope.status == "ok"
-    assert envelope.meta["provider"] == f"google/{settings.gemini_model}"
-    assert envelope.meta["model"] == settings.gemini_model
-    assert "html_raw_len" in envelope.meta
-    assert "html_clean_len" in envelope.meta
-    assert "image_count" in envelope.meta
-    assert "elapsed_ms" in envelope.meta
-    assert envelope.meta["fallback_reason"] is None
-    # usage 표준 키 존재 여부 확인
-    assert set(envelope.usage.keys()) == {
-        "prompt_tokens",
-        "completion_tokens",
-        "total_tokens",
-    }
+    assert envelope.meta.provider == f"google/{settings.gemini_model}"
+    assert envelope.meta.model == settings.gemini_model
+    assert envelope.meta.html_raw_len == len("<p>html</p>")
+    assert envelope.meta.html_clean_len >= 0
+    assert envelope.meta.image_count == 0
+    assert envelope.meta.elapsed_ms >= 0
+    assert envelope.meta.fallback_reason is None
+    assert envelope.usage == TokenUsage()
 
 
 def test_ai_extracted_json_round_trips_through_notice_ai_extraction() -> None:
@@ -323,11 +315,11 @@ def test_extract_notice_info_raw_substring_validation_fallback(monkeypatch) -> N
     )
     with patch(
         "app.services.ai_pipeline.extract_notice_structured_with_usage",
-        return_value=(stub, {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}),
+        return_value=(stub, TokenUsage()),
     ):
         envelope = extract_notice_info("<p>짧은 본문</p>")
     assert envelope.status == "fallback"
-    assert envelope.meta["fallback_reason"] == "raw_substring_validation_failed"
+    assert envelope.meta.fallback_reason == "raw_substring_validation_failed"
 
 
 def test_extract_notice_info_multimodal_skips_raw_substring_validation(monkeypatch) -> None:
@@ -341,7 +333,7 @@ def test_extract_notice_info_multimodal_skips_raw_substring_validation(monkeypat
     )
     with patch(
         "app.services.ai_pipeline.extract_notice_structured_with_usage",
-        return_value=(stub, {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}),
+        return_value=(stub, TokenUsage()),
     ):
         envelope = extract_notice_info(
             "<p>본문만 있는 HTML</p>",
@@ -382,14 +374,11 @@ def test_extract_notice_info_taxonomy_validation_failure_returns_fallback() -> N
     )
     with patch(
         "app.services.ai_pipeline.extract_notice_structured_with_usage",
-        return_value=(
-            invalid_extraction,
-            {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
-        ),
+        return_value=(invalid_extraction, TokenUsage()),
     ):
         envelope = extract_notice_info("<p>html</p>")
     assert envelope.status == "fallback"
-    assert envelope.meta["fallback_reason"] == "taxonomy_validation_failed"
+    assert envelope.meta.fallback_reason == "taxonomy_validation_failed"
 
 
 def test_taxonomy_case_overseas_scholarship_multi_label_pass() -> None:

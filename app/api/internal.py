@@ -7,9 +7,9 @@ import logging
 from typing import cast
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
-from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi.responses import JSONResponse, Response
 from redis.asyncio import Redis as RedisAsyncio
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import metrics
 from app.core.api_rate_limit import (

@@ -176,7 +176,7 @@
 **할 일 요약**: PostgreSQL FTS(tsvector), GIN 인덱스(ai_extracted_json, tsvector, hashtags). 수동 검색(키워드) 수요 대비. 유저 프로필과 공지 자격 요건(JSON) 비교 로직 services에 구현. API /v1/ prefix. GET /v1/users/me. 정렬·필터·페이지네이션, Swagger 문서화. user_calendar_events UniqueConstraint(user_id, notice_id). GET /v1/calendar/events?year=&month=, 응답: 매칭 공지 중 일정 배열 + user_calendar_events 배열. .ics 다운로드. Google Calendar 연동(선택).
 
 **Notice 목록/상세 API 구현 시 (N+1 방지)**  
-- 목록: `notice_repository.list_notices_paginated` 사용. 반드시 `NOTICE_LIST_DEFER_OPTIONS` 적용·응답에 college 필요 시 `selectinload(Notice.college)` 사용.  
+- 목록: `notice_repository.list_notices_paginated` 사용. 반드시 `NOTICE_LIST_DEFER_OPTIONS` 적용·응답에 college 필요 시 `selectinload(Notice.college)` 사용. 응답에 taxonomy(메인/서브 카테고리)를 포함하면 `load_taxonomy_mappings=True`로 `selectinload(Notice.taxonomy_mappings)`를 켠다.  
 - 상세: `notice_repository.get_notice_by_id_with_relations` 사용. `selectinload(Notice.college)`, `selectinload(Notice.notice_content)` 적용.
 
 **마일스톤**: Swagger에서 임의 프로필 입력 시 지원 가능한 공지만 필터링 응답. 일정 목록 API로 기간별 추출 일정 조회 가능.

@@ -10,12 +10,14 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Any, Literal, TypedDict
 
-from bs4 import BeautifulSoup, Comment
+from bs4 import BeautifulSoup, Comment, Tag
 from pydantic import ValidationError
 
+from app.core.bs4_utils import as_tag
 from app.core.config import settings
 from app.core.metrics import (
     AI_EXTRACTION_ATTEMPT_TOTAL,
@@ -32,6 +34,7 @@ from app.domain.contracts.ai_extraction import (
     TaxonomyMappingItem,
 )
 from app.services.ai.extractor import extract_notice_structured_with_usage
+from app.services.ai.types import TokenUsage
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +90,30 @@ _ALLOWED_HTML_ATTRS: dict[str, set[str]] = {
 
 
 @dataclass
+class ExtractionRunMeta:
+    """extract_notice_info가 채우는 운영 메타데이터(로그·DB 네임스페이스 직렬화와 동일 키)."""
+
+    pipeline_version: str = ""
+    provider: str = ""
+    model: str = ""
+    fallback_reason: str | None = None
+    html_raw_len: int = 0
+    html_clean_len: int = 0
+    image_count: int = 0
+    elapsed_ms: int = 0
+
+
+class NoticeAIProjection(TypedDict):
+    """NoticeAIExtraction → DB 업데이트용 투영 dict."""
+
+    ai_extracted_json: dict[str, Any]
+    dates: list[dict[str, Any]]
+    eligibility: list[str]
+    hashtags: list[str]
+    taxonomy_rows: list[dict[str, str]]
+
+
+@dataclass
 class ExtractionEnvelope:
     """
     AI 추출 결과 래퍼.
@@ -100,16 +127,8 @@ class ExtractionEnvelope:
     result: NoticeAIExtraction = field(
         default_factory=lambda: NoticeAIExtraction(target_departments=[])
     )
-    # usage는 항상 prompt_tokens, completion_tokens, total_tokens 키를 포함한다.
-    usage: dict[str, int] = field(
-        default_factory=lambda: {
-            "prompt_tokens": 0,
-            "completion_tokens": 0,
-            "total_tokens": 0,
-        }
-    )
-    # meta는 provider, model, fallback_reason, elapsed_ms, html_raw_len, html_clean_len, image_count를 포함한다.
-    meta: dict[str, Any] = field(default_factory=dict)
+    usage: TokenUsage = field(default_factory=TokenUsage)
+    meta: ExtractionRunMeta = field(default_factory=ExtractionRunMeta)
 
 
 def _clean_notice_html(html_content: str) -> str:
@@ -132,42 +151,52 @@ def _clean_notice_html(html_content: str) -> str:
     for node in soup.find_all(string=lambda t: isinstance(t, Comment)):
         node.extract()
 
-    for img in soup.find_all("img"):
-        alt = (img.get("alt") or "").strip()
+    for raw_img in soup.find_all("img"):
+        img = as_tag(raw_img)
+        if img is None:
+            continue
+        alt_raw = img.get("alt")
+        alt = (str(alt_raw) if alt_raw is not None else "").strip()
         if alt:
             img.insert_before(f"[이미지: {alt}]")
 
-    root = soup.body or soup
-    for tag in list(root.find_all(True)):
-        if tag.name not in _ALLOWED_SLIM_HTML_TAGS:
-            tag.unwrap()
+    root: Tag | BeautifulSoup = soup.body if soup.body is not None else soup
+    for raw_el in list(root.find_all(True)):
+        html_tag = as_tag(raw_el)
+        if html_tag is None:
+            continue
+        if html_tag.name not in _ALLOWED_SLIM_HTML_TAGS:
+            html_tag.unwrap()
             continue
 
-        allowed_attrs = _ALLOWED_HTML_ATTRS.get(tag.name, set())
-        for attr in list(tag.attrs):
+        allowed_attrs = _ALLOWED_HTML_ATTRS.get(html_tag.name, set())
+        for attr in list(html_tag.attrs):
             if attr not in allowed_attrs:
-                del tag.attrs[attr]
+                del html_tag.attrs[attr]
 
-        if tag.name == "a":
-            href = (tag.get("href") or "").strip()
+        if html_tag.name == "a":
+            href_raw = html_tag.get("href")
+            href = (str(href_raw) if href_raw is not None else "").strip()
             if href:
-                tag["href"] = href
-            elif "href" in tag.attrs:
-                del tag.attrs["href"]
-        elif tag.name == "img":
-            src = (tag.get("src") or "").strip()
-            alt = (tag.get("alt") or "").strip()
+                html_tag["href"] = href
+            elif "href" in html_tag.attrs:
+                del html_tag.attrs["href"]
+        elif html_tag.name == "img":
+            src_raw = html_tag.get("src")
+            alt_raw = html_tag.get("alt")
+            src = (str(src_raw) if src_raw is not None else "").strip()
+            alt = (str(alt_raw) if alt_raw is not None else "").strip()
             if src:
-                tag["src"] = src
-            elif "src" in tag.attrs:
-                del tag.attrs["src"]
+                html_tag["src"] = src
+            elif "src" in html_tag.attrs:
+                del html_tag.attrs["src"]
             if alt:
-                tag["alt"] = alt
-            elif "alt" in tag.attrs:
-                del tag.attrs["alt"]
+                html_tag["alt"] = alt
+            elif "alt" in html_tag.attrs:
+                del html_tag.attrs["alt"]
 
     if getattr(root, "name", None) == "body":
-        slim_html = root.decode_contents(formatter="html").strip()
+        slim_html = str(root.decode_contents(formatter="html")).strip()
     else:
         slim_html = str(root).strip()
     return slim_html[:_AI_INPUT_HTML_CHAR_LIMIT]
@@ -178,7 +207,7 @@ def _normalize_html_for_substring_validation(source_html: str) -> str:
     if not source_html:
         return ""
     soup = BeautifulSoup(source_html, "html.parser")
-    body_text = soup.get_text("\n")
+    body_text = str(soup.get_text("\n"))
     lines = [line.strip() for line in body_text.splitlines() if line.strip()]
     return "\n".join(lines)
 
@@ -189,7 +218,17 @@ def validate_extraction_raw_substrings(
 ) -> None:
     """
     raw_eligibility_text 및 schedule의 date_raw/start_date_raw/end_date_raw가
-    source_text의 부분 문자열인지 검사한다. 원문 근거가 없으면 ValueError.
+    source_text의 부분 문자열인지 검사한다.
+
+    Args:
+        extraction: LLM 추출 결과.
+        source_text: substring 검증에 쓸 정규화된 본문 텍스트.
+
+    Raises:
+        ValueError:
+            - raw_eligibility_text가 비어 있지 않은데 stripped 값이 source_text에 없을 때.
+            - 일정 항목의 date_raw/start_date_raw/end_date_raw 중 비어 있지 않은 값이
+              stripped 후 source_text에 없을 때.
     """
     if extraction.raw_eligibility_text and extraction.raw_eligibility_text.strip():
         if extraction.raw_eligibility_text.strip() not in source_text:
@@ -218,6 +257,14 @@ def validate_and_normalize_taxonomy(
     - 각 대분류는 taxonomy_mappings에 정확히 1번 등장해야 한다.
     - 소분류는 공백/중복을 정리한 뒤, 비어 있으면 실패 처리한다.
     - 소분류는 TaxonomyMappingItem 재검증으로 부모 풀 소속을 강제한다.
+
+    Raises:
+        ValueError:
+            - main_categories에 '캠퍼스생활'과 다른 대분류가 동시에 있을 때.
+            - main_categories가 비어 있지 않은데 taxonomy_mappings가 비어 있을 때.
+            - taxonomy_mappings에 동일 main_category가 중복될 때.
+            - 어떤 main_category에 대해 정리 후 sub_categories가 1개도 남지 않을 때.
+            - main_categories 집합과 taxonomy_mappings의 main_category 집합이 다를 때.
     """
     if not extraction.main_categories:
         # 0개 대분류는 "미분류"로 간주하고 파이프라인을 계속 진행한다.
@@ -317,16 +364,16 @@ def extract_notice_info(
             return ExtractionEnvelope(
                 status="fallback",
                 result=fallback_result,
-                meta={
-                    "pipeline_version": fallback_result.pipeline_version,
-                    "provider": provider,
-                    "model": model,
-                    "fallback_reason": "taxonomy_validation_failed",
-                    "html_raw_len": html_raw_len,
-                    "html_clean_len": html_clean_len,
-                    "image_count": image_count,
-                    "elapsed_ms": elapsed_ms,
-                },
+                meta=ExtractionRunMeta(
+                    pipeline_version=fallback_result.pipeline_version,
+                    provider=provider,
+                    model=model,
+                    fallback_reason="taxonomy_validation_failed",
+                    html_raw_len=html_raw_len,
+                    html_clean_len=html_clean_len,
+                    image_count=image_count,
+                    elapsed_ms=elapsed_ms,
+                ),
             )
         if getattr(settings, "ai_extraction_enforce_raw_substrings", False) and not (
             image_urls or []
@@ -341,46 +388,46 @@ def extract_notice_info(
                 return ExtractionEnvelope(
                     status="fallback",
                     result=fallback_result,
-                    meta={
-                        "pipeline_version": fallback_result.pipeline_version,
-                        "provider": provider,
-                        "model": model,
-                        "fallback_reason": "raw_substring_validation_failed",
-                        "html_raw_len": html_raw_len,
-                        "html_clean_len": html_clean_len,
-                        "image_count": image_count,
-                        "elapsed_ms": elapsed_ms,
-                    },
+                    meta=ExtractionRunMeta(
+                        pipeline_version=fallback_result.pipeline_version,
+                        provider=provider,
+                        model=model,
+                        fallback_reason="raw_substring_validation_failed",
+                        html_raw_len=html_raw_len,
+                        html_clean_len=html_clean_len,
+                        image_count=image_count,
+                        elapsed_ms=elapsed_ms,
+                    ),
                 )
         elapsed_ms = int((time.monotonic() - started_at) * 1000)
         envelope = ExtractionEnvelope(
             status="ok",
             result=extraction,
-            usage={
-                "prompt_tokens": int(usage.get("prompt_tokens", 0) or 0),
-                "completion_tokens": int(usage.get("completion_tokens", 0) or 0),
-                "total_tokens": int(usage.get("total_tokens", 0) or 0),
-            },
-            meta={
-                "pipeline_version": extraction.pipeline_version,
-                "provider": provider,
-                "model": model,
-                "fallback_reason": None,
-                "html_raw_len": html_raw_len,
-                "html_clean_len": html_clean_len,
-                "image_count": image_count,
-                "elapsed_ms": elapsed_ms,
-            },
+            usage=TokenUsage(
+                prompt_tokens=int(usage.prompt_tokens or 0),
+                completion_tokens=int(usage.completion_tokens or 0),
+                total_tokens=int(usage.total_tokens or 0),
+            ),
+            meta=ExtractionRunMeta(
+                pipeline_version=extraction.pipeline_version,
+                provider=provider,
+                model=model,
+                fallback_reason=None,
+                html_raw_len=html_raw_len,
+                html_clean_len=html_clean_len,
+                image_count=image_count,
+                elapsed_ms=elapsed_ms,
+            ),
         )
         increment(AI_EXTRACTION_SUCCESS_TOTAL)
-        total_tokens = envelope.usage.get("total_tokens", 0) or 0
+        total_tokens = envelope.usage.total_tokens or 0
         if total_tokens:
             increment(AI_EXTRACTION_TOKENS_TOTAL, value=total_tokens)
         logger.info(
             "ai_extraction_completed",
             extra={
                 "status": envelope.status,
-                "fallback_reason": envelope.meta.get("fallback_reason") or "",
+                "fallback_reason": envelope.meta.fallback_reason or "",
                 "html_raw_len": html_raw_len,
                 "html_clean_len": html_clean_len,
             },
@@ -388,13 +435,19 @@ def extract_notice_info(
         return envelope
     except Exception as e:  # noqa: BLE001
         try:
-            from instructor.core.exceptions import InstructorRetryException  # pyright: ignore[reportMissingImports]
+            from instructor.core.exceptions import (  # pyright: ignore[reportMissingImports]
+                InstructorRetryException as _InstructorRetryImported,
+            )
         except ImportError:
-            InstructorRetryException = type("InstructorRetryException", (Exception,), {})
+            _instructor_retry_exc_type: type[BaseException] = type(
+                "InstructorRetryException", (Exception,), {}
+            )
+        else:
+            _instructor_retry_exc_type = _InstructorRetryImported
 
         fallback_reasons: dict[type[BaseException], str] = {
             ValidationError: "validation_error",
-            InstructorRetryException: "validation_retry_exhausted",
+            _instructor_retry_exc_type: "validation_retry_exhausted",
         }
 
         reason = "provider_error"
@@ -403,7 +456,7 @@ def extract_notice_info(
                 reason = tag
                 break
 
-        if isinstance(e, (ValidationError, InstructorRetryException)):
+        if isinstance(e, ValidationError | _instructor_retry_exc_type):
             logger.warning(
                 "AI extraction failed with validation-related error; using fallback. reason=%s",
                 reason,
@@ -420,16 +473,16 @@ def extract_notice_info(
             envelope = ExtractionEnvelope(
                 status="fallback",
                 result=fallback_result,
-                meta={
-                    "pipeline_version": fallback_result.pipeline_version,
-                    "provider": provider,
-                    "model": model,
-                    "fallback_reason": reason,
-                    "html_raw_len": html_raw_len,
-                    "html_clean_len": html_clean_len,
-                    "image_count": image_count,
-                    "elapsed_ms": elapsed_ms,
-                },
+                meta=ExtractionRunMeta(
+                    pipeline_version=fallback_result.pipeline_version,
+                    provider=provider,
+                    model=model,
+                    fallback_reason=reason,
+                    html_raw_len=html_raw_len,
+                    html_clean_len=html_clean_len,
+                    image_count=image_count,
+                    elapsed_ms=elapsed_ms,
+                ),
             )
             increment(AI_EXTRACTION_FALLBACK_TOTAL)
             increment(AI_EXTRACTION_VALIDATION_ERROR_TOTAL)
@@ -437,7 +490,7 @@ def extract_notice_info(
                 "ai_extraction_completed",
                 extra={
                     "status": envelope.status,
-                    "fallback_reason": envelope.meta.get("fallback_reason") or "",
+                    "fallback_reason": envelope.meta.fallback_reason or "",
                     "html_raw_len": html_raw_len,
                     "html_clean_len": html_clean_len,
                 },
@@ -452,16 +505,20 @@ def extract_notice_info(
 
 def project_extraction_to_notice_fields(
     extraction: NoticeAIExtraction,
-    envelope_meta: dict[str, Any] | None = None,
-) -> dict[str, Any]:
+    envelope_meta: Mapping[str, Any] | None = None,
+) -> NoticeAIProjection:
     """
     NoticeAIExtraction → Notice 테이블 업데이트용 dict.
 
-    - ai_extracted_json: 전체 추출 결과 (JSON 직렬화 가능)
-    - dates: schedules를 list[dict]로 (Notice.dates)
-    - eligibility: eligibility_rules
-    - hashtags: hashtags
-    - taxonomy_rows: notice_taxonomy_mappings 행 단위 매핑(main_category, sub_category)
+    Args:
+        extraction: 투영할 추출 결과.
+        envelope_meta: 선택. 있으면 ai_extracted_json.metadata._envelope_meta에 저장한다.
+            일반적으로 pipeline_version, provider, model, fallback_reason,
+            html_raw_len, html_clean_len, image_count, elapsed_ms 및 중첩 dict ``usage``
+            (prompt_tokens, completion_tokens, total_tokens)를 포함한다.
+
+    Returns:
+        NoticeAIProjection: ai_extracted_json, dates, eligibility, hashtags, taxonomy_rows.
     """
     raw = extraction.model_dump(mode="json")
     if envelope_meta:

@@ -10,6 +10,7 @@ from urllib.parse import quote, unquote, urljoin, urlparse, urlunparse
 from bs4 import BeautifulSoup, Tag
 from requests.exceptions import RequestException
 
+from app.core.bs4_utils import as_tag
 from app.core.crawl_http import (
     HtmlTooLargeError,
     fetch_html,
@@ -17,6 +18,7 @@ from app.core.crawl_http import (
 )
 from app.core.crawler_config import CrawlerModuleSpec
 from app.services.crawlers.base import ScrapeResult
+from app.services.crawlers.typing_helpers import class_list_from_tag, ensure_str_attr
 
 logger = logging.getLogger(__name__)
 
@@ -54,25 +56,30 @@ def get_dongari_links(list_url: str) -> list[dict[str, Any]]:
         links: list[dict[str, Any]] = []
 
         for row in soup.find_all("div", class_="bbs-list-row"):
-            row_classes = row.get("class", []) or []
+            row_tag = as_tag(row)
+            if row_tag is None:
+                continue
+            row_classes = class_list_from_tag(row_tag)
             if "notice-row" in row_classes:
                 continue
-            a_tag = row.find("a")
+            a_tag = row_tag.find("a")
             if not a_tag or not isinstance(a_tag, Tag):
                 continue
-            href = a_tag.get("href", "")
+            href = ensure_str_attr(a_tag.get("href"))
             if not href or href == "#" or "javascript:" in href:
                 continue
             full_url = urljoin(list_url, href)
-            title_elem = row.find(class_=lambda c: c and "tit" in (c or ""))
-            if title_elem and title_elem.name != "a" and isinstance(title_elem, Tag):
-                title = title_elem.get_text(strip=True)
+            title_elem = row_tag.find(class_=lambda c: c and "tit" in (c or ""))
+            title_el = as_tag(title_elem)
+            if title_el is not None and title_el.name != "a":
+                title = title_el.get_text(strip=True)
             else:
                 title = a_tag.get_text(strip=True)
             if not title:
                 continue
-            num_elem = row.find(class_=lambda c: c and "num" in (c or ""))
-            num_text = num_elem.get_text(strip=True) if num_elem and isinstance(num_elem, Tag) else "일반"
+            num_elem = row_tag.find(class_=lambda c: c and "num" in (c or ""))
+            num_el = as_tag(num_elem)
+            num_text = num_el.get_text(strip=True) if num_el is not None else "일반"
             if not any(d["url"] == full_url for d in links):
                 links.append({"no": num_text, "title_hint": title, "url": full_url})
 
@@ -122,7 +129,7 @@ def scrape_dongari_detail(url: str) -> ScrapeResult:
             for idx, img in enumerate(content_div.find_all("img")):
                 if not isinstance(img, Tag):
                     continue
-                src = img.get("src", "")
+                src = ensure_str_attr(img.get("src"))
                 if not src:
                     continue
                 if src.startswith("data:image"):
@@ -140,7 +147,16 @@ def scrape_dongari_detail(url: str) -> ScrapeResult:
                         continue
                     unquoted_path = unquote(parsed.path)
                     encoded_path = quote(unquoted_path)
-                    safe_url = urlunparse((parsed.scheme, parsed.netloc, encoded_path, parsed.params, parsed.query, parsed.fragment))
+                    safe_url = urlunparse(
+                        (
+                            parsed.scheme,
+                            parsed.netloc,
+                            encoded_path,
+                            parsed.params,
+                            parsed.query,
+                            parsed.fragment,
+                        )
+                    )
                     fname = os.path.basename(unquoted_path)
                     if not any(d.get("data") == safe_url for d in images):
                         images.append({"type": "url", "data": safe_url, "name": fname or f"image_{idx + 1}.jpg"})
@@ -154,15 +170,27 @@ def scrape_dongari_detail(url: str) -> ScrapeResult:
 
         attachments: list[str] = []
         for fl in soup.find_all("dl", class_="bbs-file-list"):
-            for a_tag in fl.find_all("a"):
-                href = a_tag.get("href", "")
+            fl_tag = as_tag(fl)
+            if fl_tag is None:
+                continue
+            for raw_a in fl_tag.find_all("a"):
+                a_tag = as_tag(raw_a)
+                if a_tag is None:
+                    continue
+                href = ensure_str_attr(a_tag.get("href"))
                 if href and not href.startswith("#") and "javascript" not in href:
-                    fname = a_tag.get("download") or (a_tag.get_text(strip=True) if isinstance(a_tag, Tag) else "")
+                    fname = ensure_str_attr(a_tag.get("download")) or a_tag.get_text(strip=True)
                     fname = re.sub(r"\([\d.,]+\s*(KB|MB|GB|Bytes?)\)", "", fname, flags=re.IGNORECASE).strip()
                     if fname and fname not in attachments:
                         attachments.append(fname)
 
-        return ScrapeResult(title=title, date_str=date, html_content=content_html, images=images, attachments=attachments)
+        return ScrapeResult(
+            title=title,
+            date_str=date,
+            html_content=content_html,
+            images=images,
+            attachments=attachments,
+        )
     except RequestException:
         raise
     except Exception as e:

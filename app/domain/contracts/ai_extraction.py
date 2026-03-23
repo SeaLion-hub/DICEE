@@ -11,7 +11,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Annotated, Any
 
-from pydantic import BaseModel, ConfigDict, AfterValidator, Field, field_validator, model_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator, model_validator
 
 _DEPARTMENT_PLACEHOLDER_VALUES = frozenset(
     {"없음", "알 수 없음", "해당없음", "해당 없음", "-", "없음.", "알수없음"}

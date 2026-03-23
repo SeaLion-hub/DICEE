@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """
 AI 공지 추출 Streaming/Partial 설계 초안.
 
@@ -8,13 +6,16 @@ AI 공지 추출 Streaming/Partial 설계 초안.
 - 실제 엔드포인트/호출부는 후속 단계에서 연결한다.
 """
 
-from typing import Generator
+from __future__ import annotations
+
+from collections.abc import Generator
+from typing import Any
 
 from instructor import Partial  # type: ignore[import]
 from pydantic import BaseModel, Field
 
 from app.domain.contracts.ai_extraction import NoticeAIExtraction, NoticeCategory
-from app.services.ai.extractor import _get_instructor_client, EXTRACTOR_SYSTEM_PROMPT
+from app.services.ai.extractor import EXTRACTOR_SYSTEM_PROMPT, _get_instructor_client
 
 
 class NoticeExtractionDraft(BaseModel):
@@ -52,7 +53,7 @@ def stream_notice_extraction(
     # 제너레이터의 return 값으로 strict NoticeAIExtraction을 받을 수 있도록 설계
     return final_strict
     """
-    client = _get_instructor_client()
+    client: Any = _get_instructor_client()
 
     # NOTE: 현재는 설계 초안 수준으로, 실제 호출부에서는
     # app.services.ai_pipeline._clean_notice_html 등을 재사용해
@@ -70,7 +71,7 @@ def stream_notice_extraction(
     text = html_content[:100_000] or "(내용 없음)"
     urls = (image_urls or [])[:5]
     if not urls:
-        user_content = text
+        user_content: str | list[Any] = text
     else:
         user_content = [
             text,
@@ -96,7 +97,7 @@ def stream_notice_extraction(
 
     # 최종 strict 검증 단계: Draft → NoticeAIExtraction
     if final_model is None:
-        return NoticeAIExtraction()
+        return NoticeAIExtraction(target_departments=[])
 
     # 현재는 category/sub_category/summary 정도만 strict 모델에 반영하고,
     # 나머지 필드는 후속 단계에서 확장한다.

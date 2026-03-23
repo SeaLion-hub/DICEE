@@ -268,8 +268,9 @@ def _collect_payloads_sync(
     ?숆린: Bounded in-flight(K)濡?留곹겕 泥섎━. Semaphore + as_completed濡??쒖뼱 ?⑥닚??
     O(K) 硫붾え由? ?뚯꽌/援ъ“ ?덉쇅???꾧퀎移?珥덇낵 ??CrawlThresholdExceeded raise.
     """
-    if seen is None:
-        seen = set()
+    seen_for_dedup: set[str] | _BoundedSeenSet | _RedisSeenSet = (
+        seen if seen is not None else set()
+    )
     rate_limiter = get_host_rate_limiter_sync(delay_sec)
     tracker = CrawlErrorTracker()
     remaining = deque(links)
@@ -281,7 +282,7 @@ def _collect_payloads_sync(
             post = remaining.popleft()
             no = post.get("no")
             if no is not None and no != "":
-                if no in seen or no in in_flight_external_ids:
+                if no in seen_for_dedup or no in in_flight_external_ids:
                     increment(CRAWL_DROP_TOTAL, 1, labels={"reason": DROP_REASON_PRE_DEDUP})
                     continue
             if no is not None and no != "":
@@ -317,7 +318,7 @@ def _collect_payloads_sync(
                         result.data,
                         result.exc,
                         college_id,
-                        seen,
+                        seen_for_dedup,
                         tracker,
                         ctx,
                     )

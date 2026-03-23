@@ -10,6 +10,7 @@ from app.core.oauth_state import consume_state, store_state
 from app.core.redis import BlocklistUnavailableError
 from app.services.auth_service import AuthError, create_jwt_pair, verify_access_token
 from fastapi.testclient import TestClient
+from pydantic import SecretStr
 
 
 @pytest.mark.asyncio
@@ -281,3 +282,33 @@ def test_production_requires_user_id_hmac_key() -> None:
 
         with pytest.raises(ValueError, match="Production environment requires USER_ID_HMAC_KEY"):
             Settings()  # type: ignore[reportCallIssue]
+
+
+def test_compute_user_id_hash_production_empty_key_raises() -> None:
+    """런타임: production + non-migrate에서 키 없으면 ValueError (ip_hmac 정책 정렬)."""
+    from app.core.user_id_hmac import compute_user_id_hash
+
+    with patch.multiple(
+        "app.core.user_id_hmac.settings",
+        environment="production",
+        app_entry="api",
+        user_id_hmac_key=SecretStr(""),
+    ):
+        with pytest.raises(ValueError, match="USER_ID_HMAC_KEY is required in production"):
+            compute_user_id_hash(uuid.uuid4())
+
+
+def test_compute_user_id_hash_production_migrate_allows_sha256_fallback() -> None:
+    """APP_ENTRY=migrate는 Settings와 동일하게 빈 키 허용; 해시는 SHA256 폴백."""
+    from app.core.user_id_hmac import compute_user_id_hash
+
+    uid = uuid.UUID("00000000-0000-7000-8000-000000000099")
+    with patch.multiple(
+        "app.core.user_id_hmac.settings",
+        environment="production",
+        app_entry="migrate",
+        user_id_hmac_key=SecretStr(""),
+    ):
+        out = compute_user_id_hash(uid)
+    assert len(out) == 64
+    assert out.islower()

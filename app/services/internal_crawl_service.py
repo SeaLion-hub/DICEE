@@ -166,13 +166,14 @@ class InternalCrawlService:
                 result_kind = TriggerCrawlResultKind.partial_failure
             else:
                 result_kind = TriggerCrawlResultKind.success
-                # 멱등 캐시: 브로커 enqueue 실패(failed)가 없으면 저장. 락 스킵(skipped)만 있는 경우에도
-                # 동일 키 재요청 시 동일 payload로 수렴하도록 허용(부분 성공 캐시).
+                # 멱등 캐시: 실제 enqueue가 1건 이상일 때만 저장. enqueue 0·skipped만이면 캐시하지 않아
+                # 동일 키로 재시도 시 락 획득 후 다시 시도 가능(클라이언트 stuck 방지).
                 if (
                     claimed
                     and self._redis is not None
                     and key_stripped is not None
                     and not has_failed
+                    and len(task_ids) > 0
                     and out
                 ):
                     await set_trigger_idempotency_result(self._redis, key_stripped, idempotency_scope, out)

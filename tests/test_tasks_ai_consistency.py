@@ -4,10 +4,9 @@ import uuid
 from unittest.mock import MagicMock, patch
 
 import pytest
-from requests.exceptions import RequestException
-
 from app.domain.contracts.ai_extraction import NoticeAIExtraction, NoticeCategory
 from app.services.tasks import process_notice_ai_task
+from requests.exceptions import RequestException
 
 
 def test_process_notice_ai_task_manual_edited_calls_update_with_existing_json_only() -> None:

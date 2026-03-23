@@ -280,8 +280,8 @@ def test_trigger_crawl_unknown_college_then_same_idempotency_key_succeeds(client
         app.dependency_overrides.pop(get_redis_trigger_lock, None)
 
 
-async def test_internal_crawl_idempotency_caches_when_skipped_only(monkeypatch):
-    """락 미획득으로 skipped만 있고 failed 없으면 멱등 결과를 Redis에 저장한다."""
+async def test_internal_crawl_idempotency_does_not_cache_when_skipped_only(monkeypatch):
+    """enqueue 0·skipped만 있으면 멱등 결과를 저장하지 않아 동일 키 재시도가 가능하다."""
     from unittest.mock import AsyncMock
 
     from app.core.crawler_config import COLLEGE_CODE_TO_MODULE
@@ -331,5 +331,5 @@ async def test_internal_crawl_idempotency_caches_when_skipped_only(monkeypatch):
     cmd = TriggerCrawlCmd(college_code=code, idempotency_key="k-skip-cache", client_ip="127.0.0.1")
     result = await svc.trigger(cmd)
     assert result.result_kind == TriggerCrawlResultKind.success
-    assert len(captured) == 1
-    assert "skipped" in captured[0]
+    assert len(captured) == 0
+    assert "skipped" in result.payload

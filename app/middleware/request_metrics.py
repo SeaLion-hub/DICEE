@@ -1,4 +1,8 @@
-"""API 골든 시그널 미들웨어. request_total, request_error_total, request_duration_seconds. 라벨: endpoint_template, status_class, method만."""
+"""API 골든 시그널 미들웨어.
+
+request_total, request_error_total, request_duration_seconds.
+라벨: endpoint_template, status_class, method만.
+"""
 
 import re
 import time

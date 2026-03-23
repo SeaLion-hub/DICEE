@@ -1,9 +1,7 @@
 """HTML 전처리(_clean_notice_html, slim_html) 품질·회귀 테스트."""
 
-import pytest
 
 from app.services.ai_pipeline import _clean_notice_html
-
 
 SHORT_NOTICE_HTML = """
 <!DOCTYPE html>

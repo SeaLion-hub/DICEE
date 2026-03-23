@@ -5,6 +5,20 @@
 
 from collections.abc import Sequence
 
+from bs4 import Tag
+
+
+def class_list_from_tag(tag: Tag) -> list[str]:
+    """태그의 class 속성을 str 목록으로 정규화한다 (mypy·런타임 안전)."""
+    raw = tag.get("class")
+    if raw is None:
+        return []
+    if isinstance(raw, str):
+        return [raw]
+    if isinstance(raw, list | tuple):
+        return [str(x) for x in raw]
+    return [str(raw)]
+
 
 def first_element_str(seq: Sequence[str] | str | None, *, default: str = "") -> str:
     """

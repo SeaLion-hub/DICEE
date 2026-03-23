@@ -131,6 +131,10 @@
 * `CHECK (ai_extracted_json IS NULL OR (jsonb_typeof(ai_extracted_json) = 'object'))`
 
 * **GIN Index**: `eligibility`, `hashtags` (fastupdate=on, gin_pending_list_limit=4MB)
+* **Partial list indexes** (Alembic 008 초기 정의 → 011에서 `id DESC` tie-break 추가): `deleted_at IS NULL`인 행만 대상으로, 애플리케이션 목록 정렬 `ORDER BY published_at DESC NULLS LAST, created_at DESC, id DESC`와 정합.
+  * `ix_notices_list_by_college`: `(college_id, published_at DESC NULLS LAST, created_at DESC, id DESC) WHERE deleted_at IS NULL`
+  * `ix_notices_list_global`: `(published_at DESC NULLS LAST, created_at DESC, id DESC) WHERE deleted_at IS NULL`
+* **기타 복합 인덱스**: `ix_notices_college_published (college_id, published_at)` 등은 ORM/초기 마이그레이션에 정의된 경로로, 목록용 partial 인덱스와 병행될 수 있다(중복은 `EXPLAIN`으로 정리 여부 판단).
 * **이미지 저장**: 공지 이미지는 스토리지(S3/로컬)에 파일로 업로드하고, `images` JSONB에는 URL만 저장. base64는 크롤 파이프라인에서 업로드 후 URL로 치환.
 * **taxonomy 저장 정책**: 단일 대표 컬럼(`notices.category`, `notices.sub_category`)은 사용하지 않는다. 대분류-소분류는 `notice_taxonomy_mappings`에 행 단위로 저장한다.
 
@@ -330,6 +334,7 @@ INNER JOIN colleges c ON n.college_id = c.id AND c.deleted_at IS NULL;
 * **대상**: 제목(title), 카테고리(category), 단과대(college_id).
 * **인덱싱**: notices 테이블의 title 컬럼에 대해 PostgreSQL **Trigram Index (pg_trgm)**를 생성하여 본문 검색이 아닌 메타데이터 기반의 접미사/부분 일치 검색은 DB 내에서 즉시 처리 가능하도록 지원한다.
 * **DDL**: `CREATE EXTENSION IF NOT EXISTS pg_trgm;` 후 `CREATE INDEX idx_notices_title_trgm ON notices USING gin (title gin_trgm_ops);`
+* **구현 시점**: 위 확장·인덱스 및 리포지토리 검색 조건은 **공지 목록/검색 API에서 제목(메타데이터) 조건 검색을 도입할 때** Alembic·코드로 적용한다. 공지 read-through Redis 캐시·무효화 정책도 동일 기능 도입 시 함께 설계한다(현재 read_cache는 내부 통계 등 전용).
 
 ---
 
@@ -345,4 +350,4 @@ INNER JOIN colleges c ON n.college_id = c.id AND c.deleted_at IS NULL;
 
 *(End of Document - Ready for Production Drop)*
 
-Quality Gates (2026-03-19): `pytest tests/test_ai_pipeline_schema.py tests/test_tasks_ai_consistency.py tests/test_ai_metrics.py tests/test_ai_html_cleaning.py tests/test_ai_extraction_domain.py` → 51 passed, 1 skipped.
+Quality Gates (2026-03-23): `pytest` (전체) → 285 passed, 3 skipped.

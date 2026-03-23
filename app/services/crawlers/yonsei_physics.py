@@ -10,6 +10,7 @@ from urllib.parse import quote, unquote, urljoin, urlparse, urlunparse
 from bs4 import BeautifulSoup, Tag
 from requests.exceptions import RequestException
 
+from app.core.bs4_utils import as_tag
 from app.core.crawl_http import (
     HtmlTooLargeError,
     fetch_html,
@@ -17,6 +18,7 @@ from app.core.crawl_http import (
 )
 from app.core.crawler_config import CrawlerModuleSpec
 from app.services.crawlers.base import ScrapeResult
+from app.services.crawlers.typing_helpers import class_list_from_tag, ensure_str_attr
 
 logger = logging.getLogger(__name__)
 
@@ -54,13 +56,16 @@ def get_physics_links(list_url: str) -> list[dict[str, Any]]:
         links: list[dict[str, Any]] = []
 
         for row in soup.find_all("tr"):
-            row_classes = row.get("class", []) or []
+            row_tag = as_tag(row)
+            if row_tag is None:
+                continue
+            row_classes = class_list_from_tag(row_tag)
             if "bl_notice" in row_classes:
                 continue
-            a_tag = row.find("a")
+            a_tag = row_tag.find("a")
             if not a_tag or not isinstance(a_tag, Tag):
                 continue
-            href = a_tag.get("href", "")
+            href = ensure_str_attr(a_tag.get("href"))
             if not href or href == "#" or "javascript:" in href:
                 continue
             full_url = urljoin(list_url, href)
@@ -68,7 +73,7 @@ def get_physics_links(list_url: str) -> list[dict[str, Any]]:
             if not title:
                 continue
             num_text = "일반"
-            tds = row.find_all("td")
+            tds = row_tag.find_all("td")
             if tds and isinstance(tds[0], Tag):
                 first_td_text = tds[0].get_text(strip=True)
                 if first_td_text.isdigit():
@@ -103,11 +108,14 @@ def scrape_physics_detail(url: str) -> ScrapeResult:
             if h3_tag and isinstance(h3_tag, Tag):
                 title = h3_tag.get_text(strip=True)
             info_ul = header_div.find("ul", class_="bw_info")
-            if info_ul:
+            if info_ul and isinstance(info_ul, Tag):
                 for li in info_ul.find_all("li"):
-                    dt_span = li.find("span", class_="dt")
+                    li_tag = as_tag(li)
+                    if li_tag is None:
+                        continue
+                    dt_span = li_tag.find("span", class_="dt")
                     if dt_span and "작성일" in dt_span.get_text():
-                        dd_span = li.find("span", class_="dd")
+                        dd_span = li_tag.find("span", class_="dd")
                         if dd_span and isinstance(dd_span, Tag):
                             date = normalize_date(dd_span.get_text(strip=True))
                         break
@@ -120,7 +128,7 @@ def scrape_physics_detail(url: str) -> ScrapeResult:
             for idx, img in enumerate(content_div.find_all("img")):
                 if not isinstance(img, Tag):
                     continue
-                src = img.get("src", "")
+                src = ensure_str_attr(img.get("src"))
                 if not src:
                     continue
                 if src.startswith("data:image"):
@@ -138,7 +146,16 @@ def scrape_physics_detail(url: str) -> ScrapeResult:
                         continue
                     unquoted_path = unquote(parsed.path)
                     encoded_path = quote(unquoted_path)
-                    safe_url = urlunparse((parsed.scheme, parsed.netloc, encoded_path, parsed.params, parsed.query, parsed.fragment))
+                    safe_url = urlunparse(
+                        (
+                            parsed.scheme,
+                            parsed.netloc,
+                            encoded_path,
+                            parsed.params,
+                            parsed.query,
+                            parsed.fragment,
+                        )
+                    )
                     fname = os.path.basename(unquoted_path)
                     if not any(d.get("data") == safe_url for d in images):
                         images.append({"type": "url", "data": safe_url, "name": fname or f"image_{idx + 1}.jpg"})
@@ -152,15 +169,24 @@ def scrape_physics_detail(url: str) -> ScrapeResult:
 
         attachments: list[str] = []
         files_div = soup.find("div", class_="bw_files")
-        if files_div:
-            for a_tag in files_div.find_all("a"):
-                href = a_tag.get("href", "")
+        if files_div and isinstance(files_div, Tag):
+            for raw_a in files_div.find_all("a"):
+                a_tag = as_tag(raw_a)
+                if a_tag is None:
+                    continue
+                href = ensure_str_attr(a_tag.get("href"))
                 if href and not href.startswith("#") and "javascript" not in href:
-                    fname = a_tag.get_text(strip=True) if isinstance(a_tag, Tag) else ""
+                    fname = a_tag.get_text(strip=True)
                     if fname and fname not in attachments:
                         attachments.append(fname)
 
-        return ScrapeResult(title=title, date_str=date, html_content=content_html, images=images, attachments=attachments)
+        return ScrapeResult(
+            title=title,
+            date_str=date,
+            html_content=content_html,
+            images=images,
+            attachments=attachments,
+        )
     except RequestException:
         raise
     except Exception as e:

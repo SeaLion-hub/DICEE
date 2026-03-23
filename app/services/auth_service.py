@@ -5,10 +5,11 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from functools import lru_cache
 from typing import Any, cast
-from urllib.parse import unquote, urlparse
+from urllib.parse import unquote
 
 import httpx
 import jwt
+from httpx import InvalidURL
 from pyjwt_key_fetcher import AsyncKeyFetcher
 from redis.asyncio import Redis as RedisAsyncio
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -316,25 +317,42 @@ async def revoke_refresh_tokens_for_user(session: AsyncSession, user_id: uuid.UU
 
 def _normalize_redirect_uri(uri: str) -> str:
     """
-    redirect_uri 정규화: scheme·host 유지, path만 unquote, query·fragment·userinfo 거부.
-    보안 상 유의: unquote 1회만(path에 '%'가 남으면 거부).
+    redirect_uri 정규화: httpx URL 파싱, 호스트 IDNA(punycode)·기본 포트 생략과 일치.
+    query·fragment·userinfo 거부, path는 unquote 1회만(잔여 '%'·'?·#' 포함 시 거부).
     """
     s = (uri or "").strip()
     if not s:
         raise AuthError("redirect_uri required")
-    parsed = urlparse(s)
-    if (parsed.scheme or "").lower() not in ("http", "https"):
+    try:
+        u = httpx.URL(s)
+    except InvalidURL as e:
+        raise AuthError("redirect_uri invalid or malformed") from e
+    if not u.is_absolute_url:
         raise AuthError("redirect_uri must be http or https")
-    if parsed.username or parsed.password or not parsed.hostname:
+    scheme = (u.scheme or "").lower()
+    if scheme not in ("http", "https"):
+        raise AuthError("redirect_uri must be http or https")
+    if u.username or u.password:
         raise AuthError("redirect_uri host is invalid")
-    if parsed.query or parsed.fragment:
+    if not u.host or u.raw_host is None:
+        raise AuthError("redirect_uri host is invalid")
+    if u.query or u.fragment:
         raise AuthError("redirect_uri must not contain query or fragment")
-    host = parsed.hostname.lower()
-    port = f":{parsed.port}" if parsed.port else ""
-    path = unquote(parsed.path or "/").rstrip("/") or "/"
-    if "%" in path:
+    raw_path = u.raw_path or b"/"
+    if b"?" in raw_path or b"#" in raw_path:
+        raise AuthError("redirect_uri must not contain query or fragment")
+    path_encoded = raw_path.decode("latin-1")
+    path = unquote(path_encoded or "/").rstrip("/") or "/"
+    if "%" in path or "?" in path or "#" in path:
         raise AuthError("redirect_uri invalid encoding")
-    return f"{parsed.scheme.lower()}://{host}{port}{path}"
+    host_raw = u.raw_host.decode("ascii").lower()
+    if ":" in host_raw:
+        host_part = f"[{host_raw}]"
+    else:
+        host_part = host_raw
+    if u.port is not None:
+        host_part = f"{host_part}:{u.port}"
+    return f"{scheme}://{host_part}{path}"
 
 
 @lru_cache(maxsize=1)

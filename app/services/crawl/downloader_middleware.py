@@ -347,8 +347,8 @@ class _AsyncHeadersMiddleware:
 
 
 def _retry_backoff_seconds(*, attempt: int, base: float, cap: float) -> float:
-    exp = min(cap, base * (2 ** max(0, attempt - 1)))
-    jitter = random.uniform(0.0, min(0.5, exp))
+    exp: float = float(min(cap, base * (2 ** max(0, attempt - 1))))
+    jitter = float(random.uniform(0.0, min(0.5, exp)))
     return exp + jitter
 
 

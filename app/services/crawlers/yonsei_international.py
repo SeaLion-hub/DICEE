@@ -10,6 +10,7 @@ from urllib.parse import quote, unquote, urljoin, urlparse, urlunparse
 from bs4 import BeautifulSoup, Tag
 from requests.exceptions import RequestException
 
+from app.core.bs4_utils import as_tag
 from app.core.crawl_http import (
     HtmlTooLargeError,
     fetch_html,
@@ -17,6 +18,7 @@ from app.core.crawl_http import (
 )
 from app.core.crawler_config import CrawlerModuleSpec
 from app.services.crawlers.base import ScrapeResult
+from app.services.crawlers.typing_helpers import ensure_str_attr
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +43,13 @@ def normalize_date(date_str: str) -> str:
         return date_str
 
 
+def _international_li_has_layout_class(c: object) -> bool:
+    if not c:
+        return False
+    classes = c if isinstance(c, list) else [c]
+    return "img" in classes or "no_img" in classes
+
+
 def get_international_links(list_url: str) -> list[dict[str, Any]]:
     try:
         try:
@@ -53,14 +62,14 @@ def get_international_links(list_url: str) -> list[dict[str, Any]]:
         soup = BeautifulSoup(text, "html.parser")
         links: list[dict[str, Any]] = []
 
-        items = soup.find_all("li", class_=lambda c: c and ("img" in (c if isinstance(c, list) else [c]) or "no_img" in (c if isinstance(c, list) else [c])))
+        items = soup.find_all("li", class_=_international_li_has_layout_class)
         for idx, item in enumerate(items):
             if not isinstance(item, Tag):
                 continue
             a_tag = item.find("a")
             if not a_tag or not isinstance(a_tag, Tag):
                 continue
-            href = a_tag.get("href", "")
+            href = ensure_str_attr(a_tag.get("href"))
             if not href or href == "#" or "javascript:" in href:
                 continue
             full_url = urljoin(list_url, href)
@@ -72,7 +81,8 @@ def get_international_links(list_url: str) -> list[dict[str, Any]]:
             if not title:
                 continue
             num_elem = item.find(class_=lambda c: c and "num" in (c or ""))
-            num_text = num_elem.get_text(strip=True) if num_elem and isinstance(num_elem, Tag) else str(idx + 1)
+            num_el = as_tag(num_elem)
+            num_text = num_el.get_text(strip=True) if num_el is not None else str(idx + 1)
             if not any(d["url"] == full_url for d in links):
                 links.append({"no": num_text, "title_hint": title, "url": full_url})
 
@@ -128,7 +138,7 @@ def scrape_international_detail(url: str) -> ScrapeResult:
             for idx, img in enumerate(content_div.find_all("img")):
                 if not isinstance(img, Tag):
                     continue
-                src = img.get("src", "")
+                src = ensure_str_attr(img.get("src"))
                 if not src:
                     continue
                 if src.startswith("data:image"):
@@ -146,7 +156,16 @@ def scrape_international_detail(url: str) -> ScrapeResult:
                         continue
                     unquoted_path = unquote(parsed.path)
                     encoded_path = quote(unquoted_path)
-                    safe_url = urlunparse((parsed.scheme, parsed.netloc, encoded_path, parsed.params, parsed.query, parsed.fragment))
+                    safe_url = urlunparse(
+                        (
+                            parsed.scheme,
+                            parsed.netloc,
+                            encoded_path,
+                            parsed.params,
+                            parsed.query,
+                            parsed.fragment,
+                        )
+                    )
                     fname = os.path.basename(unquoted_path)
                     if not any(d.get("data") == safe_url for d in images):
                         images.append({"type": "url", "data": safe_url, "name": fname or f"image_{idx + 1}.jpg"})
@@ -159,16 +178,28 @@ def scrape_international_detail(url: str) -> ScrapeResult:
             content_html = "(본문 영역을 찾을 수 없습니다)"
 
         attachments: list[str] = []
-        for file_div in soup.find_all("div", class_="file_txt"):
-            for a_tag in file_div.find_all("a"):
-                href = a_tag.get("href", "")
+        for raw_fd in soup.find_all("div", class_="file_txt"):
+            file_div = as_tag(raw_fd)
+            if file_div is None:
+                continue
+            for raw_a in file_div.find_all("a"):
+                a_tag = as_tag(raw_a)
+                if a_tag is None:
+                    continue
+                href = ensure_str_attr(a_tag.get("href"))
                 if href and not href.startswith("#") and "javascript" not in href:
                     fname = a_tag.get_text(separator=" ", strip=True).strip()
                     fname = re.sub(r"\([\d.,]+\s*(KB|MB|GB|Bytes?)\)", "", fname, flags=re.IGNORECASE).strip()
                     if fname and fname not in attachments:
                         attachments.append(fname)
 
-        return ScrapeResult(title=title, date_str=date, html_content=content_html, images=images, attachments=attachments)
+        return ScrapeResult(
+            title=title,
+            date_str=date,
+            html_content=content_html,
+            images=images,
+            attachments=attachments,
+        )
     except RequestException:
         raise
     except Exception as e:
