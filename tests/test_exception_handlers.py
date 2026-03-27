@@ -71,3 +71,41 @@ async def test_sanitize_5xx_replaces_body_without_forwarding_unsafe_headers():
     assert response.headers.get("connection") is None
     assert response.headers.get("content-length") != "999"
     assert "Internal server error" in body
+
+
+async def test_sanitize_5xx_adds_retry_after_on_503_when_missing():
+    """503 치환 시 원본에 Retry-After가 없으면 기본 재시도 힌트를 붙인다."""
+    from app.middleware.sanitize_5xx import Sanitize5xxMiddleware
+    from starlette.requests import Request
+    from starlette.responses import PlainTextResponse
+
+    async def _noop_app(scope, receive, send):
+        return None
+
+    middleware = Sanitize5xxMiddleware(_noop_app)
+    request = Request(
+        {
+            "type": "http",
+            "http_version": "1.1",
+            "method": "GET",
+            "path": "/x",
+            "raw_path": b"/x",
+            "headers": [],
+            "query_string": b"",
+            "client": ("127.0.0.1", 1234),
+            "server": ("testserver", 80),
+            "scheme": "http",
+        }
+    )
+
+    async def _call_next(_request):
+        return PlainTextResponse(
+            "Traceback: sensitive",
+            status_code=503,
+            headers={"X-Test-Header": "ok"},
+        )
+
+    response = await middleware.dispatch(request, _call_next)
+    assert response.status_code == 503
+    assert response.headers.get("retry-after") == "60"
+    assert response.headers.get("x-test-header") == "ok"

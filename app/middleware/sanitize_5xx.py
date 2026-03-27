@@ -10,6 +10,9 @@ from starlette.responses import JSONResponse, Response
 
 logger = logging.getLogger(__name__)
 
+# 503 치환 응답에 원본에 Retry-After가 없을 때 권장 재시도 간격(초).
+_DEFAULT_503_RETRY_AFTER = "60"
+
 # 5xx 응답에서 허용하는 최소 안전 본문. 이 구조가 아니거나 traceback/예외 메시지 의심 시 교체.
 _SAFE_500_BODY = {"detail": "Internal server error", "code": "INTERNAL_ERROR"}
 _SENSITIVE_MARKERS = ("Traceback", "File ", '.py", line ', "Exception:", "Error:")
@@ -74,10 +77,13 @@ class Sanitize5xxMiddleware(BaseHTTPMiddleware):
             except (json.JSONDecodeError, TypeError):
                 pass
             # 민감 마커 포함 또는 비표준 구조면 안전 본문으로 교체
+            safe_headers = _filtered_error_headers(dict(response.headers))
+            if response.status_code == 503 and not any(k.lower() == "retry-after" for k in safe_headers):
+                safe_headers = {**safe_headers, "Retry-After": _DEFAULT_503_RETRY_AFTER}
             return JSONResponse(
                 status_code=response.status_code,
                 content=_SAFE_500_BODY,
-                headers=_filtered_error_headers(dict(response.headers)),
+                headers=safe_headers,
             )
         except Exception as e:
             logger.warning("Sanitize5xxMiddleware: %s", e, exc_info=True)

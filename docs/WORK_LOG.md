@@ -48,6 +48,7 @@
 ---
 ## 2026-03-28
 
+- [Auth·미들웨어] `app/api/v1/auth.py`: `get_verified_access`·`VerifiedAccess`로 JWT 검증 단일화, `Annotated` 의존성 정리, 모든 503에 `Retry-After`(기본 60초) 부여; `POST /logout`은 `response_model=None`으로 204 등록 안전 처리. `sanitize_5xx`: 503 치환 응답에 `Retry-After` 보강. `tests/test_exception_handlers.py` 503 헤더 검증 추가. 검증: `pytest` 통과.
 - [로깅] `structlog` 컨텍스트 바인딩을 강화: `app/core/logging_context.py`에서 `structlog.contextvars`까지 함께 bind/clear, `RequestIDMiddleware` 종료 시 컨텍스트 자동 clear, 크롤 작업 컨텍스트(phase/college_code/run_id/task_id) 바인딩 추가. `docs/DEPLOYMENT.md`에 `LOG_FORMAT`(pretty/json) staging→prod 전환 절차 문서화. 검증: `ruff`, `mypy`, `pytest` 통과.
 - [로깅·크롤 안정화] `logging_context`의 status/duration 타입을 `int|None`으로 통일하고 clear를 `None` 리셋으로 정리, structlog bind/clear fail-open에 1회 warning+누적 debug 관측성 추가; `pipeline_sync` chunk finalize/dispatch 경계 분리, `run_crawl_job_sync` 반환을 `(upserted, enqueued_ai)` 계약으로 수정, sanitize/clear 누수/DB 실패→Redis fallback/반환 계약 테스트 보강 후 `pytest` 전체(326 passed, 3 skipped) 통과.
 - [품질 게이트] `docs/RUNBOOK_DEPLOY.md`(GitHub 보호·Railway·Sentry·LOG_FORMAT·expand/contract·pip-audit), `tests/CRITICAL_PATHS.md`, `notice_public_service`·`logging_safety` 단위 테스트, `integration` pytest 마커, coverage에서 `yonsei_*` 크롤러 omit, CI `cov-fail-under=55`·`pip-audit --local`+allowlist·주간 `sca-weekly.yml`. README·DEPLOYMENT 링크. 검증: `pytest` 전체 통과.
