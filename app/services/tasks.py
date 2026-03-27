@@ -16,6 +16,7 @@ from requests.exceptions import RequestException
 
 from app.core.celery_app import app
 from app.core.config import settings
+from app.core.url_safety import is_safe_worker_http_url
 from app.core.database_sync import get_sync_session
 from app.core.metrics import (
     AI_ENQUEUE_FAILED_TOTAL,
@@ -85,12 +86,17 @@ def _get_notice_html_for_ai(notice) -> str:
     if getattr(notice, "notice_content", None) and getattr(notice.notice_content, "content_url", None):
         url = (notice.notice_content.content_url or "").strip()
     if url and (url.startswith("http://") or url.startswith("https://")):
-        try:
-            resp = requests.get(url, timeout=NOTICE_HTML_FETCH_TIMEOUT)
-            resp.raise_for_status()
-            return resp.text or ""
-        except RequestException:
-            raise
+        if not is_safe_worker_http_url(url):
+            logger.warning(
+                "Skipping notice HTML fetch: URL blocked by worker safety policy (notice content_url)",
+            )
+        else:
+            try:
+                resp = requests.get(url, timeout=NOTICE_HTML_FETCH_TIMEOUT)
+                resp.raise_for_status()
+                return resp.text or ""
+            except RequestException:
+                raise
     title = getattr(notice, "title", None) or ""
     return f"<title>{title}</title>" if title else ""
 
@@ -108,7 +114,7 @@ def _get_notice_image_urls_for_ai(notice, max_count: int = MAX_IMAGES_FOR_AI) ->
         if not isinstance(item, dict):
             continue
         u = (item.get("url") or item.get("src") or "").strip()
-        if u and (u.startswith("http://") or u.startswith("https://")):
+        if u and (u.startswith("http://") or u.startswith("https://")) and is_safe_worker_http_url(u):
             urls.append(u)
     return urls
 

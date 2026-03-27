@@ -43,7 +43,7 @@ from app.domain.contracts.internal_contracts import (
 )
 from app.schemas.internal import CrawlRunStatsItem, CrawlStatsResponse
 from app.services.crawl_stats_service import CrawlStatsService
-from app.services.internal_crawl_service import _normalize_idempotency_key
+from app.services.internal_crawl_service import normalize_trigger_idempotency_key
 
 router = APIRouter(prefix="/internal", tags=["internal"])
 logger = logging.getLogger(__name__)
@@ -269,7 +269,7 @@ async def post_trigger_crawl(
             headers=_rate_limit_headers(),
         )
 
-    key_stripped = _normalize_idempotency_key(idempotency_key)
+    key_stripped = normalize_trigger_idempotency_key(idempotency_key)
     cmd = TriggerCrawlCmd(
         college_code=college_code,
         idempotency_key=key_stripped,

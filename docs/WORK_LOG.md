@@ -48,6 +48,7 @@
 ## 2026-03-27
 
 - [도구·워크플로] gstack를 `.agents/skills/gstack`에 벤더링하고 Codex 형식 스킬·형제 링크를 두었으며 `GSTACK.md`·`AGENTS.md`·`tests/test_gstack_adoption.py`·`.gitignore`(node_modules·browse/dist 제외)·`workflow.mdc`/`todo.md` 정렬로 도입·검증 경로를 고정. 클론 후 Windows는 Git Bash에서 `PATH`에 Node+Bun 두고 `./setup --host codex` 필요. 영향: 에이전트 기본 납품 프로세스는 gstack, CI·아키텍처·pytest 게이트는 동일.
+- [리뷰 후 보완] `normalize_trigger_idempotency_key` 공개로 라우터의 private import 제거, `app/core/url_safety.is_safe_worker_http_url`로 Celery 워커의 `content_url`/이미지 URL GET 전 명백한 내부·링크로컬 대상 차단(SSRF 완화, DNS 재귀 미검사 한계는 주석 명시), `tests/test_url_safety.py` 추가. 검증: `pytest tests/test_url_safety.py tests/test_trigger_idempotency.py` 통과.
 
 ## 2026-03-23
 
