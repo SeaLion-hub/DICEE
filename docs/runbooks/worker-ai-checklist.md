@@ -74,6 +74,18 @@ celery -A app.core.celery_app:app worker -l info -O fair --pool=solo -Q critical
   - [ ] `alembic current` 재확인
   - [ ] 테이블 존재 여부 재확인 후 워커 재시작
 
+### D. Alembic 상태 불일치(업그레이드 로그와 current가 다름)
+
+- 증상: `alembic upgrade head` 로그에는 upgrade가 보이는데 `alembic current`가 이전 revision에 머무름
+- 점검:
+  - [ ] 워커/CLI가 같은 `DATABASE_URL`을 보는지 확인
+  - [ ] 워커 연결 DB에서 `notice_taxonomy_mappings` 실제 존재 여부 확인
+- 응급 복구(로컬/디버그 전용):
+  - [ ] `NoticeTaxonomyMapping.__table__.create(bind=..., checkfirst=True)`로 테이블을 보장
+  - [ ] 워커 재시작 후 AI 태스크 재처리
+- 주의:
+  - [ ] 이 방법은 임시 복구이며, 이후 원인(DB URL/마이그레이션 경로)을 반드시 정리한다
+
 ---
 
 ## 4) 미리보기 검증

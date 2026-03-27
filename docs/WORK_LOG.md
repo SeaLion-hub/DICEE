@@ -49,6 +49,7 @@
 
 - [검수 페이지 경량화] `app/api/internal.py`, `app/services/notice_preview_service.py`에서 공대 공개/내부 preview의 `본문(요약)` 컬럼·본문 fetch 로직을 제거하고 `본문 URL` 중심 검수로 단순화. 결과: 로컬 파일 부재로 인한 요약 오탐 노이즈 감소, 페이지 렌더/네트워크 오버헤드 축소.
 - [운영 런북] `docs/runbooks/worker-ai-checklist.md` 추가. 워커/AI 실행을 사전점검→실행→재처리→오류(404/429/스키마) 대응→검수→원복 순서 체크리스트로 표준화.
+- [운영 런북 보강] `docs/runbooks/worker-ai-checklist.md`에 "Alembic 상태 불일치(upgrade 로그와 current 불일치)" 점검 및 로컬/디버그 한정 응급 복구 절차(`checkfirst=True` 테이블 보장, 워커 재시작, 원인 추적) 추가.
 
 ---
 ## 2026-03-23
