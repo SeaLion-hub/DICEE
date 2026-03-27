@@ -195,7 +195,7 @@ def test_trigger_crawl_failed_enqueue_clears_idempotency_claim(client, monkeypat
             params={"college_code": "engineering"},
             headers=headers,
         )
-        assert first.status_code == 200, first.json()
+        assert first.status_code == 503, first.json()
         assert first.json().get("code") in ("ALL_ENQUEUES_FAILED", "PARTIAL_ENQUEUE_FAILURE")
         second = client.post(
             "/internal/trigger-crawl",

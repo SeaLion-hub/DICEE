@@ -164,6 +164,7 @@
 - [x] taxonomy 영속 구조를 `notice_taxonomy_mappings` 정규화 테이블로 전환 (`alembic/versions/010_notice_taxonomy_normalization.py`)
 - [x] taxonomy 핵심 케이스 5종 테스트 추가 (`tests/test_ai_pipeline_schema.py`)
 - [x] 지정 AI 테스트 스위트 통과(최신: 51 passed, 1 skipped)
+- [x] AI 결과 DB 반영 직후 후행 파이프라인 훅: 구조화 로그 `notice_ai_extraction_completed`, 메트릭 `notice_ai_extraction_completed_total`(라벨 `college_code`), Redis 리스트 `dicee:ai_extraction_completed_queue`(RPUSH+LTRIM 상한; Redis 실패 시 fail-open) (`app/services/tasks.py`, `app/core/redis.py`, `app/core/metrics.py`)
 
 **마일스톤**: 불규칙한 포스터 공지도 AI가 JSON으로 분해해 DB에 에러 없이 저장. 429 없이 안정 동작. 매칭 시 알림 큐 이벤트 전달 설계 반영.
 
@@ -202,10 +203,10 @@
 
 **3단계·크롤러 관련**
 
-- **3단계 마무리 또는 4단계 전** — 배치 조회: get_by_college_external_sync 호출 배치화.
-- **3단계 마무리** — 워커 기동 시 init_sync_db() 호출. trigger-crawl delay() 실패 시 503+로그.
+- **(반영됨)** content_hash·AI 큐 대상 선별은 `Notice` bulk upsert + `content_hash.is_distinct_from` + RETURNING으로 처리. `get_by_college_external_sync`는 `notice_contents` content_url 백필 등 단건 경로에만 사용 — 별도 배치 조회 작업 불필요.
+- **3단계 마무리** — Celery `@worker_init`에서 `init_sync_db()` 명시 호출(fail-fast; `get_sync_session` lazy와 병행). trigger-crawl enqueue 실패는 `InternalCrawlService`에서 락 해제·구조화 로그·HTTP **503** + 본문 `ALL_ENQUEUES_FAILED` / `PARTIAL_ENQUEUE_FAILURE`(테스트: `test_security_features`, `test_trigger_idempotency`).
 - **크롤러 정리 시** — 공통 HTTP 래퍼(timeout·RequestException 정책).
-- **3단계 마무리 또는 4단계** — Redis 분산 락(crawl_lock:{college_code}). 타임아웃 짧게(예: 3~5분), timeout=3600 금지.
+- **(반영됨)** 로드맵의 `crawl_lock:{college_code}` 의도는 코드의 **`dicee:trigger_lock:`** + 태스크에 전달된 `lock_token`(heartbeat·TTL) + **`dicee:crawl_task_execution:`** 중복 전달 방지로 충족. TTL은 `redis_trigger_lock_ttl_seconds` 등 설정으로 짧게 유지(장시간 단일 키 점유 금지).
 
 **시니어·QA·인프라**
 
@@ -213,7 +214,7 @@
 - **3단계 마무리 또는 크롤러 정리 시** — 크롤러 레지스트리·Base 클래스.
 - **4단계 또는 크롤러 정리 시** — httpx·병렬 크롤링·Bulk Upsert(트레이드오프: Polite crawling).
 - **3단계 마무리** — CI PostgreSQL 서비스.
-- **4단계 또는 배포 안정화 시** — Health 확장·"마지막 성공 크롤" 모니터링.
+- **4단계 또는 배포 안정화 시** — Health 확장·"마지막 성공 크롤" 모니터링. (구현: Redis `dicee:last_crawl_success:{college_code}` ISO 타임스탬프, 크롤 태스크 성공 시 갱신; `/ready`에서 Redis 가용 시 요약 노출.)
 
 **기술·운영**
 

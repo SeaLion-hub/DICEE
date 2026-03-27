@@ -1,7 +1,6 @@
 """Tests for app.core.url_safety (worker fetch URL policy)."""
 
 import pytest
-
 from app.core.url_safety import is_safe_worker_http_url
 
 

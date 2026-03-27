@@ -120,6 +120,7 @@ LLM이 JSON을 **위에서부터 순서대로** 생성한다는 점을 이용해
   - 추출 시도/성공/폴백/프로바이더 오류 카운트 (예: `ai_extraction_attempt_total`, `ai_extraction_success_total` 등).
   - 토큰 사용량 총합 (`ai_extraction_tokens_total` 등, `usage.total_tokens` 기준).
   - 라벨 카디널리티는 `provider`, `model`, `status`, `reason` 등 **고정 enum 값**만 허용하며, `notice_id` 등 high-cardinality 값은 절대 사용하지 않는다.
+  - 5~6단계 매칭·알림 전 단계 훅: `notice_ai_extraction_completed_total`(라벨 `college_code`는 `colleges.external_id`만), 구조화 로그 `notice_ai_extraction_completed`, Redis 리스트 `dicee:ai_extraction_completed_queue`(스텁; Redis 오류 시에도 AI 태스크 본처리는 성공 유지).
 - 구조화 로그(예: `"ai_extraction_completed"`)는 `_envelope_meta`의 서브셋만 포함하며, 개별 notice 단위 분석/디버깅을 보조한다.
 
 ### 5.3 설계 원칙 요약
@@ -140,5 +141,6 @@ LLM이 JSON을 **위에서부터 순서대로** 생성한다는 점을 이용해
 
 ---
 
+Quality Gates (2026-03-27): `pytest` full suite → 300 passed, 3 skipped (M2 마무리: AI 완료 훅·동기 DB 멱등·/ready last_crawl_success).
 Quality Gates (2026-03-19): `pytest tests/test_ai_pipeline_schema.py tests/test_tasks_ai_consistency.py tests/test_ai_metrics.py tests/test_ai_html_cleaning.py tests/test_ai_extraction_domain.py` → 51 passed, 1 skipped.
 Quality Gates (2026-03-19, slim_html): `pytest tests/test_ai_html_cleaning.py tests/test_ai_pipeline_schema.py tests/test_tasks_ai_consistency.py` → 37 passed, 1 skipped.

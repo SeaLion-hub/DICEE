@@ -168,6 +168,34 @@ def test_production_fail_fast_requires_ip_hmac_key():
         assert "IP_HMAC_KEY" in str(exc_info.value)
 
 
+def test_production_fail_fast_requires_trigger_idempotency_required():
+    """production + APP_ENTRY=api에서 REDIS_TRIGGER_IDEMPOTENCY_REQUIRED=false면 부팅 실패(RELEASE_GATE P0)."""
+    with patch.dict(
+        "os.environ",
+        {
+            "ENVIRONMENT": "production",
+            "APP_ENTRY": "api",
+            "DATABASE_URL": "postgresql://localhost/test",
+            "REDIS_URL": "redis://localhost/0",
+            "JWT_SECRET": "test-secret",
+            "TRUSTED_PROXY_IPS": "10.0.0.1",
+            "CRAWL_TRIGGER_SECRET": "test-trigger-secret",
+            "USER_ID_HMAC_KEY": "test-user-hmac",
+            "IP_HMAC_KEY": "test-ip-hmac-key",
+            "REDIS_BLOCKLIST_FAIL_CLOSED": "true",
+            "REDIS_TRIGGER_IDEMPOTENCY_REQUIRED": "false",
+            "GOOGLE_CLIENT_ID": "",
+            "GOOGLE_CLIENT_SECRET": "",
+        },
+        clear=False,
+    ):
+        from app.core.config import Settings
+
+        with pytest.raises(ValueError) as exc_info:
+            Settings()
+        assert "REDIS_TRIGGER_IDEMPOTENCY_REQUIRED" in str(exc_info.value)
+
+
 def test_production_fail_fast_requires_trusted_proxy_ips():
     """prod 환경 + TRUSTED_PROXY_IPS 비어 있고 TRUSTED_PROXY_SKIP_FAST 미설정이면 ValidationError."""
     import app.core.config as config_module
@@ -338,6 +366,7 @@ def test_production_local_spool_allows_ephemeral_override():
             "CONTENT_SPOOL_BACKEND": "local",
             "CONTENT_SPOOL_ALLOW_EPHEMERAL": "true",
             "REDIS_BLOCKLIST_FAIL_CLOSED": "true",
+            "REDIS_TRIGGER_IDEMPOTENCY_REQUIRED": "true",
         },
         clear=False,
     ):

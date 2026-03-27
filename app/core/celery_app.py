@@ -16,6 +16,7 @@ from kombu import Queue  # type: ignore[import-untyped]
 
 from app.core.config import settings
 from app.core.crawler_config import validate_crawler_contract
+from app.core.database_sync import init_sync_db
 
 logger = logging.getLogger(__name__)
 
@@ -90,8 +91,9 @@ if broker_url.startswith("rediss://"):
 
 @worker_init.connect
 def _on_worker_init(**kwargs):
-    """워커 프로세스 기동 시에만 APP_ENTRY=celery 검사. API에서 tasks import 시에는 검사하지 않음."""
+    """워커 프로세스 기동 시 APP_ENTRY 검사·동기 DB 초기화(fail-fast)·크롤러 계약 검증."""
     _ensure_celery_entry()
+    init_sync_db()
     validate_crawler_contract()
 
 

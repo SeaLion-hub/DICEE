@@ -57,9 +57,8 @@ def _map_result_to_status(result: TriggerCrawlResult) -> int:
         return 202
     if result.result_kind == TriggerCrawlResultKind.success:
         return 200
-    if result.result_kind == TriggerCrawlResultKind.partial_failure:
-        return 200
-    return 503  # infra_unavailable
+    # partial_failure | infra_unavailable: RELEASE_GATE P0 (부분 실패를 200으로 숨기지 않음)
+    return 503
 
 
 def _rate_limit_headers() -> dict[str, str]:
@@ -238,7 +237,8 @@ async def post_trigger_crawl(
 ):
     """
     크롤 태스크 enqueue. 보안 키는 Header만 필수. college별 Redis 분산락(SET NX EX)으로 중복 enqueue 방지.
-    Idempotency-Key 있으면 동일 키 재요청 시 202 + 캐시된 결과. 부분 실패 시에도 200으로 enqueued/skipped/failed 반환.
+    Idempotency-Key 있으면 동일 키 재요청 시 202 + 캐시된 결과.
+    일부·전체 enqueue 실패 시 503 + JSON(enqueued/skipped/failed, code). RELEASE_GATE P0와 정합.
     P1: 인증 후 rate-limit 적용. 식별자는 get_client_ip(프록시 대응) 사용.
     """
     endpoint = "/internal/trigger-crawl"

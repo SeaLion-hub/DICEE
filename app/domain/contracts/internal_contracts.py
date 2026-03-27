@@ -12,7 +12,7 @@ class TriggerCrawlResultKind(str, Enum):
     # 200: 브로커에 college별 크롤 태스크 enqueue 시도 결과.
     # 일부 college는 락 미획득으로 skipped일 수 있음(성공 종류 유지).
     success = "success"
-    # 503: 최소 한 college에 대해 브로커 enqueue 자체가 실패(failed). 스킵만 있는 경우는 success.
+    # 503: 최소 한 college에 대해 브로커 enqueue 실패(failed). 본문에 ALL_ENQUEUES_FAILED 등.
     partial_failure = "partial_failure"
     infra_unavailable = "infra_unavailable"  # 503, Redis 락/멱등 등 인프라 장애
 

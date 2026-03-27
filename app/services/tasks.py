@@ -16,7 +16,6 @@ from requests.exceptions import RequestException
 
 from app.core.celery_app import app
 from app.core.config import settings
-from app.core.url_safety import is_safe_worker_http_url
 from app.core.database_sync import get_sync_session
 from app.core.metrics import (
     AI_ENQUEUE_FAILED_TOTAL,
@@ -24,11 +23,14 @@ from app.core.metrics import (
     CRAWL_FAILURE_TOTAL,
     CRAWL_SUCCESS_TOTAL,
     ENQUEUE_TO_START_LAG_SECONDS,
+    NOTICE_AI_EXTRACTION_COMPLETED_TOTAL,
     increment,
     set_gauge,
 )
 from app.core.redis import (
     claim_crawl_task_execution,
+    push_ai_extraction_completed_stub_sync,
+    record_last_crawl_success_sync,
     release_crawl_task_execution,
     release_trigger_lock_sync,
     renew_trigger_lock_sync,
@@ -49,6 +51,7 @@ from app.core.storage import (
     spool_read_s3,
     upload_notice_html,
 )
+from app.core.url_safety import is_safe_worker_http_url
 from app.domain.contracts.ai_extraction import NoticeAIExtraction
 from app.repositories.crawl_run_repository import close_stale_running_runs_sync
 from app.repositories.notice_repository import (
@@ -117,6 +120,19 @@ def _get_notice_image_urls_for_ai(notice, max_count: int = MAX_IMAGES_FOR_AI) ->
         if u and (u.startswith("http://") or u.startswith("https://")) and is_safe_worker_http_url(u):
             urls.append(u)
     return urls
+
+
+def _emit_notice_ai_extraction_completed(notice_id_str: str, notice: object) -> None:
+    """DB에 AI 결과 반영 후 호출. 메트릭·로그·Redis 스텁 큐(실패 fail-open)."""
+    college = getattr(notice, "college", None)
+    ext = getattr(college, "external_id", None) if college is not None else None
+    code = (str(ext).strip() if ext is not None else "") or "unknown"
+    increment(NOTICE_AI_EXTRACTION_COMPLETED_TOTAL, 1, labels={"college_code": code})
+    logger.info(
+        "notice_ai_extraction_completed",
+        extra={"notice_id": notice_id_str, "college_code": code},
+    )
+    push_ai_extraction_completed_stub_sync(notice_id_str, code)
 
 
 def _set_task_context(task_id: str | None, college_code: str | None = None):
@@ -243,6 +259,7 @@ def crawl_college_task(
                 on_chunk,
                 failure_publisher=lambda ev: handle_crawl_failure_composite(session, ev),
             )
+        record_last_crawl_success_sync(college_code)
         increment(CRAWL_SUCCESS_TOTAL, 1, labels=labels)
         logger.info(
             "crawl_college_completed",
@@ -343,6 +360,7 @@ def process_notice_ai_task(self, notice_id: str):
                 notice_uuid,
                 notice.ai_extracted_json or {},
             )
+            _emit_notice_ai_extraction_completed(notice_id, notice)
         else:
             html_content = _get_notice_html_for_ai(notice)
             image_urls = _get_notice_image_urls_for_ai(notice)
@@ -371,6 +389,7 @@ def process_notice_ai_task(self, notice_id: str):
                     hashtags=projected["hashtags"],
                     taxonomy_rows=projected.get("taxonomy_rows"),
                 )
+                _emit_notice_ai_extraction_completed(notice_id, notice)
                 return
             envelope = extract_notice_info(
                 html_content,
@@ -395,6 +414,7 @@ def process_notice_ai_task(self, notice_id: str):
                 hashtags=projected["hashtags"],
                 taxonomy_rows=projected.get("taxonomy_rows"),
             )
+            _emit_notice_ai_extraction_completed(notice_id, notice)
 
 
 def _resolve_spool_backend_ops(backend: str):

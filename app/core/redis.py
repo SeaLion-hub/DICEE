@@ -44,6 +44,12 @@ CACHE_LOCK_KEY_PREFIX = "dicee:cache_lock:"
 TRIGGER_LOCK_KEY_PREFIX = "dicee:trigger_lock:"
 # TTL은 config.redis_trigger_lock_ttl_seconds 사용. 기본 2400 (max_countdown + safety_margin).
 
+# 마지막 크롤 성공 시각(필드=college_code, 값=UTC ISO). 워커 HSET, /ready 진단용 HGETALL.
+LAST_CRAWL_SUCCESS_HASH_KEY = "dicee:last_crawl_success"
+# 4단계→5단계 알림·매칭 스텁 큐(RPUSH + LTRIM 상한). Redis 실패 시 AI 태스크는 성공 유지(fail-open).
+AI_EXTRACTION_COMPLETED_QUEUE_KEY = "dicee:ai_extraction_completed_queue"
+AI_EXTRACTION_COMPLETED_QUEUE_MAX = 1000
+
 # Lua: 값이 token일 때만 삭제 (소유권 검증). 1=삭제됨, 0=소유자 아님/키 없음.
 LUA_RELEASE_IF_OWNER = """
 if redis.call('get', KEYS[1]) == ARGV[1] then
@@ -446,6 +452,64 @@ def release_trigger_lock_sync(college_code: str, lock_token: str | None) -> None
         client.eval(LUA_RELEASE_IF_OWNER, 1, key, lock_token)
     except Exception as e:
         logger.warning("Trigger lock release failed (college=%s): %s", college_code, e, exc_info=True)
+
+
+def record_last_crawl_success_sync(college_code: str) -> None:
+    """단과대별 마지막 크롤 성공 시각을 Redis HASH에 기록. Redis 오류 시 fail-open."""
+    code = (college_code or "").strip()
+    if not code:
+        return
+    client = _get_sync_redis_client()
+    if client is None:
+        return
+    from datetime import UTC, datetime
+
+    ts = datetime.now(UTC).replace(microsecond=0).isoformat()
+    try:
+        client.hset(LAST_CRAWL_SUCCESS_HASH_KEY, code, ts)
+    except Exception as e:
+        logger.warning(
+            "last_crawl_success record failed (college=%s): %s",
+            code,
+            e,
+            exc_info=True,
+        )
+
+
+def push_ai_extraction_completed_stub_sync(notice_id: str, college_code: str) -> None:
+    """
+    매칭·푸시 소비자(5~6단계)용 스텁 리스트. Redis 장애 시 로그만 남기고 예외를 밖으로 내지 않음.
+    """
+    nid = (notice_id or "").strip()
+    if not nid:
+        return
+    client = _get_sync_redis_client()
+    if client is None:
+        return
+    from datetime import UTC, datetime
+
+    payload = json.dumps(
+        {
+            "notice_id": nid,
+            "college_code": college_code or "unknown",
+            "ts": datetime.now(UTC).replace(microsecond=0).isoformat(),
+        },
+        separators=(",", ":"),
+    )
+    try:
+        client.rpush(AI_EXTRACTION_COMPLETED_QUEUE_KEY, payload)
+        client.ltrim(
+            AI_EXTRACTION_COMPLETED_QUEUE_KEY,
+            -AI_EXTRACTION_COMPLETED_QUEUE_MAX,
+            -1,
+        )
+    except Exception as e:
+        logger.warning(
+            "ai_extraction_completed queue push failed (notice_id=%s): %s",
+            nid,
+            e,
+            exc_info=True,
+        )
 
 
 def claim_crawl_task_execution(task_id: str) -> bool:

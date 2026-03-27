@@ -72,6 +72,8 @@ AI_EXTRACTION_TOKENS_TOTAL = "ai_extraction_tokens_total"
 
 # 크롤 완료 후 process_notice_ai_task.delay() 브로커 적재 실패 (라벨: college_code)
 AI_ENQUEUE_FAILED_TOTAL = "ai_enqueue_failed_total"
+# AI 결과 DB 반영 완료(매칭·알림 파이프라인 훅). 라벨: college_code (= colleges.external_id)
+NOTICE_AI_EXTRACTION_COMPLETED_TOTAL = "notice_ai_extraction_completed_total"
 
 ALLOWED_REQUEST_LABELS = frozenset({"endpoint_template", "status_class", "method"})
 

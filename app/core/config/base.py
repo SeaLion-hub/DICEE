@@ -598,6 +598,12 @@ class Settings(BaseSettings):
         if self.app_entry == "api" and not self.redis_blocklist_fail_closed:
             missing.append("REDIS_BLOCKLIST_FAIL_CLOSED must be true in production when APP_ENTRY=api")
 
+        # API only: trigger-crawl idempotency must fail-closed (RELEASE_GATE P0).
+        if self.app_entry == "api" and not self.redis_trigger_idempotency_required:
+            missing.append(
+                "REDIS_TRIGGER_IDEMPOTENCY_REQUIRED must be true in production when APP_ENTRY=api"
+            )
+
         has_google_client = bool(
             (self.google_client_id or "").strip() or (self.google_client_secret.get_secret_value() or "").strip()
         )

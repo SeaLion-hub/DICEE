@@ -63,6 +63,8 @@ def _sync_database_url() -> str | None:
 def init_sync_db() -> None:
     """DATABASE_URL이 있으면 동기 엔진·세션 팩토리 초기화 (워커에서 호출)."""
     global sync_engine, sync_session_factory
+    if sync_session_factory is not None:
+        return
     url = _sync_database_url()
     if not url:
         logger.warning("DATABASE_URL not set. Sync DB features disabled.")

@@ -423,14 +423,14 @@ def test_invalid_forwarded_header_returns_400(client, monkeypatch):
 
 
 def test_trigger_crawl_all_enqueues_fail_returns_503(client, monkeypatch):
-    """POST /internal/trigger-crawl에서 enqueue가 전부 실패하면 200 + ALL_ENQUEUES_FAILED (부분 실패 정책)."""
+    """POST /internal/trigger-crawl에서 enqueue가 전부 실패하면 503 + ALL_ENQUEUES_FAILED (RELEASE_GATE P0)."""
     from unittest.mock import AsyncMock, MagicMock
 
     from app.api import internal as internal_module
     from app.core.deps import get_redis_trigger_lock
     from app.main import app
 
-    # 인증 우회: 이 테스트는 enqueue 실패 시 200 + 실패 코드 반환 검증
+    # 인증 우회: 이 테스트는 enqueue 전부 실패 시 503 + 실패 코드 본문 검증
     def _noop_authorize(request, x_secret, auth):
         pass
 
@@ -468,7 +468,7 @@ def test_trigger_crawl_all_enqueues_fail_returns_503(client, monkeypatch):
         )
     finally:
         app.dependency_overrides.pop(get_redis_trigger_lock, None)
-    assert response.status_code == 200
+    assert response.status_code == 503
     data = response.json()
     assert data.get("code") == "ALL_ENQUEUES_FAILED"
     assert "failed" in data or "enqueued" in data
