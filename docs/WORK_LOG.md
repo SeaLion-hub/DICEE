@@ -12,6 +12,7 @@
 
 - [작성 규칙](#작성-규칙)
 - [작성 형식](#작성-형식)
+- [2026-03-27](#2026-03-27)
 - [2026-03-23](#2026-03-23)
 - [2026-03-19](#2026-03-19)
 - [2026-03-07](#2026-03-07)
@@ -44,6 +45,10 @@
 - `- [단계 또는 영역] 무엇을 했는지 (어떤 파일/기능). 왜 또는 결과 한 줄.`
 
 ---
+## 2026-03-27
+
+- [도구·워크플로] gstack를 `.agents/skills/gstack`에 벤더링하고 Codex 형식 스킬·형제 링크를 두었으며 `GSTACK.md`·`AGENTS.md`·`tests/test_gstack_adoption.py`·`.gitignore`(node_modules·browse/dist 제외)·`workflow.mdc`/`todo.md` 정렬로 도입·검증 경로를 고정. 클론 후 Windows는 Git Bash에서 `PATH`에 Node+Bun 두고 `./setup --host codex` 필요. 영향: 에이전트 기본 납품 프로세스는 gstack, CI·아키텍처·pytest 게이트는 동일.
+
 ## 2026-03-23
 
 - [mypy app 0 errors] BeautifulSoup `Tag` 좁히기(`as_tag`, 크롤러 `ensure_str_attr`/`class_list_from_tag`), `ai_pipeline` InstructorRetry 폴백 타입명 분리, `streaming` 모듈 순서·클라이언트 타입, `collect_sync`/`downloader_middleware`·`types-psutil`, 사전 스냅샷 `docs/reports/baselines/MYPY_APP_ERRORS_PRE_REMEDIATION_2026-03-23.md`, `MYPY_BASELINE_BY_MODULE.md` 갱신. Ruff E501/E402/N806/N818 정리(크롤러 `urlunparse`·`ScrapeResult` 줄바꿈, 국제처 리스트 `class_` 헬퍼 등). 검증: `mypy app`, `ruff check app tests`, `pytest` 285 passed, 3 skipped.
