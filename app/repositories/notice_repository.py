@@ -299,6 +299,11 @@ def update_notice_content_url_sync(
     return True
 
 
+def _sorted_notice_drafts(notices: Sequence[NoticeDraft]) -> list[NoticeDraft]:
+    """데드락 방지용 (college_id, external_id) 오름차순 정렬. 입력 시퀀스를 복사해 정렬한다."""
+    return sorted(notices, key=lambda d: (str(d.college_id), d.external_id))
+
+
 def _draft_to_notice_dict(draft: NoticeDraft) -> dict[str, Any]:
     """NoticeDraft → DB/내부용 dict. SQLAlchemy가 기대하는 형식(datetime, UUID 그대로) 유지."""
     return {
@@ -368,10 +373,7 @@ def _build_bulk_upsert_stmt(drafts: Sequence[NoticeDraft]) -> tuple[Any, list[No
     Bulk upsert용 Insert statement와 정렬된 drafts 반환. 데드락 방지를 위해
     (college_id, external_id) 기준 오름차순 정렬. dict 변환은 SQL 직전에만 수행.
     """
-    sorted_drafts = sorted(
-        list(drafts),
-        key=lambda d: (str(d.college_id), d.external_id),
-    )
+    sorted_drafts = _sorted_notice_drafts(drafts)
     notice_rows = [_notice_values_no_content(_draft_to_notice_dict(d)) for d in sorted_drafts]
     base = insert(Notice).values(notice_rows)
     stmt = base.on_conflict_do_update(
@@ -453,10 +455,7 @@ async def upsert_notices_bulk(
     """
     if not notices:
         return []
-    sorted_drafts = sorted(
-        list(notices),
-        key=lambda d: (str(d.college_id), d.external_id),
-    )
+    sorted_drafts = _sorted_notice_drafts(notices)
     key_to_id: dict[tuple[uuid.UUID, str], uuid.UUID] = {}
     ids: list[uuid.UUID] = []
     for i in range(0, len(sorted_drafts), BULK_UPSERT_BATCH_SIZE):
@@ -485,10 +484,7 @@ def upsert_notices_bulk_sync(
     """
     if not notices:
         return []
-    sorted_drafts = sorted(
-        list(notices),
-        key=lambda d: (str(d.college_id), d.external_id),
-    )
+    sorted_drafts = _sorted_notice_drafts(notices)
     key_to_id: dict[tuple[uuid.UUID, str], uuid.UUID] = {}
     ids: list[uuid.UUID] = []
     for i in range(0, len(sorted_drafts), BULK_UPSERT_BATCH_SIZE):

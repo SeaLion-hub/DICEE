@@ -626,6 +626,7 @@ def test_process_scrape_result_parser_threshold_aborts():
     """파서 실패 임계치 초과 시 CrawlThresholdExceeded 반환(대학 단위 중단)."""
     from app.domain.contracts.crawl_contracts import CrawlLogContext
     from app.services.crawl.collect_sync import _process_scrape_result
+    from app.services.crawl.item_pipeline import DefaultNoticeItemPipeline
     from app.services.crawl_policy import (
         PARSER_CONSECUTIVE_FAILURES_THRESHOLD,
         CrawlErrorTracker,
@@ -636,6 +637,7 @@ def test_process_scrape_result_parser_threshold_aborts():
     ctx = CrawlLogContext(college_code="test")
     tracker = CrawlErrorTracker()
     seen = set()
+    pipeline = DefaultNoticeItemPipeline(seen)
     got_threshold = None
 
     for i in range(PARSER_CONSECUTIVE_FAILURES_THRESHOLD + 2):
@@ -649,6 +651,7 @@ def test_process_scrape_result_parser_threshold_aborts():
             seen,
             tracker,
             ctx,
+            item_pipeline=pipeline,
         )
         if raise_exc is not None:
             assert isinstance(raise_exc, CrawlThresholdExceeded)
@@ -662,6 +665,7 @@ def test_process_scrape_result_increments_threshold_metric_on_trigger(monkeypatc
     from app.core.metrics import CRAWL_PARSE_THRESHOLD_TRIGGER_TOTAL
     from app.domain.contracts.crawl_contracts import CrawlLogContext
     from app.services.crawl.collect_sync import _process_scrape_result
+    from app.services.crawl.item_pipeline import DefaultNoticeItemPipeline
     from app.services.crawl_policy import (
         PARSER_CONSECUTIVE_FAILURES_THRESHOLD,
         CrawlErrorTracker,
@@ -671,6 +675,7 @@ def test_process_scrape_result_increments_threshold_metric_on_trigger(monkeypatc
     ctx = CrawlLogContext(college_code="test")
     seen = set()
     tracker = CrawlErrorTracker()
+    pipeline = DefaultNoticeItemPipeline(seen)
     increment_calls: list = []
 
     def _capture_increment(name: str, value: int = 1, labels: dict | None = None) -> None:
@@ -688,6 +693,7 @@ def test_process_scrape_result_increments_threshold_metric_on_trigger(monkeypatc
             seen,
             tracker,
             ctx,
+            item_pipeline=pipeline,
         )
         if raise_exc is not None:
             break
@@ -701,6 +707,7 @@ def test_process_scrape_result_increments_drop_metric_with_reason(monkeypatch):
     from app.core.metrics import CRAWL_DROP_TOTAL, DROP_REASON_DUPLICATE
     from app.domain.contracts.crawl_contracts import CrawlLogContext
     from app.services.crawl.collect_sync import _process_scrape_result
+    from app.services.crawl.item_pipeline import DefaultNoticeItemPipeline
     from app.services.crawl_policy import CrawlErrorTracker
     from app.services.crawlers.base import ScrapeResult
 
@@ -708,6 +715,7 @@ def test_process_scrape_result_increments_drop_metric_with_reason(monkeypatch):
     ctx = CrawlLogContext(college_code="test")
     seen: set[str] = {"already-seen"}
     tracker = CrawlErrorTracker()
+    pipeline = DefaultNoticeItemPipeline(seen)
     increment_calls: list = []
 
     def _capture_increment(name: str, value: int = 1, labels: dict | None = None) -> None:
@@ -724,6 +732,7 @@ def test_process_scrape_result_increments_drop_metric_with_reason(monkeypatch):
         seen,
         tracker,
         ctx,
+        item_pipeline=pipeline,
     )
     assert payload is None
     assert raise_exc is None

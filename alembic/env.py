@@ -6,11 +6,9 @@ prevents concurrent alembic upgrade head from multiple release processes.
 
 # ruff: noqa: I001
 
-import json
 import os
 import sys
 import time
-from pathlib import Path
 # PostgreSQL 클라이언트 인코딩 강제 (서버 응답 UTF-8 디코딩)
 os.environ.setdefault("PGCLIENTENCODING", "UTF8")
 # 마이그레이션 전용: APP_ENTRY 미설정 시 Settings 검증 통과 (배포 파이프라인에서 alembic만 실행할 때)
@@ -125,32 +123,6 @@ def run_migrations_online() -> None:
     max_delay = float(os.environ.get("ALEMBIC_RETRY_MAX_SEC", "40"))
     last_error = None
     for attempt in range(max_attempts):
-        # region agent log
-        _dbg_path = Path(__file__).resolve().parent.parent / "debug-bbd2f1.log"
-        try:
-            with _dbg_path.open("a", encoding="utf-8") as _df:
-                _df.write(
-                    json.dumps(
-                        {
-                            "sessionId": "bbd2f1",
-                            "hypothesisId": "H1",
-                            "location": "alembic/env.py:run_migrations_online",
-                            "message": "alembic_connect_attempt_start",
-                            "data": {
-                                "attempt": attempt + 1,
-                                "max_attempts": max_attempts,
-                                "host": conn_args.get("host"),
-                                "port": conn_args.get("port"),
-                            },
-                            "timestamp": int(time.time() * 1000),
-                        },
-                        ensure_ascii=False,
-                    )
-                    + "\n"
-                )
-        except OSError:
-            pass
-        # endregion agent log
         try:
             connectable = create_engine(
                 "postgresql+psycopg://",
@@ -187,53 +159,9 @@ def run_migrations_online() -> None:
                 )
                 with context.begin_transaction():
                     context.run_migrations()
-            # region agent log
-            try:
-                with _dbg_path.open("a", encoding="utf-8") as _df:
-                    _df.write(
-                        json.dumps(
-                            {
-                                "sessionId": "bbd2f1",
-                                "hypothesisId": "H1",
-                                "location": "alembic/env.py:run_migrations_online",
-                                "message": "alembic_connect_and_migrations_ok",
-                                "data": {"attempt": attempt + 1},
-                                "timestamp": int(time.time() * 1000),
-                            },
-                            ensure_ascii=False,
-                        )
-                        + "\n"
-                    )
-            except OSError:
-                pass
-            # endregion agent log
             return
         except OperationalError as e:
             last_error = e
-            # region agent log
-            try:
-                with _dbg_path.open("a", encoding="utf-8") as _df:
-                    _df.write(
-                        json.dumps(
-                            {
-                                "sessionId": "bbd2f1",
-                                "hypothesisId": "H2",
-                                "location": "alembic/env.py:run_migrations_online",
-                                "message": "alembic_operational_error",
-                                "data": {
-                                    "attempt": attempt + 1,
-                                    "exc_type": type(e).__name__,
-                                    "exc_prefix": str(e)[:400],
-                                },
-                                "timestamp": int(time.time() * 1000),
-                            },
-                            ensure_ascii=False,
-                        )
-                        + "\n"
-                    )
-            except OSError:
-                pass
-            # endregion agent log
             if attempt < max_attempts - 1:
                 delay = min(initial_delay * (2**attempt), max_delay)
                 sys.stderr.write(

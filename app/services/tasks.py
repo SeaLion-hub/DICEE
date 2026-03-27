@@ -13,6 +13,7 @@ from typing import Any, cast
 
 import requests
 from requests.exceptions import RequestException
+from sqlalchemy.orm import Session
 
 from app.core.celery_app import app
 from app.core.config import settings
@@ -76,7 +77,7 @@ def _coerce_dataclass_or_dict_to_plain_dict(obj: object) -> dict[str, Any]:
 TRIGGER_LOCK_HEARTBEAT_INTERVAL_SECONDS = 60
 NOTICE_HTML_FETCH_TIMEOUT = 30
 
-# crawl_college_task → process_notice_ai_task.delay() 브로커 일시 장애 시 짧은 백오프 재시도
+# crawl_college_task → AI 큐 적재 브로커 일시 장애 시 짧은 백오프 재시도
 _AI_ENQUEUE_MAX_ATTEMPTS = 4
 _AI_ENQUEUE_BASE_DELAY_SEC = 0.25
 _AI_ENQUEUE_MAX_DELAY_SEC = 4.0
@@ -178,6 +179,109 @@ def _delay_process_notice_ai_with_backoff(notice_id: str) -> None:
     raise RuntimeError("AI enqueue retry exhausted without exception")
 
 
+def _delay_process_notice_ai_batch_with_backoff(notice_ids: list[str]) -> None:
+    """process_notice_ai_batch_task.delay() 호출. 일시 실패 시 지수 백오프로 재시도."""
+    if not notice_ids:
+        return
+    last_exc: Exception | None = None
+    delay_sec = _AI_ENQUEUE_BASE_DELAY_SEC
+    for attempt in range(_AI_ENQUEUE_MAX_ATTEMPTS):
+        try:
+            process_notice_ai_batch_task.delay(notice_ids)
+            return
+        except Exception as e:
+            last_exc = e
+            if attempt == _AI_ENQUEUE_MAX_ATTEMPTS - 1:
+                break
+            time.sleep(min(delay_sec, _AI_ENQUEUE_MAX_DELAY_SEC))
+            delay_sec = min(delay_sec * 2.0, _AI_ENQUEUE_MAX_DELAY_SEC)
+    if last_exc is not None:
+        raise last_exc
+    raise RuntimeError("AI batch enqueue retry exhausted without exception")
+
+
+def _execute_notice_ai_pipeline(
+    session: Session,
+    notice_uuid: uuid_mod.UUID,
+    notice_id_str: str,
+    task_id: str,
+) -> bool:
+    """
+    단일 공지 AI 처리(세션 내). Gemini를 호출한 경우 True, 그 외(스킵·수동·폴백) False.
+    배치 태스크가 호출 간 스로틀에 사용한다.
+    """
+    notice = get_notice_for_ai_sync(session, notice_uuid)
+    if not notice:
+        logger.debug(
+            "process_notice_ai_task: notice_id=%s not available (already processing/done or not found), skipping",
+            notice_id_str,
+        )
+        return False
+    logger.info("process_notice_ai_task: task_id=%s notice_id=%s", task_id, notice_id_str)
+    if notice.is_manual_edited:
+        update_ai_result_sync(
+            session,
+            notice_uuid,
+            notice.ai_extracted_json or {},
+        )
+        _emit_notice_ai_extraction_completed(notice_id_str, notice)
+        return False
+    html_content = _get_notice_html_for_ai(notice)
+    image_urls = _get_notice_image_urls_for_ai(notice)
+    college_name = getattr(getattr(notice, "college", None), "name", None)
+    if not college_name or not str(college_name).strip():
+        logger.warning(
+            "process_notice_ai_task: missing college.name; storing fallback extraction notice_id=%s",
+            notice_id_str,
+        )
+        fallback = NoticeAIExtraction(target_departments=[])
+        envelope_meta = {
+            "provider": "none",
+            "model": "none",
+            "fallback_reason": "missing_college_name",
+        }
+        projected = project_extraction_to_notice_fields(
+            fallback,
+            envelope_meta=envelope_meta,
+        )
+        update_ai_result_sync(
+            session,
+            notice_uuid,
+            projected["ai_extracted_json"],
+            dates=projected["dates"],
+            eligibility=projected["eligibility"],
+            hashtags=projected["hashtags"],
+            taxonomy_rows=projected.get("taxonomy_rows"),
+        )
+        _emit_notice_ai_extraction_completed(notice_id_str, notice)
+        return False
+    envelope = extract_notice_info(
+        html_content,
+        image_urls=image_urls,
+        title=notice.title,
+        college_name=str(college_name),
+    )
+    merged_envelope_meta: dict[str, Any] = {
+        **_coerce_dataclass_or_dict_to_plain_dict(envelope.meta),
+        "usage": _coerce_dataclass_or_dict_to_plain_dict(envelope.usage),
+    }
+    projected = project_extraction_to_notice_fields(
+        envelope.result,
+        envelope_meta=merged_envelope_meta,
+    )
+    update_ai_result_sync(
+        session,
+        notice_uuid,
+        projected["ai_extracted_json"],
+        dates=projected["dates"],
+        eligibility=projected["eligibility"],
+        hashtags=projected["hashtags"],
+        taxonomy_rows=projected.get("taxonomy_rows"),
+    )
+    _emit_notice_ai_extraction_completed(notice_id_str, notice)
+    return True
+
+
 # Retryable: timeout, 5xx, 408, 409, 425, 429, 네트워크 일시 오류. Fatal(그 외 4xx 등)은 autoretry_for에 넣지 않음.
 @app.task(
     bind=True,
@@ -235,21 +339,24 @@ def crawl_college_task(
 
         def on_chunk(ids: list) -> None:
             nonlocal enqueued_ai, failed_enqueues
-            for nid in ids:
-                try:
-                    _delay_process_notice_ai_with_backoff(str(nid))
-                    enqueued_ai += 1
-                except Exception as e:
-                    failed_enqueues += 1
-                    increment(AI_ENQUEUE_FAILED_TOTAL, 1, labels={"college_code": college_code})
-                    logger.warning(
-                        "Failed to enqueue AI task for notice_id=%s (task_id=%s college=%s): %s",
-                        nid,
-                        task_id,
-                        college_code,
-                        e,
-                        exc_info=True,
-                    )
+            if not ids:
+                return
+            str_ids = [str(nid) for nid in ids]
+            n = len(str_ids)
+            try:
+                _delay_process_notice_ai_batch_with_backoff(str_ids)
+                enqueued_ai += n
+            except Exception as e:
+                failed_enqueues += n
+                increment(AI_ENQUEUE_FAILED_TOTAL, n, labels={"college_code": college_code})
+                logger.warning(
+                    "Failed to enqueue AI batch (task_id=%s college=%s count=%s): %s",
+                    task_id,
+                    college_code,
+                    n,
+                    e,
+                    exc_info=True,
+                )
 
         with get_sync_session() as session:
             count, _ = run_crawl_job_sync(
@@ -346,75 +453,53 @@ def process_notice_ai_task(self, notice_id: str):
     task_id = getattr(self.request, "id", None) or ""
     _set_task_context(str(task_id) if task_id else None)
     with get_sync_session() as session:
-        notice = get_notice_for_ai_sync(session, notice_uuid)
-        if not notice:
-            logger.debug(
-                "process_notice_ai_task: notice_id=%s not available (already processing/done or not found), skipping",
-                notice_id,
+        _execute_notice_ai_pipeline(session, notice_uuid, notice_id, task_id)
+
+
+@app.task(
+    name="app.services.tasks.process_notice_ai_batch_task",
+    bind=True,
+    autoretry_for=(RequestException, ConnectionError, TimeoutError, OSError),
+    retry_backoff=True,
+    retry_backoff_max=600,
+    rate_limit="10/m",
+    max_retries=6,
+    soft_time_limit=7200,
+    time_limit=7320,
+)
+def process_notice_ai_batch_task(self, notice_ids: list[str]) -> None:
+    """
+    크롤 upsert 청크당 1회 브로커 적재. ID 순서대로 처리하며 Gemini 호출이 있었던 항목 뒤에 스로틀 sleep.
+    """
+    from app.core.config import settings
+
+    if not settings.ai_pipeline_enabled:
+        logger.debug(
+            "process_notice_ai_batch_task: ai_pipeline_enabled=False; skipping batch len=%s (pending preserved)",
+            len(notice_ids or []),
+        )
+        return
+    if not notice_ids:
+        return
+    task_id = getattr(self.request, "id", None) or ""
+    _set_task_context(str(task_id) if task_id else None)
+    spacing = float(settings.ai_batch_gemini_spacing_seconds or 0.0)
+    prev_gemini = False
+    for nid_str in notice_ids:
+        if prev_gemini and spacing > 0:
+            time.sleep(spacing)
+        try:
+            notice_uuid = uuid_mod.UUID(nid_str)
+        except ValueError:
+            logger.warning(
+                "process_notice_ai_batch_task: invalid notice_id (not a UUID), ignoring task_id=%s raw=%r",
+                task_id,
+                nid_str,
             )
-            return
-        logger.info("process_notice_ai_task: task_id=%s notice_id=%s", task_id, notice_id)
-        if notice.is_manual_edited:
-            update_ai_result_sync(
-                session,
-                notice_uuid,
-                notice.ai_extracted_json or {},
-            )
-            _emit_notice_ai_extraction_completed(notice_id, notice)
-        else:
-            html_content = _get_notice_html_for_ai(notice)
-            image_urls = _get_notice_image_urls_for_ai(notice)
-            college_name = getattr(getattr(notice, "college", None), "name", None)
-            if not college_name or not str(college_name).strip():
-                logger.warning(
-                    "process_notice_ai_task: missing college.name; storing fallback extraction notice_id=%s",
-                    notice_id,
-                )
-                fallback = NoticeAIExtraction(target_departments=[])
-                envelope_meta = {
-                    "provider": "none",
-                    "model": "none",
-                    "fallback_reason": "missing_college_name",
-                }
-                projected = project_extraction_to_notice_fields(
-                    fallback,
-                    envelope_meta=envelope_meta,
-                )
-                update_ai_result_sync(
-                    session,
-                    notice_uuid,
-                    projected["ai_extracted_json"],
-                    dates=projected["dates"],
-                    eligibility=projected["eligibility"],
-                    hashtags=projected["hashtags"],
-                    taxonomy_rows=projected.get("taxonomy_rows"),
-                )
-                _emit_notice_ai_extraction_completed(notice_id, notice)
-                return
-            envelope = extract_notice_info(
-                html_content,
-                image_urls=image_urls,
-                title=notice.title,
-                college_name=str(college_name),
-            )
-            merged_envelope_meta: dict[str, Any] = {
-                **_coerce_dataclass_or_dict_to_plain_dict(envelope.meta),
-                "usage": _coerce_dataclass_or_dict_to_plain_dict(envelope.usage),
-            }
-            projected = project_extraction_to_notice_fields(
-                envelope.result,
-                envelope_meta=merged_envelope_meta,
-            )
-            update_ai_result_sync(
-                session,
-                notice_uuid,
-                projected["ai_extracted_json"],
-                dates=projected["dates"],
-                eligibility=projected["eligibility"],
-                hashtags=projected["hashtags"],
-                taxonomy_rows=projected.get("taxonomy_rows"),
-            )
-            _emit_notice_ai_extraction_completed(notice_id, notice)
+            prev_gemini = False
+            continue
+        with get_sync_session() as session:
+            prev_gemini = _execute_notice_ai_pipeline(session, notice_uuid, nid_str, task_id)
 
 
 def _resolve_spool_backend_ops(backend: str):

@@ -5,7 +5,7 @@ import threading
 import uuid
 from collections import deque
 from collections.abc import Callable, Iterator
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from typing import Any
 
@@ -166,6 +166,8 @@ def _process_scrape_result(
     seen: set[str] | _BoundedSeenSet | _RedisSeenSet,
     tracker: CrawlErrorTracker,
     ctx: CrawlLogContext,
+    *,
+    item_pipeline: DefaultNoticeItemPipeline,
 ) -> tuple[NoticeDraft | None, CrawlThresholdExceeded | Exception | None]:
     """
     ??嫄??ㅽ겕??寃곌낵 泥섎━. ?④퀎: ?덉쇅 ?뺤콉 ??以묐났 泥댄겕 ??payload 鍮뚮뱶 ??seen ?깅줉.
@@ -183,8 +185,7 @@ def _process_scrape_result(
     if external_id is not None and external_id in seen:
         increment(CRAWL_DROP_TOTAL, 1, labels={"reason": DROP_REASON_DUPLICATE})
         return (None, None)
-    pipeline = DefaultNoticeItemPipeline(seen)
-    payload = pipeline.process(
+    payload = item_pipeline.process(
         RawNoticeItem(
             college_id=college_id,
             post=post,
@@ -271,6 +272,7 @@ def _collect_payloads_sync(
     seen_for_dedup: set[str] | _BoundedSeenSet | _RedisSeenSet = (
         seen if seen is not None else set()
     )
+    item_pipeline = DefaultNoticeItemPipeline(seen_for_dedup)
     rate_limiter = get_host_rate_limiter_sync(delay_sec)
     tracker = CrawlErrorTracker()
     remaining = deque(links)
@@ -300,7 +302,9 @@ def _collect_payloads_sync(
             submit_one()
 
         while futures:
-            for fut in as_completed(set(futures.keys())):
+            pending = set(futures.keys())
+            done, _ = wait(pending, return_when=FIRST_COMPLETED)
+            for fut in done:
                 post = futures.pop(fut)
                 in_flight_no = post.get("no") if isinstance(post.get("no"), str) else None
                 try:
@@ -321,6 +325,7 @@ def _collect_payloads_sync(
                         seen_for_dedup,
                         tracker,
                         ctx,
+                        item_pipeline=item_pipeline,
                     )
                     if raise_exc is not None:
                         raise raise_exc

@@ -151,6 +151,15 @@ class Settings(BaseSettings):
         description="Comma-separated IPs allowed to scrape /internal/metrics. Empty = deny all.",
     )
     ai_pipeline_enabled: bool = False
+    ai_batch_gemini_spacing_seconds: float = Field(
+        6.0,
+        ge=0.0,
+        le=300.0,
+        description=(
+            "Sleep after each Gemini-backed extraction in process_notice_ai_batch_task. "
+            "0 disables. Default ~6s approximates 10 external calls/min per worker."
+        ),
+    )
     gemini_api_key: SecretStr | None = Field(
         None,
         description="Gemini API key. When unset, google-generativeai uses GOOGLE_API_KEY from env.",

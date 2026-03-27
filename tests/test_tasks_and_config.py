@@ -646,6 +646,34 @@ def test_delay_process_notice_ai_with_backoff_succeeds_after_transient_failure()
     assert mock_task.delay.call_count == 2
 
 
+def test_delay_process_notice_ai_batch_with_backoff_succeeds_after_transient_failure():
+    """배치 브로커 일시 오류 후 재시도로 delay 성공."""
+    from app.services import tasks as tasks_module
+    from app.services.tasks import _delay_process_notice_ai_batch_with_backoff
+
+    uid = "550e8400-e29b-41d4-a716-446655440000"
+    calls = {"n": 0}
+
+    def delay_side_effect(ids: list[str]):
+        calls["n"] += 1
+        if calls["n"] < 2:
+            raise ConnectionError("broker")
+        m = MagicMock()
+        m.id = "celery-task"
+        return m
+
+    mock_task = MagicMock()
+    mock_task.delay = MagicMock(side_effect=delay_side_effect)
+    with (
+        patch.object(tasks_module, "process_notice_ai_batch_task", mock_task),
+        patch("app.services.tasks.time.sleep", lambda _s: None),
+    ):
+        _delay_process_notice_ai_batch_with_backoff([uid])
+    assert calls["n"] == 2
+    assert mock_task.delay.call_count == 2
+    mock_task.delay.assert_called_with([uid])
+
+
 def test_crawl_college_task_on_chunk_enqueue_failure_increments_ai_enqueue_failed_metric():
     """on_chunk에서 AI delay 영구 실패 시 ai_enqueue_failed_total 증가."""
     import uuid as uuid_mod
@@ -669,7 +697,7 @@ def test_crawl_college_task_on_chunk_enqueue_failure_increments_ai_enqueue_faile
         patch.object(tasks_module, "run_crawl_job_sync", side_effect=fake_run),
         patch.object(tasks_module, "get_sync_session", return_value=mock_session_cm),
         patch.object(tasks_module, "release_trigger_lock_sync"),
-        patch.object(tasks_module, "_delay_process_notice_ai_with_backoff", side_effect=ConnectionError("fail")),
+        patch.object(tasks_module, "_delay_process_notice_ai_batch_with_backoff", side_effect=ConnectionError("fail")),
     ):
         crawl_college_task.apply(args=("engineering", None), throw=True)
 
