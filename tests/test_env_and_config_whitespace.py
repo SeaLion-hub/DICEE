@@ -64,6 +64,8 @@ def test_worker_redis_url_whitespace_falls_back_to_default(monkeypatch):
     from app.core import config
 
     monkeypatch.setattr(config.settings, "redis_url", "   ")
+    # broker는 redis_celery_url을 우선한다. REDIS_URL만 비우면 .env의 REDIS_CELERY_URL이 남을 수 있음.
+    monkeypatch.setattr(config.settings, "redis_celery_url", None)
 
     # settings.redis_url 패치 후 celery_app을 reload하여 broker_url 확인
     from app.core import celery_app as celery_app_module
