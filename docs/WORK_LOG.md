@@ -47,8 +47,10 @@
 ---
 ## 2026-03-27
 
+- [M2 마무리 A안] `init_sync_db` 멱등·`celery_app` worker_init에서 선 초기화, 크롤 성공 시 Redis `dicee:last_crawl_success` HSET·`/ready`에 `last_crawl_success` 스냅샷, `process_notice_ai_task` 완료 시 메트릭 `notice_ai_extraction_completed_total`·로그·Redis 리스트 `dicee:ai_extraction_completed_queue`(LTRIM 상한). `docs/ROADMAP_PHASES.md`·`docs/decisions/ai-extraction-schema.md` 동기화, `tests/test_database_sync.py`·`test_health` 보강. 검증: `pytest` 300 passed, 3 skipped.
 - [도구·워크플로] gstack를 `.agents/skills/gstack`에 벤더링하고 Codex 형식 스킬·형제 링크를 두었으며 `GSTACK.md`·`AGENTS.md`·`tests/test_gstack_adoption.py`·`.gitignore`(node_modules·browse/dist 제외)·`workflow.mdc`/`todo.md` 정렬로 도입·검증 경로를 고정. 클론 후 Windows는 Git Bash에서 `PATH`에 Node+Bun 두고 `./setup --host codex` 필요. 영향: 에이전트 기본 납품 프로세스는 gstack, CI·아키텍처·pytest 게이트는 동일.
 - [리뷰 후 보완] `normalize_trigger_idempotency_key` 공개로 라우터의 private import 제거, `app/core/url_safety.is_safe_worker_http_url`로 Celery 워커의 `content_url`/이미지 URL GET 전 명백한 내부·링크로컬 대상 차단(SSRF 완화, DNS 재귀 미검사 한계는 주석 명시), `tests/test_url_safety.py` 추가. 검증: `pytest tests/test_url_safety.py tests/test_trigger_idempotency.py` 통과.
+- [문서] README 헬스 섹션을 `app/api/health.py` 계약(`/health`, `/live`, `/ready`, `/health/worker`)에 맞게 정리. Project Docs에 `docs/README.md`·`GSTACK.md` 링크 추가. `docs/README.md` 폴더 표에 `runbooks/` 행 추가. 루트 `CHANGELOG.md` 없음 → 신규 생성 없음(document-release 스코프).
 
 ## 2026-03-23
 

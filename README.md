@@ -1,4 +1,4 @@
-﻿# DICEE
+# DICEE
 
 DICEE는 대학 공지 데이터를 수집·정규화해, 필요한 정보를 더 빠르게 찾을 수 있게 만드는 공지 인텔리전스 백엔드입니다.
 
@@ -77,11 +77,22 @@ docker compose up --build -d
 
 ### 4) 헬스체크 확인
 
+엔드포인트 역할이 다르다. 운영·배포 상세는 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md), 절차는 [docs/runbooks/](docs/runbooks/)를 본다.
+
+| 경로 | 용도 |
+|------|------|
+| **`GET /health`** | 로드밸런서·Railway 등 **프로세스 기동** 확인만. DB·Redis는 검사하지 않는다. |
+| **`GET /live`** | Liveness. 프로세스 생존만 (재시작 유도용). |
+| **`GET /ready`** | Readiness. DB·Redis(blocklist·trigger_lock) 준비 시 200, 아니면 503. Redis가 켜져 있으면 워커가 기록한 **`last_crawl_success`** 스냅샷이 본문에 포함될 수 있다. |
+| **`GET /health/worker`** | Celery 브로커 기준 워커 ping. 설정된 최소 활성 워커 수 미만이면 503. |
+
 ```bash
-curl http://localhost:8000/health
+curl -s http://localhost:8000/health
+curl -s -w "\nHTTP %{http_code}\n" http://localhost:8000/ready
+curl -s -w "\nHTTP %{http_code}\n" http://localhost:8000/health/worker
 ```
 
-예상 응답:
+`/health` 예시 응답:
 
 ```json
 {"status":"ok"}
@@ -107,6 +118,8 @@ docker compose down -v
 
 ## Project Docs
 
+- [문서 인덱스](docs/README.md)
+- [GSTACK.md](GSTACK.md) — 기본 납품 워크플로(gstack 스킬, 품질 게이트)
 - [Roadmap](docs/ROADMAP.md)
 - [Phase Playbook](docs/ROADMAP_PHASES.md)
 - [Deployment](docs/DEPLOYMENT.md)

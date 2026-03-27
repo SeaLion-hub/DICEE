@@ -25,6 +25,7 @@
 | **[logs/](logs/)** | (예비) 월별·주제별 로그 분리 시 사용. 현재 WORK_LOG는 단일 파일. |
 | **[decisions/](decisions/)** | ADR. 데이터베이스 명세, 인증, 크롤, Redis 등 설계 결정. |
 | **[rules/](rules/)** | 코딩·에러 핸들링 등 매뉴얼. .cursor/rules에서 참조. |
+| **[runbooks/](runbooks/)** | 장애·복구 절차(API 에러 버짓, 크롤 재시도·DLQ, Redis, 롤백 등). |
 
 ---
 
