@@ -52,6 +52,7 @@
 - [로깅] `structlog` 컨텍스트 바인딩을 강화: `app/core/logging_context.py`에서 `structlog.contextvars`까지 함께 bind/clear, `RequestIDMiddleware` 종료 시 컨텍스트 자동 clear, 크롤 작업 컨텍스트(phase/college_code/run_id/task_id) 바인딩 추가. `docs/DEPLOYMENT.md`에 `LOG_FORMAT`(pretty/json) staging→prod 전환 절차 문서화. 검증: `ruff`, `mypy`, `pytest` 통과.
 - [로깅·크롤 안정화] `logging_context`의 status/duration 타입을 `int|None`으로 통일하고 clear를 `None` 리셋으로 정리, structlog bind/clear fail-open에 1회 warning+누적 debug 관측성 추가; `pipeline_sync` chunk finalize/dispatch 경계 분리, `run_crawl_job_sync` 반환을 `(upserted, enqueued_ai)` 계약으로 수정, sanitize/clear 누수/DB 실패→Redis fallback/반환 계약 테스트 보강 후 `pytest` 전체(326 passed, 3 skipped) 통과.
 - [품질 게이트] `docs/RUNBOOK_DEPLOY.md`(GitHub 보호·Railway·Sentry·LOG_FORMAT·expand/contract·pip-audit), `tests/CRITICAL_PATHS.md`, `notice_public_service`·`logging_safety` 단위 테스트, `integration` pytest 마커, coverage에서 `yonsei_*` 크롤러 omit, CI `cov-fail-under=55`·`pip-audit --local`+allowlist·주간 `sca-weekly.yml`. README·DEPLOYMENT 링크. 검증: `pytest` 전체 통과.
+- [배포·Alembic] `010_notice_taxonomy_normalization`: `notice_taxonomy_mappings`가 이미 있으면 `CREATE TABLE`을 건너뛰고 누락 인덱스만 보강, `notices.category`/`sub_category`는 존재할 때만 `DROP`(스키마·`alembic_version` 불일치 시 Railway 등에서 DuplicateTable 방지). 검증: `pytest` 337 passed, 3 skipped.
 
 ## 2026-03-27
 
