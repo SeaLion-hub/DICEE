@@ -5,7 +5,8 @@ from typing import Any
 from urllib.parse import urljoin
 
 import httpx
-from bs4 import BeautifulSoup, Comment, NavigableString, Tag
+from bs4 import BeautifulSoup, Comment, Tag
+from bs4.element import NavigableString
 from requests.exceptions import RequestException
 
 from app.core.crawl_http import (

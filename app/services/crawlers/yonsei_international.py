@@ -73,14 +73,16 @@ def get_international_links(list_url: str) -> list[dict[str, Any]]:
             if not href or href == "#" or "javascript:" in href:
                 continue
             full_url = urljoin(list_url, href)
-            title_elem = item.find(["strong", "h3", "h4"]) or item.find(class_=lambda c: c and "title" in (c or ""))
+            title_elem = item.find(["strong", "h3", "h4"]) or item.find(
+                class_=lambda c: bool(c and "title" in (c or ""))
+            )
             if title_elem and isinstance(title_elem, Tag):
                 title = title_elem.get_text(strip=True)
             else:
                 title = a_tag.get_text(separator=" ", strip=True)
             if not title:
                 continue
-            num_elem = item.find(class_=lambda c: c and "num" in (c or ""))
+            num_elem = item.find(class_=lambda c: bool(c and "num" in (c or "")))
             num_el = as_tag(num_elem)
             num_text = num_el.get_text(strip=True) if num_el is not None else str(idx + 1)
             if not any(d["url"] == full_url for d in links):

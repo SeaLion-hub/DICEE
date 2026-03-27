@@ -6,6 +6,7 @@ Celery 앱 단일 진입점. broker=Redis, result_backend, beat_schedule, includ
 import logging
 import os
 import ssl
+from typing import Any, cast
 
 # Celery CLI가 이 모듈을 로드할 때 APP_ENTRY가 없으면 celery로 설정. Settings() 검증 통과용.
 os.environ.setdefault("APP_ENTRY", "celery")
@@ -98,7 +99,10 @@ def _on_worker_init(**kwargs):
     validate_crawler_contract()
 
 
-@app.on_after_configure.connect
+_after_configure_hook = cast(Any, app.on_after_configure)
+
+
+@_after_configure_hook.connect
 def _on_after_configure(**kwargs):
     """프로덕션 워커: API와 동일한 예외/로그 마스킹 필터 등록. development: [DEV] 접두사."""
     root = logging.getLogger()

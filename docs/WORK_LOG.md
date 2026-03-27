@@ -57,6 +57,18 @@
 - [리뷰 후 보완] `normalize_trigger_idempotency_key` 공개로 라우터의 private import 제거, `app/core/url_safety.is_safe_worker_http_url`로 Celery 워커의 `content_url`/이미지 URL GET 전 명백한 내부·링크로컬 대상 차단(SSRF 완화, DNS 재귀 미검사 한계는 주석 명시), `tests/test_url_safety.py` 추가. 검증: `pytest tests/test_url_safety.py tests/test_trigger_idempotency.py` 통과.
 - [문서] README 헬스 섹션을 `app/api/health.py` 계약(`/health`, `/live`, `/ready`, `/health/worker`)에 맞게 정리. Project Docs에 `docs/README.md`·`GSTACK.md` 링크 추가. `docs/README.md` 폴더 표에 `runbooks/` 행 추가. 루트 `CHANGELOG.md` 없음 → 신규 생성 없음(document-release 스코프).
 - [Railway] Release 단계에서 간헐적 `Multiple connection attempts failed`(psycopg 다중 주소 시도) 로그가 있었으나 재배포 로그(13:02Z)에서 연결 오류 없이 마이그레이션·API 기동 정상 확인. `alembic/env.py` 디버그 NDJSON 계측 제거.
+- [타입] `first_element_str` 인자 타입을 `Sequence[object]`로 넓혀 비-str 첫 요소·테스트 `(42,)`와 basedpyright 정합. 검증: `pytest tests/test_typing_helpers.py` 통과.
+- [타입] `tests/test_storage.py`: `_object_key`에 `UUID` 전달, `_upload_local` 반환 `str | None`에 `assert url is not None`로 좁힘. 검증: `pytest tests/test_storage.py` 통과.
+- [타입] `get_client_ip` 인자를 `ClientIpRequestLike` Protocol로 정의(테스트 스텁·Starlette `Request` 공통), `test_invalid_forwarded_header_returns_400`는 `json.loads(bytes(resp.body))`. 검증: 관련 `pytest tests/test_security_features.py` 4개 통과.
+- [타입] `celery_app`: `on_after_configure` 훅을 `cast(Any, app.on_after_configure)`로 두고 `@_after_configure_hook.connect` 등록(assert는 데코레이터 줄에서 제어 흐름 좁히기 미적용). 검증: 모듈 import 성공.
+- [타입] `pyjwt-key-fetcher`용 `typings/pyjwt_key_fetcher/__init__.pyi` 추가, `pyrightconfig.json`에 `stubPath: typings`. 영향: basedpyright `reportMissingImports`(lifespan·deps·state·auth_service) 제거.
+- [타입] `crawl_rate_limit.RedisHostRateLimiterAsync`: redis `eval` 반환 `Awaitable[str] | str` 유니온을 `cast(Awaitable[str], ...)`로 좁혀 basedpyright `await` 오류 제거.
+- [타입] `yonsei_glc`: `urljoin`에 `ensure_str_attr`로 href 정규화, `find_all(..., class_=...)` 람다를 `bool(...)`로 감싸 반환 타입을 `bool`로 고정(basedpyright `reportArgumentType`). 검증: `pytest` 302 passed, 3 skipped.
+- [타입] `yonsei_engineering`: `NavigableString`을 `bs4.element`에서 import(`reportPrivateImportUsage` 제거), `find(string=...)` 람다를 `bool(...)`로 감싸 `_NullableStringMatchFunction` 정합. 검증: `pytest` 302 passed, 3 skipped.
+- [타입] `yonsei_dormitory`: `NavigableString`을 `bs4.element`에서 import, `find(..., class_=...)` 람다를 `bool(...)`로 감싸 basedpyright 정합. 검증: `pytest` 302 passed, 3 skipped.
+- [타입] `yonsei_ai`: `NavigableString`을 `bs4.element`에서 import(`reportPrivateImportUsage` 제거).
+- [타입] `yonsei_science`: `find_all("img"|"table")` 결과를 `as_tag`로 `Tag` 좁힘 후 `.get`·속성 대입(basedpyright `PageElement`/`NavigableString` 오류 제거).
+- [타입] `yonsei_international`: `find(..., class_=lambda)` 반환을 `bool(...)`로 고정해 `_StrainableAttribute`/`_NullableStringMatchFunction` 정합.
 
 ## 2026-03-23
 

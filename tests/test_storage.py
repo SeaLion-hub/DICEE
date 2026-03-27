@@ -1,4 +1,5 @@
 from pathlib import Path
+from uuid import UUID
 
 from app.core import storage
 
@@ -26,7 +27,7 @@ def test_sanitize_external_id_empty_uses_unknown_with_hash():
 def test_object_key_uses_sanitized_external_id(monkeypatch):
     # s3_content_prefix가 비어 있을 때 college_id/… 형태로 생성되는지 확인
     monkeypatch.setattr(storage, "settings", storage.settings.model_copy(update={"s3_content_prefix": ""}))
-    college_id = "11111111-1111-1111-1111-111111111111"
+    college_id = UUID("11111111-1111-1111-1111-111111111111")
     external_id = "../weird/id\\with\\separators"
     key = storage._object_key(college_id, external_id, content_hash=None)
     # 전체 키 문자열은 경로 구분자를 포함할 수 있지만, 파일명 부분은 sanitize 되어야 한다
@@ -51,6 +52,7 @@ def test_upload_local_does_not_escape_base(tmp_path, monkeypatch):
     # 정상적인 키는 base 아래에만 저장된다
     key = "subdir/test.html"
     url = storage._upload_local("<html>ok</html>", key)
+    assert url is not None
     expected_path = (Path(tmp_path) / key).resolve()
     assert expected_path.exists()
     assert url.endswith("/" + key)

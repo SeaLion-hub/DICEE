@@ -417,7 +417,7 @@ def test_invalid_forwarded_header_returns_400(client, monkeypatch):
     finally:
         loop.close()
     assert resp.status_code == 400
-    data = json.loads(resp.body)
+    data = json.loads(bytes(resp.body))
     assert data.get("code") == "INVALID_FORWARDED_HEADER"
     assert "Invalid" in (data.get("detail") or "")
 

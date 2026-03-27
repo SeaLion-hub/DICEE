@@ -8,6 +8,7 @@ import httpx
 from bs4 import BeautifulSoup, Comment, Tag
 from requests.exceptions import RequestException
 
+from app.core.bs4_utils import as_tag
 from app.core.crawl_http import (
     HtmlTooLargeError,
     fetch_html,
@@ -100,7 +101,10 @@ def scrape_science_detail(url):
         temp_soup = get_body_soup(soup)
         if temp_soup:
             for idx, img in enumerate(temp_soup.find_all("img")):
-                src = ensure_str_attr(img.get("src", ""))
+                img_tag = as_tag(img)
+                if img_tag is None:
+                    continue
+                src = ensure_str_attr(img_tag.get("src", ""))
                 if src and not any(x in src for x in ["icon", "btn", "blank"]):
                     if src.startswith("data:image"):
                         try:
@@ -127,11 +131,14 @@ def scrape_science_detail(url):
                             image_urls_sync.add(safe_url)
                             fname = os.path.basename(parsed.path)
                             images.append({"type": "url", "data": safe_url, "name": fname or f"image_{idx+1}.jpg"})
-                img.decompose()
+                img_tag.decompose()
 
             for table in temp_soup.find_all("table"):
-                if not table.get("border"):
-                    table["border"] = "1"
+                table_tag = as_tag(table)
+                if table_tag is None:
+                    continue
+                if not table_tag.get("border"):
+                    table_tag["border"] = "1"
             content_html = temp_soup.decode_contents().strip()
         else:
             content_html = "(본문 영역을 찾을 수 없습니다)"
@@ -255,7 +262,10 @@ async def scrape_science_detail_async(client: httpx.AsyncClient, url: str):
         temp_soup = get_body_soup(soup)
         if temp_soup:
             for idx, img in enumerate(temp_soup.find_all("img")):
-                src = ensure_str_attr(img.get("src", ""))
+                img_tag = as_tag(img)
+                if img_tag is None:
+                    continue
+                src = ensure_str_attr(img_tag.get("src", ""))
                 if src and not any(x in src for x in ["icon", "btn", "blank"]):
                     if src.startswith("data:image"):
                         try:
@@ -280,10 +290,13 @@ async def scrape_science_detail_async(client: httpx.AsyncClient, url: str):
                             image_urls_async.add(safe_url)
                             fname = os.path.basename(parsed.path) or f"image_{idx+1}.jpg"
                             images.append({"type": "url", "data": safe_url, "name": fname})
-                img.decompose()
+                img_tag.decompose()
             for table in temp_soup.find_all("table"):
-                if not table.get("border"):
-                    table["border"] = "1"
+                table_tag = as_tag(table)
+                if table_tag is None:
+                    continue
+                if not table_tag.get("border"):
+                    table_tag["border"] = "1"
             content_html = temp_soup.decode_contents().strip()
         else:
             content_html = "(본문 영역을 찾을 수 없습니다)"
