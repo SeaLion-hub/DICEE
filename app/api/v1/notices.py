@@ -2,11 +2,11 @@
 
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query
 
 from app.core.deps import ReadOnlySessionDep
 from app.domain.contracts.notice_public_contracts import NoticePublicDetailDTO, NoticePublicListItemDTO
-from app.schemas.notice_public import NoticeDetailResponse, NoticeListResponse, NoticeListItem
+from app.schemas.notice_public import NoticeDetailResponse, NoticeListItem, NoticeListResponse
 from app.services.notice_public_service import (
     UnknownCollegeExternalIdError,
     get_public_notice_by_id,

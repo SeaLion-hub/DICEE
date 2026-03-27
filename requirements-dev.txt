@@ -9,3 +9,4 @@ types-requests==2.32.0.20241016
 types-boto3==1.35.84
 types-psutil>=6.1.0.20241228
 import-linter>=2.0
+responses==0.26.0

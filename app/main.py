@@ -54,10 +54,14 @@ async def lifespan(app: FastAPI):
     """앱 수명 주기: init_sentry → init_database → check_startup_pool_budget → create_app_state → yield → teardown."""
     init_sentry()
     warn_trusted_proxy_configuration()
+    # Structured logging (safe rollout via LOG_FORMAT=json|pretty)
+    from app.core.logging import configure_logging
+
     # 요청별 로그 컨텍스트(request_id, endpoint 등) 주입
     from app.core.logging_context import DevelopmentLogFilter, LoggingContextFilter
 
     current_env = (settings.environment or "").strip().lower()
+    configure_logging(environment=current_env)
     logging.getLogger().addFilter(LoggingContextFilter())
     # development일 때 [DEV] 접두사로 로컬/운영 로그 구분
     if current_env == "development":

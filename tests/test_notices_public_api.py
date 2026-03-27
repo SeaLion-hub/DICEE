@@ -3,11 +3,9 @@
 import uuid
 from unittest.mock import AsyncMock, patch
 
-import pytest
-from fastapi.testclient import TestClient
-
 from app.domain.contracts.notice_public_contracts import NoticePublicDetailDTO, NoticePublicListItemDTO
 from app.services.notice_public_service import UnknownCollegeExternalIdError
+from fastapi.testclient import TestClient
 
 
 def test_list_notices_returns_200_empty(client: TestClient) -> None:

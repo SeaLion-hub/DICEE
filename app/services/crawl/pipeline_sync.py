@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.crawler_config import get_crawler
+from app.core.metrics import CRAWL_PIPELINE_PEAK_PENDING_DRAFTS, set_gauge
 from app.domain.contracts.crawl_contracts import (
     EVENT_LIST_FETCH_FAILED,
     EVENT_PARSE_FAILED,
@@ -21,7 +22,6 @@ from app.domain.contracts.crawl_contracts import (
 )
 from app.repositories.college_repository import get_by_external_id_sync as get_college_by_external_id_sync
 from app.repositories.crawl_run_repository import update_crawl_run_checkpoint_sync
-from app.core.metrics import CRAWL_PIPELINE_PEAK_PENDING_DRAFTS, set_gauge
 from app.repositories.notice_repository import upsert_notices_bulk_sync
 
 from .collect_sync import _collect_payloads_sync

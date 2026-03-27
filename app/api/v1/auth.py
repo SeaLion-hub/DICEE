@@ -8,8 +8,9 @@ from collections.abc import Callable
 import httpx
 import sentry_sdk
 from fastapi import APIRouter, Depends, HTTPException, Request
-from sqlalchemy.exc import OperationalError, TimeoutError as SQLAlchemyTimeoutError
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import TimeoutError as SQLAlchemyTimeoutError
 
 from app.core.api_rate_limit import (
     RateLimitUnavailableError,

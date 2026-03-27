@@ -5,14 +5,13 @@ import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from sqlalchemy.exc import OperationalError
-
 from app.core.metrics import REFRESH_TOKEN_REUSE_ATTEMPT_TOTAL, get_counter
 from app.core.oauth_state import consume_state, store_state
 from app.core.redis import BlocklistUnavailableError
 from app.services.auth_service import AuthError, create_jwt_pair, verify_access_token
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
+from sqlalchemy.exc import OperationalError
 
 
 @pytest.mark.asyncio
