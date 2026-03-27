@@ -12,6 +12,7 @@ from starlette.datastructures import State
 
 from app.api import health, internal
 from app.api.v1 import auth as v1_auth
+from app.api.v1 import notices as v1_notices
 from app.core.config import settings
 
 if settings.app_entry != "api":
@@ -89,6 +90,7 @@ app = FastAPI(
 app.include_router(health.router)
 app.include_router(internal.router)
 app.include_router(v1_auth.router, prefix="/v1")
+app.include_router(v1_notices.router, prefix="/v1")
 
 app.add_middleware(Sanitize5xxMiddleware)
 app.add_middleware(RequestMetricsMiddleware)

@@ -17,6 +17,7 @@ from app.core.api_rate_limit import (
     check_rate_limit,
 )
 from app.core.config import settings
+from app.core.crawler_config import college_codes_for_openapi
 from app.core.database import read_only_session_cm
 from app.core.deps import (
     get_crawl_stats_service,
@@ -221,7 +222,11 @@ async def post_trigger_crawl(
     request: Request,
     college_code: str | None = Query(
         None,
-        description="단과대 코드(engineering, science, ...). 없으면 전체 순차 enqueue.",
+        description=(
+            "단과대 코드. 생략 시 전체 순차 enqueue. "
+            f"허용 값: {college_codes_for_openapi()}. "
+            "목록에 없는 값은 400 (code COLLEGE_NOT_FOUND)."
+        ),
     ),
     x_crawl_trigger_secret: str | None = Header(None, alias="X-Crawl-Trigger-Secret"),
     authorization: str | None = Header(None),

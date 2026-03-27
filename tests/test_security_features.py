@@ -300,10 +300,12 @@ def test_get_client_ip_no_trusted_proxy_uses_client_host(monkeypatch):
 
     monkeypatch.setattr(settings, "trusted_proxy_ips", "")
 
+    from starlette.datastructures import Address, Headers
+
     # client.host가 trusted에 없으면 항상 fallback
     class _Req:
-        client = type("_C", (), {"host": "1.2.3.4"})()
-        headers = {"x-forwarded-for": "10.0.0.1, 5.6.7.8"}
+        client = Address("1.2.3.4", 0)
+        headers = Headers({"x-forwarded-for": "10.0.0.1, 5.6.7.8"})
 
     assert get_client_ip(_Req()) == "1.2.3.4"
 
@@ -314,7 +316,7 @@ def test_get_client_ip_records_resolution_metrics(monkeypatch):
     from app.core import metrics as metrics_module
     from app.core import network as network_module
     from app.core.network import get_client_ip
-    from starlette.datastructures import Headers
+    from starlette.datastructures import Address, Headers
 
     mock_settings = MagicMock()
     mock_settings.trusted_proxy_ips_set = frozenset({"10.0.0.1"})
@@ -327,11 +329,11 @@ def test_get_client_ip_records_resolution_metrics(monkeypatch):
     xff_before = metrics_module.get_counter(metrics_module.CLIENT_IP_RESOLUTION_TOTAL, labels=xff_labels)
 
     class _ReqFallback:
-        client = type("_C", (), {"host": "1.2.3.4"})()
+        client = Address("1.2.3.4", 0)
         headers = Headers({"x-forwarded-for": "8.8.8.8"})
 
     class _ReqXff:
-        client = type("_C", (), {"host": "10.0.0.1"})()
+        client = Address("10.0.0.1", 0)
         headers = Headers({"x-forwarded-for": "8.8.8.8,10.0.0.1"})
 
     assert get_client_ip(_ReqFallback()) == "1.2.3.4"
@@ -347,7 +349,7 @@ def test_get_client_ip_trusted_proxy_invalid_header_raises(monkeypatch):
     """신뢰 프록시 경유 시 X-Forwarded-For에 비IP 문자열이 있으면 InvalidForwardedHeaderError → 400."""
     from unittest.mock import MagicMock  # noqa: I001
 
-    from starlette.datastructures import Headers
+    from starlette.datastructures import Address, Headers
 
     from app.core import metrics as metrics_module
     from app.core import network as network_module
@@ -362,7 +364,7 @@ def test_get_client_ip_trusted_proxy_invalid_header_raises(monkeypatch):
     before = metrics_module.get_counter(metrics_module.INVALID_XFF_TOTAL)
 
     class _Req:
-        client = type("_C", (), {"host": "10.0.0.1"})()
+        client = Address("10.0.0.1", 0)
         headers = Headers({"x-forwarded-for": "10.0.0.1, not-an-ip"})
 
     with pytest.raises(InvalidForwardedHeaderError):

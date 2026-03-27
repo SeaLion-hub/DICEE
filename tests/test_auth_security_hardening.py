@@ -5,6 +5,8 @@ import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from sqlalchemy.exc import OperationalError
+
 from app.core.metrics import REFRESH_TOKEN_REUSE_ATTEMPT_TOTAL, get_counter
 from app.core.oauth_state import consume_state, store_state
 from app.core.redis import BlocklistUnavailableError
@@ -75,6 +77,37 @@ def test_post_google_auth_rollback_on_unexpected_exception(client: TestClient) -
                 assert resp.status_code == 500
             except RuntimeError:
                 pass
+            assert "rollback" in call_log
+            assert "commit" not in call_log
+        finally:
+            app.dependency_overrides.pop(get_db, None)
+
+
+def test_post_google_auth_operational_error_returns_503(client: TestClient) -> None:
+    """DB 일시 오류(OperationalError) 시 503, rollback, commit 미호출."""
+    from app.core.database import get_db
+    from app.main import app
+
+    call_log: list[str] = []
+    session = MagicMock()
+    session.commit = AsyncMock(side_effect=lambda: call_log.append("commit"))
+    session.rollback = AsyncMock(side_effect=lambda: call_log.append("rollback"))
+
+    async def _get_db():
+        yield session
+
+    with patch("app.api.v1.auth.google_login", new_callable=AsyncMock) as mock_login:
+        mock_login.side_effect = OperationalError("SELECT 1", {}, Exception("connection refused"))
+        app.dependency_overrides[get_db] = _get_db
+        try:
+            resp = client.post(
+                "/v1/auth/google",
+                json={"code": "fake-code", "redirect_uri": "http://localhost"},
+            )
+            assert resp.status_code == 503
+            data = resp.json()
+            assert "detail" in data
+            assert "unavailable" in str(data["detail"]).lower()
             assert "rollback" in call_log
             assert "commit" not in call_log
         finally:

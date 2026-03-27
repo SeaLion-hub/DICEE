@@ -8,6 +8,7 @@ from collections.abc import Callable
 import httpx
 import sentry_sdk
 from fastapi import APIRouter, Depends, HTTPException, Request
+from sqlalchemy.exc import OperationalError, TimeoutError as SQLAlchemyTimeoutError
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app.core.api_rate_limit import (
@@ -266,6 +267,17 @@ async def post_google_auth(
         raise HTTPException(
             status_code=400,
             detail="Invalid request",
+        ) from e
+    except (OperationalError, SQLAlchemyTimeoutError, TimeoutError) as e:
+        await session.rollback()
+        logger.warning(
+            "Google auth DB temporarily unavailable: %s",
+            type(e).__name__,
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="Authentication service temporarily unavailable",
         ) from e
     except Exception:
         await session.rollback()

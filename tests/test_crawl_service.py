@@ -164,6 +164,7 @@ def _make_draft(college_id: uuid.UUID, i: int) -> NoticeDraft:
 
 
 def test_run_crawl_pipeline_sync_uses_chunk_size_for_flush():
+    from app.core.metrics import CRAWL_PIPELINE_PEAK_PENDING_DRAFTS, get_gauge
     from app.services.crawl.pipeline_sync import _run_crawl_pipeline_sync
     from app.services.crawl.runtime import CrawlRuntimeConfig
 
@@ -206,6 +207,7 @@ def test_run_crawl_pipeline_sync_uses_chunk_size_for_flush():
     assert total == 5
     assert len(ids) == 5
     assert adapter.flush_sizes == [2, 2, 1]
+    assert get_gauge(CRAWL_PIPELINE_PEAK_PENDING_DRAFTS, {"college_code": "engineering"}) == 2.0
 
 
 def test_sync_adapter_reflects_worker_and_inflight_config(monkeypatch):

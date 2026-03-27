@@ -7,7 +7,9 @@ import hashlib
 import ipaddress
 import logging
 import random
-from typing import Any, Protocol
+from typing import Protocol
+
+from starlette.datastructures import Address, Headers
 
 from app.core.config import settings
 from app.core.metrics import (
@@ -28,19 +30,18 @@ class InvalidForwardedHeaderError(Exception):
     pass
 
 
-class _ClientPeerForIp(Protocol):
-    host: str
-
-
-class _HeadersForClientIp(Protocol):
-    def get(self, key: str, default: Any = None) -> str | None: ...
-
-
 class ClientIpRequestLike(Protocol):
-    """get_client_ip가 읽는 최소 요청 형태 (단위 테스트용 스텁 포함)."""
+    """get_client_ip가 읽는 최소 요청 형태 (Starlette Request 및 단위 테스트 스텁).
 
-    client: _ClientPeerForIp | None
-    headers: _HeadersForClientIp
+    client·headers는 property로 두어 Request와 구조 일치.
+    반환 타입은 Starlette Address·Headers로 두어 basedpyright와 런타임이 맞는다.
+    """
+
+    @property
+    def client(self) -> Address | None: ...
+
+    @property
+    def headers(self) -> Headers: ...
 
 
 def _record_client_ip_resolution(*, mode: str, trusted_peer: bool) -> None:

@@ -61,7 +61,8 @@ async def _dummy_session_cm():
     yield session
 
 
-def _dummy_session_maker():
+def _dummy_session_maker(*_args: object, **_kwargs: object):
+    """read_only_session_cm이 maker(execution_options=...)로 호출하므로 가변 인자 허용."""
     return _dummy_session_cm()
 
 

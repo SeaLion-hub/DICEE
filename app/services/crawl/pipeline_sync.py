@@ -21,6 +21,7 @@ from app.domain.contracts.crawl_contracts import (
 )
 from app.repositories.college_repository import get_by_external_id_sync as get_college_by_external_id_sync
 from app.repositories.crawl_run_repository import update_crawl_run_checkpoint_sync
+from app.core.metrics import CRAWL_PIPELINE_PEAK_PENDING_DRAFTS, set_gauge
 from app.repositories.notice_repository import upsert_notices_bulk_sync
 
 from .collect_sync import _collect_payloads_sync
@@ -195,6 +196,11 @@ def _run_crawl_pipeline_sync(
             "crawl finished college_code=%s total_links=0 upserted=0",
             college_code,
         )
+        set_gauge(
+            CRAWL_PIPELINE_PEAK_PENDING_DRAFTS,
+            0.0,
+            labels={"college_code": college_code},
+        )
         return (0, [])
 
     ctx = CrawlLogContext(college_code=college_code, run_id=run_id, task_id=task_id)
@@ -209,6 +215,7 @@ def _run_crawl_pipeline_sync(
     notice_ids_to_process: list[uuid.UUID] = []
     total_upserted = 0
     chunk: list[NoticeDraft] = []
+    peak_pending_drafts = 0
     try:
         try:
             for payload in adapter.collect_payloads(
@@ -220,6 +227,7 @@ def _run_crawl_pipeline_sync(
                 ctx=ctx,
             ):
                 chunk.append(payload)
+                peak_pending_drafts = max(peak_pending_drafts, len(chunk))
                 if len(chunk) >= cfg.upsert_chunk_size:
                     total_upserted += _finalize_chunk_sync_with_phase_log(
                         session,
@@ -232,6 +240,7 @@ def _run_crawl_pipeline_sync(
                         total_processed_before_chunk=total_upserted,
                     )
             if chunk:
+                peak_pending_drafts = max(peak_pending_drafts, len(chunk))
                 total_upserted += _finalize_chunk_sync_with_phase_log(
                     session,
                     adapter,
@@ -258,10 +267,22 @@ def _run_crawl_pipeline_sync(
             seen.close()
 
     logger.info(
-        "crawl finished college_code=%s total_links=%d upserted=%d",
+        "crawl finished college_code=%s total_links=%d upserted=%d peak_pending_drafts=%d",
         college_code,
         total_links,
         total_upserted,
+        peak_pending_drafts,
+        extra={
+            "college_code": college_code,
+            "total_links": total_links,
+            "upserted": total_upserted,
+            "peak_pending_drafts": peak_pending_drafts,
+        },
+    )
+    set_gauge(
+        CRAWL_PIPELINE_PEAK_PENDING_DRAFTS,
+        float(peak_pending_drafts),
+        labels={"college_code": college_code},
     )
     if on_chunk_processed is not None:
         return (total_upserted, [])

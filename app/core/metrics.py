@@ -30,6 +30,8 @@ CRAWL_DISPATCH_BACKPRESSURE_TOTAL = "crawl_dispatch_backpressure_total"
 CRAWL_DISPATCH_MEMORY_MB = "crawl_dispatch_memory_mb"
 CRAWL_DISPATCH_NET_SENT_MB = "crawl_dispatch_net_sent_mb"
 CRAWL_DISPATCH_NET_RECV_MB = "crawl_dispatch_net_recv_mb"
+# 워커 크롤 1회 실행 동안 upsert 대기 chunk(list) 길이 피크. 라벨: college_code
+CRAWL_PIPELINE_PEAK_PENDING_DRAFTS = "crawl_pipeline_peak_pending_drafts"
 
 # reason 라벨 값 (고정 enum, 카디널리티 제한)
 RETRY_REASON_TIMEOUT = "timeout"

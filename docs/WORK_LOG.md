@@ -60,6 +60,7 @@
 - [타입] `first_element_str` 인자 타입을 `Sequence[object]`로 넓혀 비-str 첫 요소·테스트 `(42,)`와 basedpyright 정합. 검증: `pytest tests/test_typing_helpers.py` 통과.
 - [타입] `tests/test_storage.py`: `_object_key`에 `UUID` 전달, `_upload_local` 반환 `str | None`에 `assert url is not None`로 좁힘. 검증: `pytest tests/test_storage.py` 통과.
 - [타입] `get_client_ip` 인자를 `ClientIpRequestLike` Protocol로 정의(테스트 스텁·Starlette `Request` 공통), `test_invalid_forwarded_header_returns_400`는 `json.loads(bytes(resp.body))`. 검증: 관련 `pytest tests/test_security_features.py` 4개 통과.
+- [타입] `ClientIpRequestLike`: `client`·`headers`를 `@property`로 두고 반환을 Starlette `Address`·`Headers`로 지정해 basedpyright와 `Request` 정합. `tests/test_security_features.py` 스텁을 `Address`·`Headers`로 통일. 검증: `pytest tests/test_security_features.py` 통과.
 - [타입] `celery_app`: `on_after_configure` 훅을 `cast(Any, app.on_after_configure)`로 두고 `@_after_configure_hook.connect` 등록(assert는 데코레이터 줄에서 제어 흐름 좁히기 미적용). 검증: 모듈 import 성공.
 - [타입] `pyjwt-key-fetcher`용 `typings/pyjwt_key_fetcher/__init__.pyi` 추가, `pyrightconfig.json`에 `stubPath: typings`. 영향: basedpyright `reportMissingImports`(lifespan·deps·state·auth_service) 제거.
 - [타입] `crawl_rate_limit.RedisHostRateLimiterAsync`: redis `eval` 반환 `Awaitable[str] | str` 유니온을 `cast(Awaitable[str], ...)`로 좁혀 basedpyright `await` 오류 제거.
@@ -71,6 +72,7 @@
 - [타입] `yonsei_international`: `find(..., class_=lambda)` 반환을 `bool(...)`로 고정해 `_StrainableAttribute`/`_NullableStringMatchFunction` 정합.
 - [보안] `environment=production`에서 OpenAPI(`/openapi.json`, `/docs`, `/redoc`) 비활성(`app/main.py`). 내부 트리거 미설정 503·클라이언트 IP 미해결 503 응답 문구 일반화로 배열·엔드포인트 정보 누출 완화(`app/api/internal.py`). 검증: `pytest` 302 passed, 3 skipped.
 - [크롤·페이로드] `_resolve_notice_images`: `type=base64`일 때 `data`가 `bytes`(이미 디코드) 또는 `str`(ASCII base64) 모두 허용(`app/services/crawl_payload.py`). `tests/test_crawl_payload.py` raw bytes 경로 추가. `yonsei_chemistry.get_chemistry_links` 중복 URL 검사를 `seen_urls` set으로 O(n). 검증: `pytest` 303 passed, 3 skipped.
+- [FastAPI 개선 계획] `post_google_auth`: SQLAlchemy `OperationalError`·`TimeoutError`(및 내장 `TimeoutError`) → 503·rollback(`app/api/v1/auth.py`). `college_codes_for_openapi`로 트리거 `college_code` Query 설명 보강(`crawler_config`, `internal`). 공개 `GET /v1/notices`·`/v1/notices/{id}`: DTO `notice_public_contracts`·`notice_public_service`·라우터(`schemas`는 API만)·`main` 등록. 워커 `crawl_pipeline_peak_pending_drafts` 게이지·완료 로그(`pipeline_sync`, `metrics`). 테스트·`conftest` 더미 `session_maker`가 `execution_options` 수용. 검증: `lint-imports`, `pytest` 310 passed, 3 skipped.
 
 ## 2026-03-23
 
