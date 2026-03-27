@@ -398,6 +398,17 @@ def test_request_id_sanitize_rejects_long_or_invalid_charset():
     assert valid == "MyReq-123.ab:cd"
 
 
+def test_request_id_sanitize_accepts_max_length_and_rejects_blank():
+    """허용 최대 길이(128)는 통과, 공백-only는 새 UUID 생성."""
+    from app.middleware.request_id import _sanitize_request_id
+
+    max_len = "a" * 128
+    assert _sanitize_request_id(max_len) == max_len
+    blank = _sanitize_request_id("   ")
+    assert blank != "   "
+    assert len(blank) == 36 and blank.count("-") == 4
+
+
 def test_invalid_forwarded_header_returns_400(client, monkeypatch):
     """InvalidForwardedHeaderError 발생 시 앱이 400 Bad Request + code INVALID_FORWARDED_HEADER를 반환한다."""
     import asyncio  # noqa: I001

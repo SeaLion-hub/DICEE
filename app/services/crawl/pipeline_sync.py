@@ -93,6 +93,7 @@ def _finalize_chunk_sync(
     run_id: uuid.UUID | None = None,
     total_processed_before_chunk: int = 0,
 ) -> int:
+    """Chunk 최종화: upsert/checkpoint 후 후속 처리 정책에 따라 전달."""
     ids = adapter.upsert_chunk(session, chunk)
     n = len(ids)
     chunk.clear()
@@ -103,13 +104,34 @@ def _finalize_chunk_sync(
             processed_count=total_processed_before_chunk + n,
             checkpointed_at=datetime.now(UTC),
         )
+    _dispatch_chunk_result_sync(
+        session,
+        ids,
+        on_chunk_processed=on_chunk_processed,
+        notice_ids_to_process=notice_ids_to_process,
+    )
+    return n
+
+
+def _dispatch_chunk_result_sync(
+    session: Session,
+    ids: list[uuid.UUID],
+    *,
+    on_chunk_processed: Callable[[list[uuid.UUID]], None] | None,
+    notice_ids_to_process: list[uuid.UUID],
+) -> None:
+    """
+    Chunk 처리 경계 정책:
+    - on_chunk_processed 없음: 메모리 리스트에 적재(최종 커밋은 상위 호출자).
+    - on_chunk_processed 있음: chunk 단위 DB commit/expunge 후 enqueue 콜백 호출.
+    """
     if on_chunk_processed is not None:
+        # Chunk 단위 커밋 지점: 콜백(예: AI enqueue)이 실패해도 upsert 결과는 추적 가능.
         session.commit()
         session.expunge_all()
         on_chunk_processed(ids)
-    else:
-        notice_ids_to_process.extend(ids)
-    return n
+        return
+    notice_ids_to_process.extend(ids)
 
 
 def _finalize_chunk_sync_with_phase_log(
@@ -174,12 +196,18 @@ def _run_crawl_pipeline_sync(
     cfg: CrawlRuntimeConfig,
     adapter: _SyncCrawlAdapter,
 ) -> tuple[int, list[uuid.UUID]]:
+    from app.core.logging_context import set_request_context
+
+    set_request_context(
+        college_code=college_code,
+        run_id=str(run_id) if run_id else "",
+        task_id=task_id or "",
+        phase=CrawlPhase.LIST.value,
+    )
     try:
         links_raw = get_links_fn(list_url)
     except Exception as e:
-        from app.core.logging_context import set_request_context
-
-        set_request_context(event_code=EVENT_LIST_FETCH_FAILED)
+        set_request_context(event_code=EVENT_LIST_FETCH_FAILED, phase=CrawlPhase.LIST.value)
         log_extra = {
             "college_code": college_code,
             "run_id": str(run_id) if run_id else "",
@@ -218,6 +246,7 @@ def _run_crawl_pipeline_sync(
     peak_pending_drafts = 0
     try:
         try:
+            set_request_context(phase=CrawlPhase.SCRAPE.value)
             for payload in adapter.collect_payloads(
                 links=links,
                 college_id=college_id,
@@ -229,6 +258,7 @@ def _run_crawl_pipeline_sync(
                 chunk.append(payload)
                 peak_pending_drafts = max(peak_pending_drafts, len(chunk))
                 if len(chunk) >= cfg.upsert_chunk_size:
+                    set_request_context(phase=CrawlPhase.UPSERT.value)
                     total_upserted += _finalize_chunk_sync_with_phase_log(
                         session,
                         adapter,
@@ -239,8 +269,10 @@ def _run_crawl_pipeline_sync(
                         run_id=run_id,
                         total_processed_before_chunk=total_upserted,
                     )
+                    set_request_context(phase=CrawlPhase.SCRAPE.value)
             if chunk:
                 peak_pending_drafts = max(peak_pending_drafts, len(chunk))
+                set_request_context(phase=CrawlPhase.UPSERT.value)
                 total_upserted += _finalize_chunk_sync_with_phase_log(
                     session,
                     adapter,
@@ -252,9 +284,7 @@ def _run_crawl_pipeline_sync(
                     total_processed_before_chunk=total_upserted,
                 )
         except Exception as e:
-            from app.core.logging_context import set_request_context
-
-            set_request_context(event_code=EVENT_PARSE_FAILED)
+            set_request_context(event_code=EVENT_PARSE_FAILED, phase=CrawlPhase.SCRAPE.value)
             log_extra = {
                 **ctx.extra_for_log(),
                 "phase": CrawlPhase.SCRAPE.value,

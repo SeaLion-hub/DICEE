@@ -4,7 +4,8 @@ import json
 import logging
 
 from fastapi import Request
-from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
+from starlette.responses import Response
 from starlette.responses import JSONResponse
 
 logger = logging.getLogger(__name__)
@@ -43,7 +44,7 @@ class Sanitize5xxMiddleware(BaseHTTPMiddleware):
     global_exception_handler가 이미 안전 응답만 반환하더라도, 이중 방어로 원천 차단.
     """
 
-    async def dispatch(self, request: Request, call_next):
+    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         response = await call_next(request)
         if response.status_code < 500:
             return response
@@ -54,7 +55,12 @@ class Sanitize5xxMiddleware(BaseHTTPMiddleware):
             body = response.body
             if not body:
                 return response
-            text = body.decode("utf-8", errors="replace")
+            if isinstance(body, str):
+                text = body
+            elif isinstance(body, (bytes, bytearray)):
+                text = body.decode("utf-8", errors="replace")
+            else:
+                text = bytes(body).decode("utf-8", errors="replace")
             # 이미 안전한 JSON(detail + code만)이면 유지
             try:
                 data = json.loads(text)

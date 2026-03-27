@@ -15,7 +15,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session, defer, selectinload
 
-from app.core.database import ReadOnlySessionWrapper
+from app.core.database import AsyncSessionLike
 from app.domain.contracts.crawl_contracts import NoticeDraft
 from app.models.notice import Notice
 from app.models.notice_content import NoticeContent
@@ -57,7 +57,7 @@ def _encode_cursor(published_at: datetime | None, created_at: datetime | None, n
 
 
 async def list_notices_paginated(
-    session: AsyncSession | ReadOnlySessionWrapper,
+    session: AsyncSessionLike,
     *,
     limit: int = 20,
     offset: int = 0,
@@ -141,7 +141,7 @@ async def list_notices_paginated(
 
 
 async def get_notice_by_id_with_relations(
-    session: AsyncSession | ReadOnlySessionWrapper,
+    session: AsyncSessionLike,
     notice_id: uuid.UUID,
 ) -> Notice | None:
     """

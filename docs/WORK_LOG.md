@@ -12,6 +12,7 @@
 
 - [작성 규칙](#작성-규칙)
 - [작성 형식](#작성-형식)
+- [2026-03-28](#2026-03-28)
 - [2026-03-27](#2026-03-27)
 - [2026-03-23](#2026-03-23)
 - [2026-03-19](#2026-03-19)
@@ -45,6 +46,11 @@
 - `- [단계 또는 영역] 무엇을 했는지 (어떤 파일/기능). 왜 또는 결과 한 줄.`
 
 ---
+## 2026-03-28
+
+- [로깅] `structlog` 컨텍스트 바인딩을 강화: `app/core/logging_context.py`에서 `structlog.contextvars`까지 함께 bind/clear, `RequestIDMiddleware` 종료 시 컨텍스트 자동 clear, 크롤 작업 컨텍스트(phase/college_code/run_id/task_id) 바인딩 추가. `docs/DEPLOYMENT.md`에 `LOG_FORMAT`(pretty/json) staging→prod 전환 절차 문서화. 검증: `ruff`, `mypy`, `pytest` 통과.
+- [로깅·크롤 안정화] `logging_context`의 status/duration 타입을 `int|None`으로 통일하고 clear를 `None` 리셋으로 정리, structlog bind/clear fail-open에 1회 warning+누적 debug 관측성 추가; `pipeline_sync` chunk finalize/dispatch 경계 분리, `run_crawl_job_sync` 반환을 `(upserted, enqueued_ai)` 계약으로 수정, sanitize/clear 누수/DB 실패→Redis fallback/반환 계약 테스트 보강 후 `pytest` 전체(326 passed, 3 skipped) 통과.
+
 ## 2026-03-27
 
 - [성능·gstack 계획] `collect_sync`: `DefaultNoticeItemPipeline` 1회 생성·재사용, `wait(FIRST_COMPLETED)`로 완료 처리. `notice_repository`: `_sorted_notice_drafts`로 bulk upsert 정렬 단일화. `tasks`: `_execute_notice_ai_pipeline` 공용화, 크롤 `on_chunk`는 `process_notice_ai_batch_task`(스로틀 `AI_BATCH_GEMINI_SPACING_SECONDS`)·백오프 `_delay_process_notice_ai_batch_with_backoff`, `celery_app` `ai` 라우트 추가. runbook·메트릭 주석·테스트 보강. 검증: `pytest` 302 passed, 3 skipped.

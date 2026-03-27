@@ -4,9 +4,7 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy.ext.asyncio import AsyncSession
-
-from app.core.database import ReadOnlySessionWrapper
+from app.core.database import AsyncSessionLike
 from app.domain.contracts.notice_public_contracts import NoticePublicDetailDTO, NoticePublicListItemDTO
 from app.models.notice import Notice
 from app.repositories import college_repository, notice_repository
@@ -51,7 +49,7 @@ def _notice_to_detail_dto(notice: Notice) -> NoticePublicDetailDTO:
 
 
 async def list_public_notices(
-    session: AsyncSession | ReadOnlySessionWrapper,
+    session: AsyncSessionLike,
     *,
     limit: int,
     offset: int,
@@ -82,7 +80,7 @@ async def list_public_notices(
 
 
 async def get_public_notice_by_id(
-    session: AsyncSession | ReadOnlySessionWrapper,
+    session: AsyncSessionLike,
     notice_id: uuid.UUID,
 ) -> NoticePublicDetailDTO | None:
     """공지 상세. 없으면 None."""

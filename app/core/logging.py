@@ -51,7 +51,35 @@ def configure_logging(*, environment: str) -> None:
         timestamper,
         # Copy selected stdlib `LogRecord` attributes (injected by Filters) into event dict.
         structlog.stdlib.ExtraAdder(
-            allow={"request_id", "trace_id", "endpoint", "user_id_hash", "event_code", "context"}
+            allow={
+                # Request correlation
+                "request_id",
+                "trace_id",
+                "endpoint",
+                "method",
+                "status_code",
+                "duration_ms",
+                # Business/safety
+                "user_id_hash",
+                "event_code",
+                "code",
+                # Crawl pipeline correlation
+                "college_code",
+                "run_id",
+                "task_id",
+                "phase",
+                "crawler",
+                # Common structured fields used at callsites
+                "ip_hmac",
+                "ip_hmac_key_version",
+                "chunk_size",
+                "elapsed_sec",
+                "total_links",
+                "upserted",
+                "peak_pending_drafts",
+                # Escape hatch: keep non-standard fields under a single key
+                "context",
+            }
         ),
     ]
 

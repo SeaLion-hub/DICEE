@@ -337,6 +337,116 @@ def test_record_crawl_failure_fallback_uses_shared_sync_client(monkeypatch):
     assert ttl == CRAWL_FAILURE_REDIS_TTL_SECONDS
 
 
+def test_handle_crawl_failure_composite_falls_back_to_redis_on_db_failure():
+    from app.domain.contracts.crawl_contracts import CrawlJobFailed
+    from app.services.crawl import failure as crawl_failure
+
+    session = MagicMock()
+    session.commit.side_effect = RuntimeError("db commit failed")
+    event = CrawlJobFailed(
+        run_id=uuid.UUID("00000000-0000-0000-0000-000000000010"),
+        task_id="task-1",
+        college_code="engineering",
+        error_message="boom",
+        reason_code="upsert_failed",
+    )
+
+    with (
+        patch.object(crawl_failure, "update_crawl_run_sync"),
+        patch.object(crawl_failure, "_record_crawl_failure_fallback") as mock_fallback,
+    ):
+        crawl_failure.handle_crawl_failure_composite(session, event)
+
+    mock_fallback.assert_called_once_with(
+        event.run_id,
+        event.task_id,
+        event.college_code,
+        event.error_message,
+        reason_code=event.reason_code,
+    )
+
+
+def test_record_crawl_failure_fallback_graceful_when_shared_client_missing(monkeypatch):
+    from unittest.mock import MagicMock
+
+    from app.services.crawl import failure as crawl_failure
+    from app.services.crawl.failure import _record_crawl_failure_fallback
+
+    mock_settings = MagicMock()
+    mock_settings.redis.redis_url = "redis://localhost/0"
+    monkeypatch.setattr(crawl_failure, "settings", mock_settings)
+    monkeypatch.setattr(crawl_failure, "get_shared_sync_redis_client", lambda: None)
+
+    _record_crawl_failure_fallback(
+        uuid.UUID("00000000-0000-0000-0000-000000000021"),
+        "task-1",
+        "engineering",
+        "error",
+    )
+
+
+def test_record_crawl_failure_fallback_graceful_when_redis_set_fails(monkeypatch):
+    from unittest.mock import MagicMock
+
+    from app.services.crawl import failure as crawl_failure
+    from app.services.crawl.failure import _record_crawl_failure_fallback
+
+    class _BrokenClient:
+        def set(self, key, payload, ex):  # noqa: ARG002
+            raise RuntimeError("redis down")
+
+    mock_settings = MagicMock()
+    mock_settings.redis.redis_url = "redis://localhost/0"
+    monkeypatch.setattr(crawl_failure, "settings", mock_settings)
+    monkeypatch.setattr(crawl_failure, "get_shared_sync_redis_client", lambda: _BrokenClient())
+
+    _record_crawl_failure_fallback(
+        uuid.UUID("00000000-0000-0000-0000-000000000022"),
+        "task-2",
+        "engineering",
+        "error",
+    )
+
+
+def test_run_crawl_job_sync_returns_upserted_and_enqueued_counts():
+    from app.services.crawl.failure import run_crawl_job_sync
+
+    run_id = uuid.UUID("00000000-0000-0000-0000-000000000011")
+    college = MagicMock()
+    college.id = uuid.UUID("00000000-0000-0000-0000-000000000012")
+    session = MagicMock()
+
+    def _fake_crawl_college_sync(
+        _session,
+        _college_code,
+        *,
+        run_id=None,
+        task_id=None,
+        on_chunk_processed=None,
+    ):
+        if on_chunk_processed is not None:
+            on_chunk_processed([uuid.uuid4(), uuid.uuid4()])
+            on_chunk_processed([uuid.uuid4()])
+        return (5, [])
+
+    with (
+        patch("app.services.crawl.failure.get_college_by_external_id_sync", return_value=college),
+        patch("app.services.crawl.failure.ensure_crawl_run_task_sync", return_value=run_id),
+        patch("app.services.crawl.failure.create_or_update_crawl_run_sync"),
+        patch("app.services.crawl.failure.crawl_college_sync", side_effect=_fake_crawl_college_sync),
+        patch("app.services.crawl.failure.update_crawl_run_sync"),
+    ):
+        upserted, enqueued_ai = run_crawl_job_sync(
+            session,
+            "engineering",
+            "task-123",
+            on_chunk_processed=lambda ids: None,
+        )
+
+    assert upserted == 5
+    assert enqueued_ai == 3
+
+
 def test_scrape_one_sync_returns_exception_in_tuple_on_value_error():
     """_scrape_one_sync: ValueError 발생 시 ScrapeAttemptResult.exc에 담겨 반환된다."""
     from app.services.crawl.collect_sync import _scrape_one_sync
