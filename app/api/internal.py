@@ -4,10 +4,11 @@ Query 파라미터 시크릿 미지원(Access Log 유출 방지). college별 분
 """
 
 import logging
+from html import escape
 from typing import cast
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from redis.asyncio import Redis as RedisAsyncio
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -19,8 +20,10 @@ from app.core.api_rate_limit import (
 from app.core.config import settings
 from app.core.database import read_only_session_cm
 from app.core.deps import (
+    SessionDep,
     get_crawl_stats_service,
     get_internal_crawl_service,
+    get_notice_preview_service,
     get_redis_trigger_lock,
 )
 from app.core.internal_auth import (
@@ -44,11 +47,89 @@ from app.domain.contracts.internal_contracts import (
 from app.schemas.internal import CrawlRunStatsItem, CrawlStatsResponse
 from app.services.crawl_stats_service import CrawlStatsService
 from app.services.internal_crawl_service import _normalize_idempotency_key
+from app.services.notice_preview_service import NoticePreviewRow, NoticePreviewService
 
 router = APIRouter(prefix="/internal", tags=["internal"])
 logger = logging.getLogger(__name__)
 
 RATE_LIMIT_RETRY_AFTER_SECONDS = 60
+
+
+def _render_preview_cell(items: list[str], *, empty_text: str = "-") -> str:
+    if not items:
+        return f"<span>{escape(empty_text)}</span>"
+    lis = "".join(f"<li>{escape(item)}</li>" for item in items)
+    return f"<ul>{lis}</ul>"
+
+
+def _render_engineering_preview_html(rows: list[NoticePreviewRow], *, limit: int) -> str:
+    body_rows = []
+    for row in rows:
+        title_html = escape(row.title or "(제목 없음)")
+        url_html = (
+            f'<a href="{escape(row.url)}" target="_blank" rel="noopener noreferrer">원문 링크</a>'
+            if row.url
+            else "-"
+        )
+        body_rows.append(
+            (
+                "<tr>"
+                f"<td>{title_html}</td>"
+                f"<td>{escape(row.published_at or '-')}</td>"
+                f"<td>{url_html}</td>"
+                f"<td>{_render_preview_cell([row.content_url], empty_text='-')}</td>"
+                f"<td>{_render_preview_cell(row.image_urls)}</td>"
+                f"<td>{_render_preview_cell(row.attachment_names)}</td>"
+                f"<td>{_render_preview_cell(row.eligibility)}</td>"
+                f"<td>{_render_preview_cell(row.dates)}</td>"
+                f"<td>{_render_preview_cell(row.main_categories)}</td>"
+                f"<td>{_render_preview_cell(row.sub_categories)}</td>"
+                "</tr>"
+            )
+        )
+    rows_html = "".join(body_rows) or (
+        "<tr><td colspan='10'>데이터가 없습니다. 공대 크롤링/AI 처리 후 다시 확인해 주세요.</td></tr>"
+    )
+    return f"""<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Engineering Crawl Preview</title>
+  <style>
+    body {{ font-family: Arial, sans-serif; margin: 24px; }}
+    h1 {{ margin: 0 0 8px 0; }}
+    p.meta {{ color: #666; margin-top: 0; }}
+    table {{ width: 100%; border-collapse: collapse; table-layout: fixed; }}
+    th, td {{ border: 1px solid #ddd; padding: 8px; vertical-align: top; word-break: break-word; }}
+    th {{ background: #f4f4f4; }}
+    ul {{ margin: 0; padding-left: 18px; }}
+  </style>
+</head>
+<body>
+  <h1>공대 크롤링/AI 임시 검수 페이지</h1>
+  <p class="meta">college=engineering, latest={len(rows)} / limit={limit}</p>
+  <table>
+    <thead>
+      <tr>
+        <th>제목</th>
+        <th>게시일</th>
+        <th>원문</th>
+        <th>본문 URL</th>
+        <th>이미지</th>
+        <th>첨부파일</th>
+        <th>지원자격</th>
+        <th>날짜</th>
+        <th>대분류</th>
+        <th>소분류</th>
+      </tr>
+    </thead>
+    <tbody>
+      {rows_html}
+    </tbody>
+  </table>
+</body>
+</html>"""
 
 
 def _map_result_to_status(result: TriggerCrawlResult) -> int:
@@ -393,6 +474,43 @@ async def get_crawl_stats(
         detail="Service degraded; cached data unavailable. Try again later.",
         headers={"Retry-After": "60"},
     )
+
+
+@router.get("/preview/engineering", response_class=HTMLResponse)
+async def get_engineering_preview_page(
+    request: Request,
+    session: SessionDep,
+    limit: int = Query(30, ge=1, le=100, description="미리보기 최대 공지 수"),
+    x_crawl_trigger_secret: str | None = Header(None, alias="X-Crawl-Trigger-Secret"),
+    authorization: str | None = Header(None),
+    preview_service: NoticePreviewService = Depends(get_notice_preview_service),
+) -> HTMLResponse:
+    """
+    공대(engineering) 공지 임시 검수 HTML.
+    제목/게시일/본문/이미지/첨부/지원자격/날짜/대분류/소분류를 한 화면에서 확인한다.
+    """
+    _authorize_internal_trigger(request, x_crawl_trigger_secret, authorization)
+    rows = await preview_service.get_engineering_preview(session, limit=limit)
+    return HTMLResponse(content=_render_engineering_preview_html(rows, limit=limit), status_code=200)
+
+
+@router.get("/public-preview/engineering", response_class=HTMLResponse)
+async def get_engineering_public_preview_page(
+    request: Request,
+    session: SessionDep,
+    limit: int = Query(30, ge=1, le=100, description="미리보기 최대 공지 수"),
+    preview_service: NoticePreviewService = Depends(get_notice_preview_service),
+) -> HTMLResponse:
+    """
+    로컬 검수용 임시 공개 미리보기. 개발 환경 + localhost에서만 허용한다.
+    """
+    client_host = (request.client.host if request.client else "") or ""
+    if (settings.environment or "").strip().lower() == "production":
+        raise HTTPException(status_code=404, detail="Not found")
+    if client_host not in {"127.0.0.1", "::1", "localhost"}:
+        raise HTTPException(status_code=403, detail="Public preview is allowed only from localhost")
+    rows = await preview_service.get_engineering_preview(session, limit=limit)
+    return HTMLResponse(content=_render_engineering_preview_html(rows, limit=limit), status_code=200)
 
 
 def _metrics_allowed_client_ip(request: Request) -> bool:

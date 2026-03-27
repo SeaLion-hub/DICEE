@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session, defer, selectinload
 
 from app.domain.contracts.crawl_contracts import NoticeDraft
+from app.models.college import College
 from app.models.notice import Notice
 from app.models.notice_content import NoticeContent
 from app.models.notice_taxonomy_mapping import NoticeTaxonomyMapping
@@ -157,6 +158,38 @@ async def get_notice_by_id_with_relations(
     )
     result = await session.execute(stmt)
     return result.scalars().unique().one_or_none()
+
+
+async def list_recent_notices_for_college_preview(
+    session: AsyncSession,
+    *,
+    college_external_id: str,
+    limit: int = 30,
+) -> list[Notice]:
+    """
+    단과대 external_id 기준 최근 공지 조회(미리보기용).
+    이미지/첨부/AI 결과/taxonomy를 함께 로드해 임시 검수 페이지에서 바로 사용한다.
+    """
+    stmt = (
+        select(Notice)
+        .join(College, College.id == Notice.college_id)
+        .where(
+            College.external_id == college_external_id,
+            Notice.deleted_at.is_(None),
+        )
+        .options(
+            selectinload(Notice.college),
+            selectinload(Notice.notice_content),
+        )
+        .order_by(
+            Notice.published_at.desc().nulls_last(),
+            Notice.created_at.desc(),
+            Notice.id.desc(),
+        )
+        .limit(limit)
+    )
+    result = await session.execute(stmt)
+    return list(result.scalars().unique().all())
 
 
 def get_by_id_sync(session: Session, notice_id: uuid.UUID) -> Notice | None:

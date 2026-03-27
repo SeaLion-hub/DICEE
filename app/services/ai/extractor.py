@@ -178,14 +178,14 @@ def _normalize_image_urls(image_urls: list[str] | None) -> list[str]:
 
 
 def _get_instructor_client() -> InstructorExtractionClient:
-    """Instructor 클라이언트 팩토리 (Gemini 구조화 출력, max_retries는 Instructor 전담)."""
+    """Instructor 클라이언트 팩토리 (Gemini 구조화 출력)."""
     import instructor  # type: ignore[import]
 
     api_key = None
     if settings.gemini_api_key:
         api_key = settings.gemini_api_key.get_secret_value()
     provider = f"google/{settings.gemini_model}"
-    kwargs: dict[str, object] = {"max_retries": EXTRACTION_MAX_RETRIES}
+    kwargs: dict[str, object] = {}
     if api_key:
         kwargs["api_key"] = api_key
     return cast(

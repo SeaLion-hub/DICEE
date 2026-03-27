@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Annotated, cast
 import httpx
 
 if TYPE_CHECKING:
+    from app.services.notice_preview_service import NoticePreviewService
     from app.services.crawl_stats_service import CrawlStatsService
     from app.services.internal_crawl_service import InternalCrawlService
 from fastapi import Depends, Request
@@ -61,3 +62,10 @@ def get_crawl_stats_service() -> CrawlStatsService:
     from app.services.crawl_stats_service import CrawlStatsService
 
     return CrawlStatsService(query_port=CrawlRunRepositoryAdapter())
+
+
+def get_notice_preview_service() -> NoticePreviewService:
+    """요청 스코프 NoticePreviewService."""
+    from app.services.notice_preview_service import NoticePreviewService
+
+    return NoticePreviewService()
