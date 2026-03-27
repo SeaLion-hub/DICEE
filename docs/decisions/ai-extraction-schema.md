@@ -86,6 +86,7 @@ LLM이 JSON을 **위에서부터 순서대로** 생성한다는 점을 이용해
 
 - "Instructor 기반 4단계 AI 파이프라인" 계획의 **스키마 설계** 섹션은 본 문서(ai-extraction-schema.md)를 SSOT로 참조한다.  
 - `app/schemas/ai.py` 구현 시 위 Enum·필드·validator를 반영한다.
+- 5단계 **유저–공지 매칭·목록 페이지네이션·달력 API·크롤 툼스톤** 계약은 [user-notice-matching-and-api-contracts.md](user-notice-matching-and-api-contracts.md) (APPROVED)를 참조한다.
 
 ---
 

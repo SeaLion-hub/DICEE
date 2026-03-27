@@ -46,16 +46,18 @@
 **결과만 로드맵에 기입.** (예: "3단계: 일정 스키마 **A(DateTime 컬럼형)** 적용" 또는 "**B(dates JSONB 유지)** 적용")  
 **결정 시점**: 3단계 DB 스키마 확정 전.
 
+**5단계 계약 (매칭·페이지네이션·달력·툼스톤)**: [decisions/user-notice-matching-and-api-contracts.md](decisions/user-notice-matching-and-api-contracts.md) (**APPROVED** 2026-03-27). 구현 완료 시 본 표는 “반영 완료”로 갱신한다.
+
 
 | 단계      | 항목                                                    | 결정 시점               | 설명                                                                                                                             |
 | ------- | ----------------------------------------------------- | ------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
 | 3단계     | College 목록·external_id                                | 3단계 시작 전            | 수집할 단과대/게시판 목록, College.external_id 정의. College별 크롤러 모듈·목록 URL 매핑을 config·시드에 문서화. (확정: external_id는 게시글 번호 우선, 없으면 URL path.) |
 | 3단계     | ~~Notice.external_id~~ / ~~크롤 주기~~ / ~~content_hash~~ | —                   | **결정 완료.** 확정 사항 "3단계 확정(구현 원칙)" 참고.                                                                                           |
 | **3단계** | **Notice 일정 스키마**                                        | —                   | [데이터베이스 명세서](decisions/database-spec.md)에서 Option A(notice_schedules 정규화)로 확정. database-spec 참고.                                 |
-| 4단계     | User↔AI 매칭 규칙                                         | 4단계 스키마 설계 시        | User.profile_json(major, grade 등)와 ai_extracted_json(target_departments, target_grades)의 매칭 로직. "포함 여부" vs "정확 일치".            |
-| 4단계     | 학과·학년 값 형식                                            | 4단계 스키마 설계 시        | target_departments, target_grades 값 범위·형식 통일. User 프로필 값과 비교 가능하도록.                                                            |
-| 5단계     | 목록 API 페이지네이션                                         | 5단계 API 설계 시        | cursor vs offset, 기본 page_size. 6단계 무한 스크롤 설계에 영향.                                                                             |
-| 5단계     | 일정 API 필터 범위                                          | 5단계 API 설계 시        | year, month 외 day 또는 from/to 필요 여부. 6단계 주간 뷰 등에 영향.                                                                            |
+| 4~5단계   | User↔AI 매칭 규칙                                         | 5단계 구현 전            | **확정**: [user-notice-matching-and-api-contracts.md](decisions/user-notice-matching-and-api-contracts.md) §2–4 (전체/맞춤 탭, `department_codes`·선택형 학년).            |
+| 4~5단계   | 학과·학년 값 형식                                            | 5단계 구현 전            | **확정**: 동 문서 §2·§2.1-A (카탈로그·enum 선택만) + [ai-extraction-schema.md](decisions/ai-extraction-schema.md) `TargetGrade`·`target_departments`.                                                            |
+| 5단계     | 목록 API 페이지네이션                                         | 5단계 API 설계 시        | **확정**: 커서 기반, `limit` 기본 20·최대 50 (문서 §5).                                                                             |
+| 5단계     | 일정 API 필터 범위                                          | 5단계 API 설계 시        | **확정**: `year`+`month` 또는 `from`+`to`, 구간 우선 (문서 §6).                                                                            |
 
 
 ---

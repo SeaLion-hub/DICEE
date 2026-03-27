@@ -21,5 +21,14 @@ def test_generated_codex_skills_present() -> None:
 
 
 def test_gstack_skill_md_readable() -> None:
-    text = (GENERATED / "gstack-review" / "SKILL.md").read_text(encoding="utf-8", errors="replace")
-    assert "name: review" in text and "Pre-landing PR review" in text
+    """Assert generated skill looks like Codex SKILL.md, not exact copy-pasted phrases."""
+    skill_md = GENERATED / "gstack-review" / "SKILL.md"
+    text = skill_md.read_text(encoding="utf-8", errors="replace")
+    assert len(text) >= 2048, "Generated gstack-review SKILL.md too small; run ./setup --host codex"
+    stripped = text.lstrip()
+    assert stripped.startswith("---"), "Expected YAML frontmatter opening"
+    close = text.find("\n---\n", 1)
+    assert close != -1, "Expected YAML frontmatter closing"
+    frontmatter = text[:close]
+    assert "name:" in frontmatter, "Expected name: in skill frontmatter"
+    assert "description:" in frontmatter, "Expected description: in skill frontmatter"
