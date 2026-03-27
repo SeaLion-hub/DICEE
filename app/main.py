@@ -43,6 +43,10 @@ from app.middleware import RequestIDMiddleware, RequestMetricsMiddleware, Saniti
 
 logger = logging.getLogger(__name__)
 
+_env = (settings.environment or "").strip().lower()
+# 프로덕션: 스키마·엔드포인트 노출 축소 (OpenAPI/Swagger/ReDoc 비활성)
+_OPENAPI_DISABLED = _env == "production"
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -77,6 +81,9 @@ app = FastAPI(
     description="연세대 공지 매칭 백엔드",
     version="0.1.0",
     lifespan=lifespan,
+    docs_url=None if _OPENAPI_DISABLED else "/docs",
+    redoc_url=None if _OPENAPI_DISABLED else "/redoc",
+    openapi_url=None if _OPENAPI_DISABLED else "/openapi.json",
 )
 
 app.include_router(health.router)

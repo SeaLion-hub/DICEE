@@ -647,7 +647,7 @@ def test_trigger_crawl_returns_503_when_client_ip_unresolved(client, monkeypatch
         app.dependency_overrides.pop(get_redis_trigger_lock, None)
 
     assert response.status_code == 503
-    assert "Client IP could not be determined" in response.json().get("detail", "")
+    assert "Client identity could not be determined" in response.json().get("detail", "")
 
 
 def test_check_crawl_trigger_secret_valid_and_invalid(monkeypatch):
@@ -714,7 +714,7 @@ def test_crawl_stats_returns_503_when_client_ip_unresolved(client, monkeypatch):
         app.dependency_overrides.pop(get_redis_trigger_lock, None)
 
     assert response.status_code == 503
-    assert "Client IP could not be determined" in response.json().get("detail", "")
+    assert "Client identity could not be determined" in response.json().get("detail", "")
 
 
 def test_logout_blocklist_unavailable_returns_503(client, monkeypatch):

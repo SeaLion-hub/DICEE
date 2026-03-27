@@ -69,6 +69,8 @@
 - [타입] `yonsei_ai`: `NavigableString`을 `bs4.element`에서 import(`reportPrivateImportUsage` 제거).
 - [타입] `yonsei_science`: `find_all("img"|"table")` 결과를 `as_tag`로 `Tag` 좁힘 후 `.get`·속성 대입(basedpyright `PageElement`/`NavigableString` 오류 제거).
 - [타입] `yonsei_international`: `find(..., class_=lambda)` 반환을 `bool(...)`로 고정해 `_StrainableAttribute`/`_NullableStringMatchFunction` 정합.
+- [보안] `environment=production`에서 OpenAPI(`/openapi.json`, `/docs`, `/redoc`) 비활성(`app/main.py`). 내부 트리거 미설정 503·클라이언트 IP 미해결 503 응답 문구 일반화로 배열·엔드포인트 정보 누출 완화(`app/api/internal.py`). 검증: `pytest` 302 passed, 3 skipped.
+- [크롤·페이로드] `_resolve_notice_images`: `type=base64`일 때 `data`가 `bytes`(이미 디코드) 또는 `str`(ASCII base64) 모두 허용(`app/services/crawl_payload.py`). `tests/test_crawl_payload.py` raw bytes 경로 추가. `yonsei_chemistry.get_chemistry_links` 중복 URL 검사를 `seen_urls` set으로 O(n). 검증: `pytest` 303 passed, 3 skipped.
 
 ## 2026-03-23
 

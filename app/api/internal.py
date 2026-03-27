@@ -142,7 +142,7 @@ def _authorize_internal_trigger(
         _log_internal_auth_failure(request, reason="trigger_not_configured", error=e)
         raise HTTPException(
             status_code=503,
-            detail="Crawl trigger not configured (CRAWL_TRIGGER_SECRET missing)",
+            detail="Service temporarily unavailable. Try again later.",
         ) from None
     except InvalidCrawlTriggerSecretError as e:
         _log_internal_auth_failure(request, reason="invalid_or_missing_secret", error=e)
@@ -152,13 +152,13 @@ def _authorize_internal_trigger(
         ) from None
 
 
-def _require_client_ip(request: Request, *, endpoint: str) -> str:
+def _require_client_ip(request: Request) -> str:
     """Fail-closed: if client IP cannot be resolved, return 503."""
     client_ip = get_client_ip(request)
     if client_ip is None:
         raise HTTPException(
             status_code=503,
-            detail=f"Client IP could not be determined for {endpoint}",
+            detail="Client identity could not be determined.",
         )
     return client_ip
 
@@ -250,7 +250,7 @@ async def post_trigger_crawl(
         x_crawl_trigger_secret=x_crawl_trigger_secret,
         authorization=authorization,
     )
-    client_ip = _require_client_ip(request, endpoint="/internal/trigger-crawl")
+    client_ip = _require_client_ip(request)
     rate_identifier = f"internal_trigger_crawl:{client_ip}"
     allowed = await _enforce_rate_limit_or_503(
         redis_client,
@@ -304,7 +304,7 @@ async def get_crawl_stats(
         x_crawl_trigger_secret=x_crawl_trigger_secret,
         authorization=authorization,
     )
-    client_ip = _require_client_ip(request, endpoint="/internal/crawl-stats")
+    client_ip = _require_client_ip(request)
     rate_identifier = f"internal_crawl_stats:{client_ip}"
     allowed = await _enforce_rate_limit_or_503(
         redis_client,

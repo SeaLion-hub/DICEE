@@ -122,6 +122,8 @@ def _resolve_notice_images(
     """
     크롤러 images를 스토리지 URL 기준으로 정규화.
     base64 → 업로드 후 URL; 이미 URL인 항목은 { url, name } 형태로 통일.
+
+    type이 base64일 때 data는 (1) ASCII base64 문자열 또는 (2) 이미 디코드된 이미지 바이너리(bytes)를 허용한다.
     """
     resolved: list[dict] = []
     for idx, item in enumerate(images or []):
@@ -133,7 +135,19 @@ def _resolve_notice_images(
 
         if itype == "base64" and data:
             try:
-                raw = base64.b64decode(data, validate=True)
+                if isinstance(data, bytes):
+                    raw = data
+                elif isinstance(data, str):
+                    raw = base64.b64decode(data, validate=True)
+                else:
+                    if ctx:
+                        logger.debug(
+                            "base64 image idx=%s: data must be str or bytes, got %s",
+                            idx,
+                            type(data).__name__,
+                            extra=ctx.extra_for_log(),
+                        )
+                    continue
             except Exception as e:
                 if ctx:
                     logger.debug(
