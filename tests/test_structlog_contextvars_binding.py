@@ -1,8 +1,8 @@
 import logging
+from unittest.mock import patch
 
 import structlog
 from app.core.logging_context import clear_request_context, set_request_context
-from unittest.mock import patch
 
 
 def test_set_request_context_binds_structlog_contextvars() -> None:

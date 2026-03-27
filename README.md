@@ -77,7 +77,7 @@ docker compose up --build -d
 
 ### 4) 헬스체크 확인
 
-엔드포인트 역할이 다르다. 운영·배포 상세는 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md), 절차는 [docs/runbooks/](docs/runbooks/)를 본다.
+엔드포인트 역할이 다르다. 운영·배포 상세는 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md), GitHub/Railway/Sentry 게이트는 [docs/RUNBOOK_DEPLOY.md](docs/RUNBOOK_DEPLOY.md), 절차 모음은 [docs/runbooks/](docs/runbooks/)를 본다.
 
 | 경로 | 용도 |
 |------|------|
@@ -115,6 +115,12 @@ docker compose down
 # 종료 + 볼륨 삭제
 docker compose down -v
 ```
+
+## 품질·회귀
+
+- `main`은 PR + CI green 후 머지 ([RUNBOOK_DEPLOY.md](docs/RUNBOOK_DEPLOY.md)의 GitHub 보호 규칙).
+- 버그픽스 PR에는 같은 PR에 회귀 테스트 최소 1개. 우선순위 목록: [tests/CRITICAL_PATHS.md](tests/CRITICAL_PATHS.md).
+- 로컬 빠른 루프: `pytest -m "not integration"` (통합은 `DATABASE_URL` 있을 때).
 
 ## Project Docs
 

@@ -1,0 +1,4 @@
+# One CVE/OSV ID per line. Passed to pip-audit as --ignore-vuln.
+# Document the reason in the PR when adding an entry.
+# Example:
+# GHSA-xxxx-yyyy-zzzz

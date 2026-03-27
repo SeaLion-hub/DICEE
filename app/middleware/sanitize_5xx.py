@@ -2,11 +2,11 @@
 
 import json
 import logging
+from typing import Any, cast
 
 from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
-from starlette.responses import Response
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, Response
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +26,15 @@ _UNSAFE_FORWARD_HEADERS = {
     "content-type",
     "content-encoding",
 }
+
+
+def _response_body_to_str(body: object) -> str:
+    """JSONResponse.body 등 Starlette 혼합 타입을 순수 str로 정규화 (타입 체커·in 연산자용)."""
+    if isinstance(body, str):
+        return body
+    if isinstance(body, bytes | bytearray):
+        return body.decode("utf-8", errors="replace")
+    return bytes(cast(Any, body)).decode("utf-8", errors="replace")
 
 
 def _filtered_error_headers(headers: dict[str, str]) -> dict[str, str]:
@@ -55,12 +64,7 @@ class Sanitize5xxMiddleware(BaseHTTPMiddleware):
             body = response.body
             if not body:
                 return response
-            if isinstance(body, str):
-                text = body
-            elif isinstance(body, (bytes, bytearray)):
-                text = body.decode("utf-8", errors="replace")
-            else:
-                text = bytes(body).decode("utf-8", errors="replace")
+            text = _response_body_to_str(body)
             # 이미 안전한 JSON(detail + code만)이면 유지
             try:
                 data = json.loads(text)

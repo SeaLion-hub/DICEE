@@ -8,6 +8,8 @@ import os
 import pytest
 from sqlalchemy import select
 
+pytestmark = pytest.mark.integration
+
 
 @pytest.fixture(scope="module")
 def _ensure_sync_db():

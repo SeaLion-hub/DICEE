@@ -10,6 +10,17 @@ asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
 pythonpath = ["."]
 filterwarnings = ["ignore::DeprecationWarning"]
+markers = [
+    "integration: tests that need DATABASE_URL or full stack (see tests/integration/)",
+    "slow: opt-in long-running tests; exclude locally with -m \"not slow\"",
+]
+
+# yonsei_* crawlers: repetitive per-college templates; aggregate coverage is tracked without them.
+[tool.coverage.run]
+source = ["app"]
+omit = [
+    "app/services/crawlers/yonsei_*.py",
+]
 
 [tool.ruff]
 target-version = "py311"

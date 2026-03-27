@@ -1,0 +1,37 @@
+name: SCA weekly
+
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+jobs:
+  pip-audit-report:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: pip-audit (informational)
+        continue-on-error: true
+        env:
+          PYTHONIOENCODING: utf-8
+        run: |
+          pip install pip-audit
+          EXTRA=()
+          while IFS= read -r line || [ -n "$line" ]; do
+            [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
+            EXTRA+=(--ignore-vuln "$line")
+          done < .github/pip-audit-allowlist.txt
+          pip-audit -r requirements.txt -r requirements-dev.txt --desc off "${EXTRA[@]}"
+          echo "Weekly audit finished. If red above, upgrade deps or document IDs in .github/pip-audit-allowlist.txt."

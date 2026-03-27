@@ -10,6 +10,8 @@
   - 마이그레이션은 Release 단계 또는 별도 migrate 잡에서 1회 실행한다.
   - `APP_ENTRY`를 명시해 프로세스 역할을 강제한다(`api`, `celery`, `migrate`).
 
+**브랜치 보호·SCA·Sentry·로그 전환 체크리스트:** [RUNBOOK_DEPLOY.md](RUNBOOK_DEPLOY.md)
+
 ---
 
 ## Quick Start (5분)

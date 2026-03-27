@@ -29,6 +29,7 @@ wheels/
 
 # Virtual
 .venv/
+.venv-ci-audit/
 venv/
 ENV/
 env/
