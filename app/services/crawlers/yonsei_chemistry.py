@@ -54,6 +54,7 @@ def get_chemistry_links(list_url: str) -> list[dict[str, Any]]:
             raise
         soup = BeautifulSoup(text, "html.parser")
         links: list[dict[str, Any]] = []
+        seen_urls: set[str] = set()
 
         for row in soup.find_all("tr"):
             row_tag = as_tag(row)
@@ -79,7 +80,8 @@ def get_chemistry_links(list_url: str) -> list[dict[str, Any]]:
                 first_td_text = first_td.get_text(strip=True) if first_td is not None else ""
                 if first_td_text.isdigit():
                     num_text = first_td_text
-            if not any(d["url"] == full_url for d in links):
+            if full_url not in seen_urls:
+                seen_urls.add(full_url)
                 links.append({"no": num_text, "title_hint": title, "url": full_url})
 
         return links

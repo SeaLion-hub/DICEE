@@ -144,6 +144,12 @@ def __getattr__(name: str) -> Any:
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
+def college_codes_for_openapi() -> str:
+    """등록된 college_code를 쉼표 구분 문자열로 반환. OpenAPI Query description 등에 사용."""
+    code_to_mod, _ = _ensure_registry()
+    return ", ".join(sorted(code_to_mod.keys()))
+
+
 def get_seed_colleges_from_crawlers() -> list[tuple[str, str]]:
     """자동 수집된 크롤러 스펙에서 (display_name, college_code) 목록 반환. college_code 기준 정렬(deterministic)."""
     code_to_mod, config = _ensure_registry()

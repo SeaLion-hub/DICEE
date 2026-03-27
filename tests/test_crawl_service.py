@@ -164,6 +164,7 @@ def _make_draft(college_id: uuid.UUID, i: int) -> NoticeDraft:
 
 
 def test_run_crawl_pipeline_sync_uses_chunk_size_for_flush():
+    from app.core.metrics import CRAWL_PIPELINE_PEAK_PENDING_DRAFTS, get_gauge
     from app.services.crawl.pipeline_sync import _run_crawl_pipeline_sync
     from app.services.crawl.runtime import CrawlRuntimeConfig
 
@@ -206,6 +207,7 @@ def test_run_crawl_pipeline_sync_uses_chunk_size_for_flush():
     assert total == 5
     assert len(ids) == 5
     assert adapter.flush_sizes == [2, 2, 1]
+    assert get_gauge(CRAWL_PIPELINE_PEAK_PENDING_DRAFTS, {"college_code": "engineering"}) == 2.0
 
 
 def test_sync_adapter_reflects_worker_and_inflight_config(monkeypatch):
@@ -333,6 +335,116 @@ def test_record_crawl_failure_fallback_uses_shared_sync_client(monkeypatch):
     assert key.startswith(CRAWL_FAILURE_REDIS_KEY_PREFIX)
     assert "engineering" in payload
     assert ttl == CRAWL_FAILURE_REDIS_TTL_SECONDS
+
+
+def test_handle_crawl_failure_composite_falls_back_to_redis_on_db_failure():
+    from app.domain.contracts.crawl_contracts import CrawlJobFailed
+    from app.services.crawl import failure as crawl_failure
+
+    session = MagicMock()
+    session.commit.side_effect = RuntimeError("db commit failed")
+    event = CrawlJobFailed(
+        run_id=uuid.UUID("00000000-0000-0000-0000-000000000010"),
+        task_id="task-1",
+        college_code="engineering",
+        error_message="boom",
+        reason_code="upsert_failed",
+    )
+
+    with (
+        patch.object(crawl_failure, "update_crawl_run_sync"),
+        patch.object(crawl_failure, "_record_crawl_failure_fallback") as mock_fallback,
+    ):
+        crawl_failure.handle_crawl_failure_composite(session, event)
+
+    mock_fallback.assert_called_once_with(
+        event.run_id,
+        event.task_id,
+        event.college_code,
+        event.error_message,
+        reason_code=event.reason_code,
+    )
+
+
+def test_record_crawl_failure_fallback_graceful_when_shared_client_missing(monkeypatch):
+    from unittest.mock import MagicMock
+
+    from app.services.crawl import failure as crawl_failure
+    from app.services.crawl.failure import _record_crawl_failure_fallback
+
+    mock_settings = MagicMock()
+    mock_settings.redis.redis_url = "redis://localhost/0"
+    monkeypatch.setattr(crawl_failure, "settings", mock_settings)
+    monkeypatch.setattr(crawl_failure, "get_shared_sync_redis_client", lambda: None)
+
+    _record_crawl_failure_fallback(
+        uuid.UUID("00000000-0000-0000-0000-000000000021"),
+        "task-1",
+        "engineering",
+        "error",
+    )
+
+
+def test_record_crawl_failure_fallback_graceful_when_redis_set_fails(monkeypatch):
+    from unittest.mock import MagicMock
+
+    from app.services.crawl import failure as crawl_failure
+    from app.services.crawl.failure import _record_crawl_failure_fallback
+
+    class _BrokenClient:
+        def set(self, key, payload, ex):  # noqa: ARG002
+            raise RuntimeError("redis down")
+
+    mock_settings = MagicMock()
+    mock_settings.redis.redis_url = "redis://localhost/0"
+    monkeypatch.setattr(crawl_failure, "settings", mock_settings)
+    monkeypatch.setattr(crawl_failure, "get_shared_sync_redis_client", lambda: _BrokenClient())
+
+    _record_crawl_failure_fallback(
+        uuid.UUID("00000000-0000-0000-0000-000000000022"),
+        "task-2",
+        "engineering",
+        "error",
+    )
+
+
+def test_run_crawl_job_sync_returns_upserted_and_enqueued_counts():
+    from app.services.crawl.failure import run_crawl_job_sync
+
+    run_id = uuid.UUID("00000000-0000-0000-0000-000000000011")
+    college = MagicMock()
+    college.id = uuid.UUID("00000000-0000-0000-0000-000000000012")
+    session = MagicMock()
+
+    def _fake_crawl_college_sync(
+        _session,
+        _college_code,
+        *,
+        run_id=None,
+        task_id=None,
+        on_chunk_processed=None,
+    ):
+        if on_chunk_processed is not None:
+            on_chunk_processed([uuid.uuid4(), uuid.uuid4()])
+            on_chunk_processed([uuid.uuid4()])
+        return (5, [])
+
+    with (
+        patch("app.services.crawl.failure.get_college_by_external_id_sync", return_value=college),
+        patch("app.services.crawl.failure.ensure_crawl_run_task_sync", return_value=run_id),
+        patch("app.services.crawl.failure.create_or_update_crawl_run_sync"),
+        patch("app.services.crawl.failure.crawl_college_sync", side_effect=_fake_crawl_college_sync),
+        patch("app.services.crawl.failure.update_crawl_run_sync"),
+    ):
+        upserted, enqueued_ai = run_crawl_job_sync(
+            session,
+            "engineering",
+            "task-123",
+            on_chunk_processed=lambda ids: None,
+        )
+
+    assert upserted == 5
+    assert enqueued_ai == 3
 
 
 def test_scrape_one_sync_returns_exception_in_tuple_on_value_error():
@@ -626,6 +738,7 @@ def test_process_scrape_result_parser_threshold_aborts():
     """파서 실패 임계치 초과 시 CrawlThresholdExceeded 반환(대학 단위 중단)."""
     from app.domain.contracts.crawl_contracts import CrawlLogContext
     from app.services.crawl.collect_sync import _process_scrape_result
+    from app.services.crawl.item_pipeline import DefaultNoticeItemPipeline
     from app.services.crawl_policy import (
         PARSER_CONSECUTIVE_FAILURES_THRESHOLD,
         CrawlErrorTracker,
@@ -636,6 +749,7 @@ def test_process_scrape_result_parser_threshold_aborts():
     ctx = CrawlLogContext(college_code="test")
     tracker = CrawlErrorTracker()
     seen = set()
+    pipeline = DefaultNoticeItemPipeline(seen)
     got_threshold = None
 
     for i in range(PARSER_CONSECUTIVE_FAILURES_THRESHOLD + 2):
@@ -649,6 +763,7 @@ def test_process_scrape_result_parser_threshold_aborts():
             seen,
             tracker,
             ctx,
+            item_pipeline=pipeline,
         )
         if raise_exc is not None:
             assert isinstance(raise_exc, CrawlThresholdExceeded)
@@ -662,6 +777,7 @@ def test_process_scrape_result_increments_threshold_metric_on_trigger(monkeypatc
     from app.core.metrics import CRAWL_PARSE_THRESHOLD_TRIGGER_TOTAL
     from app.domain.contracts.crawl_contracts import CrawlLogContext
     from app.services.crawl.collect_sync import _process_scrape_result
+    from app.services.crawl.item_pipeline import DefaultNoticeItemPipeline
     from app.services.crawl_policy import (
         PARSER_CONSECUTIVE_FAILURES_THRESHOLD,
         CrawlErrorTracker,
@@ -671,6 +787,7 @@ def test_process_scrape_result_increments_threshold_metric_on_trigger(monkeypatc
     ctx = CrawlLogContext(college_code="test")
     seen = set()
     tracker = CrawlErrorTracker()
+    pipeline = DefaultNoticeItemPipeline(seen)
     increment_calls: list = []
 
     def _capture_increment(name: str, value: int = 1, labels: dict | None = None) -> None:
@@ -688,6 +805,7 @@ def test_process_scrape_result_increments_threshold_metric_on_trigger(monkeypatc
             seen,
             tracker,
             ctx,
+            item_pipeline=pipeline,
         )
         if raise_exc is not None:
             break
@@ -701,6 +819,7 @@ def test_process_scrape_result_increments_drop_metric_with_reason(monkeypatch):
     from app.core.metrics import CRAWL_DROP_TOTAL, DROP_REASON_DUPLICATE
     from app.domain.contracts.crawl_contracts import CrawlLogContext
     from app.services.crawl.collect_sync import _process_scrape_result
+    from app.services.crawl.item_pipeline import DefaultNoticeItemPipeline
     from app.services.crawl_policy import CrawlErrorTracker
     from app.services.crawlers.base import ScrapeResult
 
@@ -708,6 +827,7 @@ def test_process_scrape_result_increments_drop_metric_with_reason(monkeypatch):
     ctx = CrawlLogContext(college_code="test")
     seen: set[str] = {"already-seen"}
     tracker = CrawlErrorTracker()
+    pipeline = DefaultNoticeItemPipeline(seen)
     increment_calls: list = []
 
     def _capture_increment(name: str, value: int = 1, labels: dict | None = None) -> None:
@@ -724,6 +844,7 @@ def test_process_scrape_result_increments_drop_metric_with_reason(monkeypatch):
         seen,
         tracker,
         ctx,
+        item_pipeline=pipeline,
     )
     assert payload is None
     assert raise_exc is None

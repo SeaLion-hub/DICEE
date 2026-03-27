@@ -4,11 +4,17 @@ import hashlib
 import logging
 import uuid as uuid_mod
 from collections.abc import Callable
+from dataclasses import dataclass
+from typing import Annotated, Any, cast
 
 import httpx
 import sentry_sdk
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from pyjwt_key_fetcher import AsyncKeyFetcher
+from redis.asyncio import Redis as RedisAsyncio
+from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import TimeoutError as SQLAlchemyTimeoutError
 
 from app.core.api_rate_limit import (
     RateLimitUnavailableError,
@@ -36,13 +42,22 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 logger = logging.getLogger(__name__)
 security = HTTPBearer(auto_error=False)
 
+BearerCredentialsDep = Annotated[HTTPAuthorizationCredentials | None, Depends(security)]
+RedisBlocklistDep = Annotated[RedisAsyncio | None, Depends(get_redis_blocklist)]
+HttpxClientDep = Annotated[httpx.AsyncClient, Depends(get_httpx_client)]
+GoogleKeyFetcherDep = Annotated[AsyncKeyFetcher, Depends(get_google_key_fetcher)]
+
 # 캠퍼스·기숙사 등 동일 IP 다수 사용자 환경 안내 (429 시)
 RATE_LIMIT_429_DETAIL_SUFFIX = " 같은 네트워크(캠퍼스·기숙사 등)를 쓰는 경우일 수 있습니다. 잠시 후 다시 시도해 주세요."
-RATE_LIMIT_RETRY_AFTER_SECONDS = 60
+AUTH_RETRY_AFTER_SECONDS = 60
+
+
+def _retry_after_headers(seconds: int = AUTH_RETRY_AFTER_SECONDS) -> dict[str, str]:
+    return {"Retry-After": str(seconds)}
 
 
 def _rate_limit_headers() -> dict[str, str]:
-    return {"Retry-After": str(RATE_LIMIT_RETRY_AFTER_SECONDS)}
+    return _retry_after_headers(AUTH_RETRY_AFTER_SECONDS)
 
 
 def _log_auth_rate_limit_exceeded(request: Request, client_ip: str) -> None:
@@ -71,7 +86,7 @@ def _auth_rate_limit_dep(
 
     async def _dep(
         request: Request,
-        redis_rate=Depends(get_redis_blocklist),
+        redis_rate: RedisBlocklistDep,
     ) -> str:
         client_ip = get_client_ip(request)
         if client_ip is None:
@@ -92,6 +107,7 @@ def _auth_rate_limit_dep(
             raise HTTPException(
                 status_code=503,
                 detail="Rate limiting is temporarily unavailable. Try again later.",
+                headers=_retry_after_headers(),
             ) from None
         if not allowed:
             _log_auth_rate_limit_exceeded(request, client_ip)
@@ -110,11 +126,19 @@ def _refresh_token_fingerprint(refresh_token: str) -> str:
     return hashlib.sha256(refresh_token.strip().encode("utf-8")).hexdigest()[:16]
 
 
-async def get_current_user_id(
-    credentials: HTTPAuthorizationCredentials | None = Depends(security),
-    redis_blocklist=Depends(get_redis_blocklist),
-):
-    """Bearer Access JWT 검증 후 user_id(UUID) 반환. Blocklist/Redis 장애 정책. 성공 시 user_id_hash·Sentry 설정."""
+@dataclass(frozen=True, slots=True)
+class VerifiedAccess:
+    """검증된 Access JWT에서 추출한 식별자. 하위 의존성에서 요청당 한 번만 검증된다."""
+
+    user_id: uuid_mod.UUID
+    jti: str | None
+
+
+async def get_verified_access(
+    credentials: BearerCredentialsDep,
+    redis_blocklist: RedisBlocklistDep,
+) -> VerifiedAccess:
+    """Bearer Access JWT 검증 후 user_id·jti. Blocklist/Redis 장애 정책. 성공 시 user_id_hash·Sentry 설정."""
     if not credentials:
         raise HTTPException(status_code=401, detail="Missing or invalid Authorization")
     try:
@@ -130,56 +154,67 @@ async def get_current_user_id(
             sentry_sdk.set_user({"id": user_id_hash})
         except Exception:
             logger.debug("user_id_hash/Sentry set_user failed; continuing.", exc_info=True)
-        return user_id
+        return VerifiedAccess(user_id=user_id, jti=payload.get("jti"))
     except (AuthError, ValueError):
         raise HTTPException(status_code=401, detail="Invalid or expired token") from None
     except BlocklistUnavailableError:
         raise HTTPException(
             status_code=503,
             detail="Authentication service temporarily unavailable",
+            headers=_retry_after_headers(),
         ) from None
 
 
-async def get_current_user_id_and_jti(
-    credentials: HTTPAuthorizationCredentials | None = Depends(security),
-    redis_blocklist=Depends(get_redis_blocklist),
-):
-    """Access JWT 검증 후 (user_id UUID, jti) 반환. 로그아웃 Blocklist 등록용. 성공 시 user_id_hash·Sentry 설정."""
-    if not credentials:
-        raise HTTPException(status_code=401, detail="Missing or invalid Authorization")
-    try:
-        payload = await verify_access_token(
-            credentials.credentials,
-            redis_blocklist,
-            fail_closed=settings.redis.redis_blocklist_fail_closed,
-        )
-        user_id = uuid_mod.UUID(payload["sub"])
-        try:
-            user_id_hash = compute_user_id_hash(user_id)
-            set_request_context(user_id_hash=user_id_hash)
-            sentry_sdk.set_user({"id": user_id_hash})
-        except Exception:
-            logger.debug("user_id_hash/Sentry set_user failed; continuing.", exc_info=True)
-        return user_id, payload.get("jti")
-    except (AuthError, ValueError):
-        raise HTTPException(status_code=401, detail="Invalid or expired token") from None
-    except BlocklistUnavailableError:
-        raise HTTPException(
-            status_code=503,
-            detail="Authentication service temporarily unavailable",
-        ) from None
+VerifiedAccessDep = Annotated[VerifiedAccess, Depends(get_verified_access)]
 
 
-@router.get("/google/state")
-async def get_google_auth_state(
-    redis_blocklist=Depends(get_redis_blocklist),
-    client_ip: str = Depends(
+async def get_current_user_id(access: VerifiedAccessDep) -> uuid_mod.UUID:
+    """Bearer Access JWT 검증 후 user_id(UUID) 반환."""
+    return access.user_id
+
+
+async def get_current_user_id_and_jti(access: VerifiedAccessDep) -> tuple[uuid_mod.UUID, str | None]:
+    """Access JWT 검증 후 (user_id UUID, jti) 반환. 로그아웃 Blocklist 등록용."""
+    return access.user_id, access.jti
+
+
+GoogleStateClientIpDep = Annotated[
+    str,
+    Depends(
         _auth_rate_limit_dep(
             "google_state",
             lambda: settings.auth_google_state_rate_limit_per_minute,
             "Too many state issuance requests, please try again later.",
         )
     ),
+]
+GoogleAuthClientIpDep = Annotated[
+    str,
+    Depends(
+        _auth_rate_limit_dep(
+            "google",
+            lambda: settings.auth_google_rate_limit_per_minute,
+            "Too many authentication attempts, please try again later.",
+        )
+    ),
+]
+RefreshClientIpDep = Annotated[
+    str,
+    Depends(
+        _auth_rate_limit_dep(
+            "refresh",
+            lambda: settings.auth_refresh_rate_limit_per_minute,
+            "Too many refresh requests, please try again later.",
+        )
+    ),
+]
+CurrentUserIdAndJtiDep = Annotated[tuple[uuid_mod.UUID, str | None], Depends(get_current_user_id_and_jti)]
+
+
+@router.get("/google/state")
+async def get_google_auth_state(
+    redis_blocklist: RedisBlocklistDep,
+    client_ip: GoogleStateClientIpDep,
 ) -> dict[str, str]:
     """
     로그인 시작 시 1회용 state 발급. Redis에 저장 후 반환. CSRF 방어용.
@@ -189,13 +224,15 @@ async def get_google_auth_state(
         raise HTTPException(
             status_code=503,
             detail="State storage temporarily unavailable",
+            headers=_retry_after_headers(),
         )
     state = generate_state()
-    stored = await store_state(redis_blocklist, state)
+    stored = await store_state(cast(Any, redis_blocklist), state)
     if not stored:
         raise HTTPException(
             status_code=503,
             detail="State storage temporarily unavailable",
+            headers=_retry_after_headers(),
         )
     return {"state": state}
 
@@ -204,16 +241,10 @@ async def get_google_auth_state(
 async def post_google_auth(
     payload: TokenPayload,
     session: SessionDep,
-    http_client: httpx.AsyncClient = Depends(get_httpx_client),
-    key_fetcher=Depends(get_google_key_fetcher),
-    redis_blocklist=Depends(get_redis_blocklist),
-    client_ip: str = Depends(
-        _auth_rate_limit_dep(
-            "google",
-            lambda: settings.auth_google_rate_limit_per_minute,
-            "Too many authentication attempts, please try again later.",
-        )
-    ),
+    http_client: HttpxClientDep,
+    key_fetcher: GoogleKeyFetcherDep,
+    redis_blocklist: RedisBlocklistDep,
+    client_ip: GoogleAuthClientIpDep,
 ) -> TokenResponse:
     """
     구글 OAuth Authorization Code로 로그인.
@@ -231,8 +262,9 @@ async def post_google_auth(
             raise HTTPException(
                 status_code=503,
                 detail="State validation temporarily unavailable",
+                headers=_retry_after_headers(),
             )
-        consumed = await consume_state(redis_blocklist, payload.state)
+        consumed = await consume_state(cast(Any, redis_blocklist), payload.state)
         if not consumed:
             raise HTTPException(
                 status_code=400,
@@ -260,12 +292,25 @@ async def post_google_auth(
         raise HTTPException(
             status_code=503,
             detail="Authentication service temporarily unavailable",
+            headers=_retry_after_headers(),
         ) from e
     except AuthError as e:
         logger.warning("Google login auth error: %s", e)
         raise HTTPException(
             status_code=400,
             detail="Invalid request",
+        ) from e
+    except (OperationalError, SQLAlchemyTimeoutError, TimeoutError) as e:
+        await session.rollback()
+        logger.warning(
+            "Google auth DB temporarily unavailable: %s",
+            type(e).__name__,
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="Authentication service temporarily unavailable",
+            headers=_retry_after_headers(),
         ) from e
     except Exception:
         await session.rollback()
@@ -277,14 +322,8 @@ async def post_refresh(
     request: Request,
     payload: RefreshTokenPayload,
     session: SessionDep,
-    client_ip: str = Depends(
-        _auth_rate_limit_dep(
-            "refresh",
-            lambda: settings.auth_refresh_rate_limit_per_minute,
-            "Too many refresh requests, please try again later.",
-        )
-    ),
-    redis_rate=Depends(get_redis_blocklist),
+    client_ip: RefreshClientIpDep,
+    redis_rate: RedisBlocklistDep,
 ) -> TokenResponse:
     """
     Refresh 토큰으로 새 Access/Refresh JWT 발급.
@@ -304,6 +343,7 @@ async def post_refresh(
         raise HTTPException(
             status_code=503,
             detail="Rate limiting is temporarily unavailable. Try again later.",
+            headers=_retry_after_headers(),
         ) from None
     if not allowed:
         _log_auth_rate_limit_exceeded(request, client_ip)
@@ -334,11 +374,11 @@ async def post_refresh(
         raise
 
 
-@router.post("/logout", status_code=204)
+@router.post("/logout", status_code=204, response_model=None)
 async def post_logout(
     session: SessionDep,
-    user_id_and_jti=Depends(get_current_user_id_and_jti),
-    redis_blocklist=Depends(get_redis_blocklist),
+    user_id_and_jti: CurrentUserIdAndJtiDep,
+    redis_blocklist: RedisBlocklistDep,
 ) -> None:
     """
     로그아웃. Redis Blocklist 등록(성공) 후 refresh_token_version 증가 + commit.
@@ -353,6 +393,7 @@ async def post_logout(
             raise HTTPException(
                 status_code=503,
                 detail="Logout could not revoke token on server; please retry later.",
+                headers=_retry_after_headers(),
             ) from None
     try:
         await logout_user(session, user_id)

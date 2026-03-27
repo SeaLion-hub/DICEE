@@ -25,6 +25,33 @@ def test_ready_returns_200_or_503(client):
         assert data["status"] == "not_ready"
 
 
+def test_ready_includes_last_crawl_success_when_snapshot_available(client, monkeypatch):
+    """Redis 스냅샷이 있으면 last_crawl_success 필드를 노출(ready 판정과 독립)."""
+    from app.api import health as health_module
+
+    async def _mock_db_ok(_request):
+        return "ok"
+
+    async def _mock_blocklist_ok(_request):
+        return "ok"
+
+    async def _mock_trigger_lock_ok(_request):
+        return "ok"
+
+    async def _mock_last(_request):
+        return {"engineering": "2026-03-27T12:00:00+00:00"}
+
+    monkeypatch.setattr(health_module, "_check_db", _mock_db_ok)
+    monkeypatch.setattr(health_module, "_check_redis_blocklist", _mock_blocklist_ok)
+    monkeypatch.setattr(health_module, "_check_redis_trigger_lock", _mock_trigger_lock_ok)
+    monkeypatch.setattr(health_module, "_last_crawl_success_snapshot", _mock_last)
+
+    response = client.get("/ready")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["last_crawl_success"] == {"engineering": "2026-03-27T12:00:00+00:00"}
+
+
 @pytest.mark.parametrize("redis_blocklist_fail_closed", [False, True])
 def test_ready_blocklist_error_returns_503(client, monkeypatch, redis_blocklist_fail_closed):
     """Readiness는 의존성 상태 그대로 노출. blocklist Redis 장애 시 fail_closed와 무관하게 항상 503."""

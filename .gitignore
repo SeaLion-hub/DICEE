@@ -29,6 +29,7 @@ wheels/
 
 # Virtual
 .venv/
+.venv-ci-audit/
 venv/
 ENV/
 env/
@@ -44,6 +45,17 @@ env/
 .pytest_cache/
 .coverage
 htmlcov/
+
+# gstack (vendored under .agents/skills/gstack; run setup after clone)
+.agents/skills/gstack/node_modules/
+.agents/skills/gstack/browse/dist/
+.agents/skills/gstack/bin/*.exe
+# Nested vendored gstack copy: compiled discover binaries exceed GitHub 100MB limit
+.agents/skills/gstack/.agents/skills/gstack/bin/gstack-global-discover
+.agents/skills/gstack/.agents/skills/gstack/bin/gstack-global-discover.exe
+.agents/skills/gstack/*.bun-build
+# Symlinks/copies created by ./setup --host codex at repo root (skills live under gstack/.agents/skills/)
+.agents/skills/gstack-*/
 
 # Misc
 .DS_Store

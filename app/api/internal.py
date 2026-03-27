@@ -18,6 +18,7 @@ from app.core.api_rate_limit import (
     check_rate_limit,
 )
 from app.core.config import settings
+from app.core.crawler_config import college_codes_for_openapi
 from app.core.database import read_only_session_cm
 from app.core.deps import (
     SessionDep,
@@ -46,7 +47,7 @@ from app.domain.contracts.internal_contracts import (
 )
 from app.schemas.internal import CrawlRunStatsItem, CrawlStatsResponse
 from app.services.crawl_stats_service import CrawlStatsService
-from app.services.internal_crawl_service import _normalize_idempotency_key
+from app.services.internal_crawl_service import normalize_trigger_idempotency_key
 from app.services.notice_preview_service import NoticePreviewRow, NoticePreviewService
 
 router = APIRouter(prefix="/internal", tags=["internal"])
@@ -138,9 +139,8 @@ def _map_result_to_status(result: TriggerCrawlResult) -> int:
         return 202
     if result.result_kind == TriggerCrawlResultKind.success:
         return 200
-    if result.result_kind == TriggerCrawlResultKind.partial_failure:
-        return 200
-    return 503  # infra_unavailable
+    # partial_failure | infra_unavailable: RELEASE_GATE P0 (부분 실패를 200으로 숨기지 않음)
+    return 503
 
 
 def _rate_limit_headers() -> dict[str, str]:
@@ -224,7 +224,7 @@ def _authorize_internal_trigger(
         _log_internal_auth_failure(request, reason="trigger_not_configured", error=e)
         raise HTTPException(
             status_code=503,
-            detail="Crawl trigger not configured (CRAWL_TRIGGER_SECRET missing)",
+            detail="Service temporarily unavailable. Try again later.",
         ) from None
     except InvalidCrawlTriggerSecretError as e:
         _log_internal_auth_failure(request, reason="invalid_or_missing_secret", error=e)
@@ -234,13 +234,13 @@ def _authorize_internal_trigger(
         ) from None
 
 
-def _require_client_ip(request: Request, *, endpoint: str) -> str:
+def _require_client_ip(request: Request) -> str:
     """Fail-closed: if client IP cannot be resolved, return 503."""
     client_ip = get_client_ip(request)
     if client_ip is None:
         raise HTTPException(
             status_code=503,
-            detail=f"Client IP could not be determined for {endpoint}",
+            detail="Client identity could not be determined.",
         )
     return client_ip
 
@@ -303,7 +303,11 @@ async def post_trigger_crawl(
     request: Request,
     college_code: str | None = Query(
         None,
-        description="단과대 코드(engineering, science, ...). 없으면 전체 순차 enqueue.",
+        description=(
+            "단과대 코드. 생략 시 전체 순차 enqueue. "
+            f"허용 값: {college_codes_for_openapi()}. "
+            "목록에 없는 값은 400 (code COLLEGE_NOT_FOUND)."
+        ),
     ),
     x_crawl_trigger_secret: str | None = Header(None, alias="X-Crawl-Trigger-Secret"),
     authorization: str | None = Header(None),
@@ -319,7 +323,8 @@ async def post_trigger_crawl(
 ):
     """
     크롤 태스크 enqueue. 보안 키는 Header만 필수. college별 Redis 분산락(SET NX EX)으로 중복 enqueue 방지.
-    Idempotency-Key 있으면 동일 키 재요청 시 202 + 캐시된 결과. 부분 실패 시에도 200으로 enqueued/skipped/failed 반환.
+    Idempotency-Key 있으면 동일 키 재요청 시 202 + 캐시된 결과.
+    일부·전체 enqueue 실패 시 503 + JSON(enqueued/skipped/failed, code). RELEASE_GATE P0와 정합.
     P1: 인증 후 rate-limit 적용. 식별자는 get_client_ip(프록시 대응) 사용.
     """
     endpoint = "/internal/trigger-crawl"
@@ -331,7 +336,7 @@ async def post_trigger_crawl(
         x_crawl_trigger_secret=x_crawl_trigger_secret,
         authorization=authorization,
     )
-    client_ip = _require_client_ip(request, endpoint="/internal/trigger-crawl")
+    client_ip = _require_client_ip(request)
     rate_identifier = f"internal_trigger_crawl:{client_ip}"
     allowed = await _enforce_rate_limit_or_503(
         redis_client,
@@ -350,7 +355,7 @@ async def post_trigger_crawl(
             headers=_rate_limit_headers(),
         )
 
-    key_stripped = _normalize_idempotency_key(idempotency_key)
+    key_stripped = normalize_trigger_idempotency_key(idempotency_key)
     cmd = TriggerCrawlCmd(
         college_code=college_code,
         idempotency_key=key_stripped,
@@ -385,7 +390,7 @@ async def get_crawl_stats(
         x_crawl_trigger_secret=x_crawl_trigger_secret,
         authorization=authorization,
     )
-    client_ip = _require_client_ip(request, endpoint="/internal/crawl-stats")
+    client_ip = _require_client_ip(request)
     rate_identifier = f"internal_crawl_stats:{client_ip}"
     allowed = await _enforce_rate_limit_or_503(
         redis_client,

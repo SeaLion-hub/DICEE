@@ -66,13 +66,19 @@ jobs:
         run: alembic upgrade head
 
       - name: Pytest
-        run: pytest tests -v --cov=app --cov-report=term-missing --cov-fail-under=50
+        run: pytest tests -v --cov=app --cov-report=term-missing --cov-fail-under=55
 
-      - name: pip-audit (SCA, baseline allowlist)
+      - name: pip-audit (SCA)
+        env:
+          PYTHONIOENCODING: utf-8
         run: |
           pip install pip-audit
-          pip-audit --desc
-        continue-on-error: true
+          EXTRA=()
+          while IFS= read -r line || [ -n "$line" ]; do
+            [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
+            EXTRA+=(--ignore-vuln "$line")
+          done < .github/pip-audit-allowlist.txt
+          pip-audit -r requirements.txt -r requirements-dev.txt --desc off "${EXTRA[@]}"
 
       - name: Baseline summary (optional)
         run: |

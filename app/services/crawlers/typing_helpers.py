@@ -20,7 +20,7 @@ def class_list_from_tag(tag: Tag) -> list[str]:
     return [str(raw)]
 
 
-def first_element_str(seq: Sequence[str] | str | None, *, default: str = "") -> str:
+def first_element_str(seq: Sequence[object] | str | None, *, default: str = "") -> str:
     """
     시퀀스의 첫 요소를 str로 반환. BeautifulSoup 등에서 빈 결과·단일 str에 대응.
     None·빈 시퀀스면 default.

@@ -30,8 +30,8 @@ from app.domain.contracts.internal_contracts import (
 logger = logging.getLogger(__name__)
 
 
-def _normalize_idempotency_key(value: str | None) -> str | None:
-    """멱등 키 전처리: strip 후 빈 문자열이면 None."""
+def normalize_trigger_idempotency_key(value: str | None) -> str | None:
+    """멱등 키 전처리: strip 후 빈 문자열이면 None. 라우터·서비스 경계에서 공개 사용."""
     if not value:
         return None
     stripped = value.strip()
@@ -64,7 +64,7 @@ class InternalCrawlService:
         """
         codes = _resolve_college_codes(cmd.college_code)
         idempotency_scope = codes[0] if len(codes) == 1 else "all"
-        key_stripped = _normalize_idempotency_key(cmd.idempotency_key)
+        key_stripped = normalize_trigger_idempotency_key(cmd.idempotency_key)
 
         claimed = False
         should_clear_claim = False

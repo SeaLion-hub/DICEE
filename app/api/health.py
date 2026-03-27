@@ -10,6 +10,7 @@ from redis.asyncio import Redis as RedisAsyncio
 from sqlalchemy import text
 
 from app.core.config import settings
+from app.core.redis import LAST_CRAWL_SUCCESS_HASH_KEY
 
 if TYPE_CHECKING:
     from app.core.state import AppState
@@ -62,6 +63,24 @@ async def _check_redis_trigger_lock(request: Request) -> str:
     if client is None and settings.redis.redis_trigger_lock_required:
         return "error"
     return await _ping_redis(client)
+
+
+async def _last_crawl_success_snapshot(request: Request) -> dict[str, str] | None:
+    """워커가 기록한 마지막 크롤 성공 시각(HASH). Redis 비가용·오류 시 None(ready 판정에는 미사용)."""
+    client = getattr(request.app.state, "redis_trigger_lock_client", None)
+    if client is None:
+        return None
+    try:
+        raw = await asyncio.wait_for(
+            client.hgetall(LAST_CRAWL_SUCCESS_HASH_KEY),
+            timeout=HEALTH_REDIS_PING_TIMEOUT,
+        )
+        if not raw:
+            return {}
+        return dict(raw)
+    except Exception as e:
+        logger.debug("last_crawl_success snapshot skipped: %s", e, exc_info=True)
+        return None
 
 
 def _extract_pong_workers(raw: Any) -> list[str]:
@@ -141,12 +160,15 @@ async def get_ready(request: Request) -> JSONResponse:
     redis_trigger_lock = await _check_redis_trigger_lock(request)
     ok = db_status == "ok" and blocklist_ok and redis_trigger_lock == "ok"
     _update_operational_mode(request, ok)
-    content = {
+    last_crawl = await _last_crawl_success_snapshot(request)
+    content: dict[str, Any] = {
         "status": "ok" if ok else "not_ready",
         "db": db_status,
         "redis_blocklist": redis_blocklist,
         "redis_trigger_lock": redis_trigger_lock,
     }
+    if last_crawl is not None:
+        content["last_crawl_success"] = last_crawl
     return JSONResponse(status_code=200 if ok else 503, content=content)
 
 

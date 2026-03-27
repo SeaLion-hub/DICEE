@@ -1,3 +1,208 @@
+# 배포 가이드 (Railway + Vercel)
+
+## 개요
+
+- 백엔드(API, Worker): **Railway**
+- 데이터 저장소: **PostgreSQL + Redis**
+- 프론트엔드(6단계 이후): **Vercel**
+- 기본 원칙:
+  - API 프로세스는 마이그레이션을 실행하지 않는다.
+  - 마이그레이션은 Release 단계 또는 별도 migrate 잡에서 1회 실행한다.
+  - `APP_ENTRY`를 명시해 프로세스 역할을 강제한다(`api`, `celery`, `migrate`).
+
+**브랜치 보호·SCA·Sentry·로그 전환 체크리스트:** [RUNBOOK_DEPLOY.md](RUNBOOK_DEPLOY.md)
+
+---
+
+## Quick Start (5분)
+
+1. Railway에서 **New Project → Deploy from GitHub repo**로 서비스 생성
+2. Railway에서 **PostgreSQL**, **Redis** 추가
+3. API 서비스 Variables 설정
+   - `APP_ENTRY=api`
+   - `DATABASE_URL=${{Postgres.DATABASE_URL}}` (반드시 private URL)
+4. Deploy 설정
+   - Start Command: `APP_ENTRY=api uvicorn app.main:app --host 0.0.0.0 --port $PORT`
+   - Release Command: `alembic upgrade head`
+5. Networking에서 도메인 생성 후 `GET /health` 200 확인
+
+---
+
+## 핵심 환경 변수
+
+### 공통 필수
+
+| 변수 | 설명 | 예시 |
+|------|------|------|
+| `APP_ENTRY` | 프로세스 역할 강제 | `api` / `celery` / `migrate` |
+| `DATABASE_URL` | PostgreSQL 연결 URL (private 권장) | `${{Postgres.DATABASE_URL}}` |
+| `REDIS_URL` | Redis 연결 URL | `${{Redis.REDIS_URL}}` |
+| `ALLOWED_ORIGINS` | CORS 허용 도메인 | `https://app.example.com` |
+
+### Auth/보안
+
+| 변수 | 설명 |
+|------|------|
+| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | Google OAuth |
+| `JWT_SECRET` | HS256 사용 시 서명 키 |
+| `JWT_PRIVATE_KEY_PEM`, `JWT_PUBLIC_KEY_PEM` | RS256 사용 시 키 |
+| `USER_ID_HMAC_KEY` | production에서 필수 |
+| `REDIS_BLOCKLIST_FAIL_CLOSED` | production API는 `true` 권장 |
+| `TRUSTED_PROXY_IPS` | 신뢰할 프록시 IP 지정 |
+
+### 로깅/관측
+
+| 변수 | 설명 | 권장값 |
+|------|------|--------|
+| `LOG_FORMAT` | structlog 출력 형식 (`pretty` or `json`) | 기본 `pretty` |
+
+#### `LOG_FORMAT` 안전 전환 절차
+
+1. **staging**에서 `LOG_FORMAT=json` 적용
+2. 30~60분 트래픽으로 아래 확인
+   - `event_code`, `request_id`, `college_code`, `phase` 필드 파싱/집계 가능
+   - 예외 로그 파서 오류 없음
+   - 로그 볼륨 급증 없음
+3. 문제 없으면 **prod**에 `LOG_FORMAT=json` 적용
+4. 문제 발생 시 즉시 `LOG_FORMAT=pretty`로 롤백
+
+---
+
+## 헬스 체크 정책
+
+| 엔드포인트 | 용도 | 기준 |
+|------------|------|------|
+| `/health` | 기본 생존 확인 | 200 + `{"status":"ok"}` |
+| `/live` | liveness | 200 + `{"status":"ok"}` |
+| `/ready` | readiness (의존성 확인) | DB/Redis 상태 반영 |
+
+권장:
+- 외부 모니터링/업타임 체크는 `/health`
+- 트래픽 라우팅(gate)은 `/ready`
+
+---
+
+## Railway 배포
+
+### 1) API 서비스
+
+- Builder: Nixpacks
+- Start Command:
+
+```bash
+APP_ENTRY=api uvicorn app.main:app --host 0.0.0.0 --port $PORT
+```
+
+- Release Command:
+
+```bash
+alembic upgrade head
+```
+
+중요:
+- API Start Command에 `alembic`을 넣지 않는다.
+- 릴리즈 단계에서만 마이그레이션 수행.
+
+### 2) Worker 서비스 (Celery)
+
+- Worker는 API와 별도 서비스로 분리
+- Start Command (Linux):
+
+```bash
+celery -A app.core.celery_app:app worker -l info -O fair -Q critical,crawl,ai --concurrency=1
+```
+
+- Windows 로컬 디버그 시:
+
+```bash
+celery -A app.core.celery_app:app worker -l info -O fair -Q critical,crawl,ai --pool=solo
+```
+
+### 3) Cron 트리거
+
+- 권장 방식: Railway Cron 또는 외부 Cron이 `POST /internal/trigger-crawl` 호출
+- 필수: `CRAWL_TRIGGER_SECRET` 설정
+- 호출 시 헤더:
+  - `X-Crawl-Trigger-Secret: <secret>` 또는
+  - `Authorization: Bearer <secret>`
+
+---
+
+## Vercel 배포 (6단계 이후)
+
+- `frontend/` 생성 이후 Vercel 프로젝트 연결
+- 필수 환경 변수:
+  - `NEXT_PUBLIC_API_URL=https://<railway-domain>`
+- CORS/Origin은 백엔드 `ALLOWED_ORIGINS`와 정확히 맞춘다.
+
+---
+
+## 운영 체크리스트 (Go-Live)
+
+- [ ] `ENVIRONMENT=production`
+- [ ] `APP_ENTRY` 역할별로 서비스 분리(api/celery)
+- [ ] `DATABASE_URL` private 주소 사용
+- [ ] `USER_ID_HMAC_KEY` 설정
+- [ ] `REDIS_BLOCKLIST_FAIL_CLOSED=true` (API)
+- [ ] `/health`, `/ready` 정상
+- [ ] Release 단계 `alembic upgrade head` 성공 로그 확인
+- [ ] `LOG_FORMAT` 전환 시 staging 검증 완료
+
+---
+
+## 트러블슈팅
+
+### 1) `password authentication failed for user "postgres"`
+
+- `DATABASE_URL` 계정/비밀번호 불일치 가능성
+- Railway Postgres의 **Variables 또는 Connect에서 제공한 값** 재확인
+- `DATABASE_PUBLIC_URL`을 내부 서비스 통신에 사용하지 않았는지 확인
+
+### 2) `connection timeout expired` (Alembic/DB 연결)
+
+- DB 부팅 직후 일시적 타임아웃 가능
+- Release 재시도 또는 연결 재시도 관련 설정 검토
+- `DATABASE_URL` host/port/protocol 오타 점검
+
+### 3) `Multiple head revisions are present` (Alembic)
+
+- 머지 리비전 누락 가능성
+- `alembic/versions` 내 merge head 존재 여부 확인
+- CI에서 single-head 검사 통과 여부 확인
+
+### 4) `/internal/trigger-crawl`이 503 반환
+
+- Redis 잠금/멱등성 fail-closed 정책에 의해 차단될 수 있음
+- `REDIS_URL`, `REDIS_TRIGGER_IDEMPOTENCY_REQUIRED`, `REDIS_TRIGGER_LOCK_REQUIRED` 점검
+
+---
+
+## 고급 운영 팁
+
+- DB 커넥션은 API/Worker 합산으로 예산 관리
+- 배포 스파이크를 고려해 여유 용량 확보
+- Redis 장애 시 fail-open/fail-closed 정책을 엔드포인트별로 구분
+- Worker 큐(`critical,crawl,ai`)와 동시성은 점진적으로 튜닝
+
+---
+
+## 2026-02-27 Additions
+
+### New environment variables
+
+- `JWT_SIGNING_MODE` (`auto|hs256|rs256`, default `auto`)
+- `CONTENT_SPOOL_ALLOW_EPHEMERAL` (default `false`)
+- `CONTENT_SPOOL_S3_PREFIX` (default `content-spool`)
+
+### Internal API fail-closed update
+
+- `/internal/trigger-crawl`, `/internal/crawl-stats`는 client IP 해석 불가 시 `503` 반환
+- `"unknown"` fallback 식별자 경로 제거
+
+### Spool backend update
+
+- `CONTENT_SPOOL_BACKEND=s3` 지원
+- local/s3 스풀 엔트리 메타데이터 스키마 통일
 # ?? ??? (Railway ?Vercel)
 
 ## ??
@@ -196,6 +401,18 @@ CORS: `ALLOWED_ORIGINS`???????????????. credentials: ??????? ??????? ?????`crede
 | `REDIS_BLOCKLIST_FAIL_CLOSED` | Redis blocklist fail-closed. **Production API: required true.** Worker unaffected. | true (API in prod) |
 | `AUTH_GOOGLE_RATE_LIMIT_PER_MINUTE`, `AUTH_REFRESH_*` | Auth rate limit (per minute). | 28, 60, 15 |
 
+#### 로깅·관측 (Logging & Observability)
+
+| 변수 | 설명 | 기본/권장 |
+|------|------|-----------|
+| `LOG_FORMAT` | structlog 출력 포맷. `pretty`(기본) / `json`(구조화 파서 친화). | `pretty` → staging에서 `json` 검증 후 prod 전환 |
+
+**권장 롤아웃 절차(안전 전환)**
+
+- **staging**: Variables에 `LOG_FORMAT=json` 설정 → 30~60분 트래픽에서 `event_code`, `request_id`, `college_code` 등 필드가 파싱/집계되는지 확인
+- **prod**: staging 검증 후 `LOG_FORMAT=json`로 전환
+- **롤백**: 이슈가 있으면 즉시 `LOG_FORMAT=pretty`로 복귀(배포 없이 환경 변수 변경만으로 가능)
+
 #### ??? Redis??? (3???~, ???)
 
 | ???| ??? | ????|
@@ -323,6 +540,7 @@ Private Key ?????`JWT_PRIVATE_KEY_PEM`, Public Key ?????`JWT_PUBLIC_KEY_PEM`????
 
 - **API Rate Limit (??)**: ?? ???? ? `REDIS_URL` + `API_RATE_LIMIT_REQUIRE_REDIS=true` ??. ??? ? ????? ???? ??????? ???.
 - **trigger idempotency**: /internal/trigger-crawl ??????? ???? `REDIS_TRIGGER_IDEMPOTENCY_REQUIRED=true` ????.
+- **trigger-crawl HTTP**: Production API (`APP_ENTRY=api`) loads Settings only if `REDIS_TRIGGER_IDEMPOTENCY_REQUIRED=true`. On partial/total enqueue failure, `POST /internal/trigger-crawl` returns **503** with JSON (`ALL_ENQUEUES_FAILED` / `PARTIAL_ENQUEUE_FAILURE`); use HTTP status or parse `code` for alerting and Cron success checks.
 - **?? Redis Seen Set**: ?? ?? ??? ?? ? `REDIS_URL` + `REDIS_CRAWL_SEEN_REQUIRED=true`? ?? Seen Set ??. true? Redis ?? ? Run ?? ??(???? fallback ????).
 - **?? ??(PV)**: `CONTENT_UPLOAD_FAILURE_POLICY=fail`?? ?? ?? `CONTENT_SPOOL_DIR`? JSON ??. ??????? ?? ????? Railway Persistent Volume ?? ???? ?.
 

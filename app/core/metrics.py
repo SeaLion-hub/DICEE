@@ -30,6 +30,8 @@ CRAWL_DISPATCH_BACKPRESSURE_TOTAL = "crawl_dispatch_backpressure_total"
 CRAWL_DISPATCH_MEMORY_MB = "crawl_dispatch_memory_mb"
 CRAWL_DISPATCH_NET_SENT_MB = "crawl_dispatch_net_sent_mb"
 CRAWL_DISPATCH_NET_RECV_MB = "crawl_dispatch_net_recv_mb"
+# 워커 크롤 1회 실행 동안 upsert 대기 chunk(list) 길이 피크. 라벨: college_code
+CRAWL_PIPELINE_PEAK_PENDING_DRAFTS = "crawl_pipeline_peak_pending_drafts"
 
 # reason 라벨 값 (고정 enum, 카디널리티 제한)
 RETRY_REASON_TIMEOUT = "timeout"
@@ -70,8 +72,10 @@ AI_EXTRACTION_VALIDATION_ERROR_TOTAL = "ai_extraction_validation_error_total"
 AI_EXTRACTION_PROVIDER_ERROR_TOTAL = "ai_extraction_provider_error_total"
 AI_EXTRACTION_TOKENS_TOTAL = "ai_extraction_tokens_total"
 
-# 크롤 완료 후 process_notice_ai_task.delay() 브로커 적재 실패 (라벨: college_code)
+# 크롤 완료 후 process_notice_ai_batch_task.delay() 브로커 적재 실패 (라벨: college_code)
 AI_ENQUEUE_FAILED_TOTAL = "ai_enqueue_failed_total"
+# AI 결과 DB 반영 완료(매칭·알림 파이프라인 훅). 라벨: college_code (= colleges.external_id)
+NOTICE_AI_EXTRACTION_COMPLETED_TOTAL = "notice_ai_extraction_completed_total"
 
 ALLOWED_REQUEST_LABELS = frozenset({"endpoint_template", "status_class", "method"})
 

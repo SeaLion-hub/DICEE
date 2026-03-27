@@ -7,8 +7,9 @@ import hashlib
 import ipaddress
 import logging
 import random
+from typing import Protocol
 
-from fastapi import Request
+from starlette.datastructures import Address, Headers
 
 from app.core.config import settings
 from app.core.metrics import (
@@ -27,6 +28,20 @@ class InvalidForwardedHeaderError(Exception):
     """신뢰 프록시 경유 요청에서 X-Forwarded-For 헤더 규격 이탈(파싱 실패·초과 등). 400 Drop."""
 
     pass
+
+
+class ClientIpRequestLike(Protocol):
+    """get_client_ip가 읽는 최소 요청 형태 (Starlette Request 및 단위 테스트 스텁).
+
+    client·headers는 property로 두어 Request와 구조 일치.
+    반환 타입은 Starlette Address·Headers로 두어 basedpyright와 런타임이 맞는다.
+    """
+
+    @property
+    def client(self) -> Address | None: ...
+
+    @property
+    def headers(self) -> Headers: ...
 
 
 def _record_client_ip_resolution(*, mode: str, trusted_peer: bool) -> None:
@@ -109,7 +124,7 @@ def _is_private_ip(ip: str) -> bool:
     return False
 
 
-def get_client_ip(request: Request) -> str | None:
+def get_client_ip(request: ClientIpRequestLike) -> str | None:
     """
     클라이언트 IP. 역순 훑기: X-Forwarded-For를 오른쪽→왼쪽으로 훑어 신뢰 목록에 없는 첫 IP 채택.
     직전 피어가 trusted가 아니면 request.client.host만 사용.

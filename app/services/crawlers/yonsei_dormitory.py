@@ -7,7 +7,8 @@ import re
 from typing import Any
 from urllib.parse import quote, unquote, urljoin, urlparse, urlunparse
 
-from bs4 import BeautifulSoup, NavigableString, Tag
+from bs4 import BeautifulSoup, Tag
+from bs4.element import NavigableString
 from requests.exceptions import RequestException
 
 from app.core.bs4_utils import as_tag
@@ -59,7 +60,7 @@ def get_dormitory_links(list_url: str) -> list[dict[str, Any]]:
             row_tag = as_tag(row)
             if row_tag is None:
                 continue
-            title_td = row_tag.find("td", class_=lambda c: c and "bold" in (c or ""))
+            title_td = row_tag.find("td", class_=lambda c: bool(c and "bold" in (c or "")))
             if not title_td or not isinstance(title_td, Tag):
                 continue
             a_tag = title_td.find("a")

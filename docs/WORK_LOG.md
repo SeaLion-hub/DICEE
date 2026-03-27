@@ -13,6 +13,7 @@
 - [작성 규칙](#작성-규칙)
 - [작성 형식](#작성-형식)
 - [2026-03-28](#2026-03-28)
+- [2026-03-27](#2026-03-27)
 - [2026-03-23](#2026-03-23)
 - [2026-03-19](#2026-03-19)
 - [2026-03-07](#2026-03-07)
@@ -47,9 +48,44 @@
 ---
 ## 2026-03-28
 
+- [Auth·미들웨어] `app/api/v1/auth.py`: `get_verified_access`·`VerifiedAccess`로 JWT 검증 단일화, `Annotated` 의존성 정리, 모든 503에 `Retry-After`(기본 60초) 부여; `POST /logout`은 `response_model=None`으로 204 등록 안전 처리. `sanitize_5xx`: 503 치환 응답에 `Retry-After` 보강. `tests/test_exception_handlers.py` 503 헤더 검증 추가. 검증: `pytest` 통과.
+- [로깅] `structlog` 컨텍스트 바인딩을 강화: `app/core/logging_context.py`에서 `structlog.contextvars`까지 함께 bind/clear, `RequestIDMiddleware` 종료 시 컨텍스트 자동 clear, 크롤 작업 컨텍스트(phase/college_code/run_id/task_id) 바인딩 추가. `docs/DEPLOYMENT.md`에 `LOG_FORMAT`(pretty/json) staging→prod 전환 절차 문서화. 검증: `ruff`, `mypy`, `pytest` 통과.
+- [로깅·크롤 안정화] `logging_context`의 status/duration 타입을 `int|None`으로 통일하고 clear를 `None` 리셋으로 정리, structlog bind/clear fail-open에 1회 warning+누적 debug 관측성 추가; `pipeline_sync` chunk finalize/dispatch 경계 분리, `run_crawl_job_sync` 반환을 `(upserted, enqueued_ai)` 계약으로 수정, sanitize/clear 누수/DB 실패→Redis fallback/반환 계약 테스트 보강 후 `pytest` 전체(326 passed, 3 skipped) 통과.
+- [품질 게이트] `docs/RUNBOOK_DEPLOY.md`(GitHub 보호·Railway·Sentry·LOG_FORMAT·expand/contract·pip-audit), `tests/CRITICAL_PATHS.md`, `notice_public_service`·`logging_safety` 단위 테스트, `integration` pytest 마커, coverage에서 `yonsei_*` 크롤러 omit, CI `cov-fail-under=55`·`pip-audit --local`+allowlist·주간 `sca-weekly.yml`. README·DEPLOYMENT 링크. 검증: `pytest` 전체 통과.
+- [배포·Alembic] `010_notice_taxonomy_normalization`: `notice_taxonomy_mappings`가 이미 있으면 `CREATE TABLE`을 건너뛰고 누락 인덱스만 보강, `notices.category`/`sub_category`는 존재할 때만 `DROP`(스키마·`alembic_version` 불일치 시 Railway 등에서 DuplicateTable 방지). 검증: `pytest` 337 passed, 3 skipped.
 - [검수 페이지 경량화] `app/api/internal.py`, `app/services/notice_preview_service.py`에서 공대 공개/내부 preview의 `본문(요약)` 컬럼·본문 fetch 로직을 제거하고 `본문 URL` 중심 검수로 단순화. 결과: 로컬 파일 부재로 인한 요약 오탐 노이즈 감소, 페이지 렌더/네트워크 오버헤드 축소.
 - [운영 런북] `docs/runbooks/worker-ai-checklist.md` 추가. 워커/AI 실행을 사전점검→실행→재처리→오류(404/429/스키마) 대응→검수→원복 순서 체크리스트로 표준화.
 - [운영 런북 보강] `docs/runbooks/worker-ai-checklist.md`에 "Alembic 상태 불일치(upgrade 로그와 current 불일치)" 점검 및 로컬/디버그 한정 응급 복구 절차(`checkfirst=True` 테이블 보장, 워커 재시작, 원인 추적) 추가.
+
+---
+## 2026-03-27
+
+- [성능·gstack 계획] `collect_sync`: `DefaultNoticeItemPipeline` 1회 생성·재사용, `wait(FIRST_COMPLETED)`로 완료 처리. `notice_repository`: `_sorted_notice_drafts`로 bulk upsert 정렬 단일화. `tasks`: `_execute_notice_ai_pipeline` 공용화, 크롤 `on_chunk`는 `process_notice_ai_batch_task`(스로틀 `AI_BATCH_GEMINI_SPACING_SECONDS`)·백오프 `_delay_process_notice_ai_batch_with_backoff`, `celery_app` `ai` 라우트 추가. runbook·메트릭 주석·테스트 보강. 검증: `pytest` 302 passed, 3 skipped.
+- [gstack-review 후속] `tests/test_gstack_adoption.py`: `gstack-review/SKILL.md` 검증을 고정 문구 대신 YAML 프론트매터(`name:`/`description:`)·최소 크기로 완화. `docs/online_viewer_net.htm` → `docs/reports/online_viewer_net.htm` 이동, `docs/README.md` 표·이동 안내 갱신. 검증: `pytest tests/test_gstack_adoption.py` 통과.
+- [5단계 계약 초안] `docs/decisions/user-notice-matching-and-api-contracts.md` DRAFT 추가: `profile_json` 형식, 매칭(학과·학년 축), 커서 페이지네이션, 달력 `year/month` vs `from/to`, 크롤 성공 시 `deleted_at` 툼스톤. `docs/ROADMAP_PHASES.md` 미리 결정 표·`docs/decisions/ai-extraction-schema.md` 연동·`docs/ROADMAP.md` decisions 링크 갱신.
+- [5단계 계약 승인 반영] `user-notice-matching-and-api-contracts.md` → APPROVED: 전체 탭(비매칭 목록)·맞춤 탭(미완성 프로필 시 빈 목록), 학과 `department_codes`·학년 TargetGrade **선택형만**, 툼스톤 `deleted_at` 채택 근거 §7.1. `ROADMAP_PHASES`·`ROADMAP`·`ai-extraction-schema` DRAFT 문구 정리.
+- [RELEASE_GATE 정합] `POST /internal/trigger-crawl`에서 일부·전체 enqueue 실패 시 **HTTP 503** + 기존 JSON 본문(`app/api/internal.py`). production + `APP_ENTRY=api`에서 `REDIS_TRIGGER_IDEMPOTENCY_REQUIRED=true` 강제(`app/core/config/base.py` fail_fast_production). `tests/test_security_features.py`, `test_trigger_idempotency.py`, `test_tasks_and_config.py`·`docs/CAUTIONS.md`·`docs/DEPLOYMENT.md`·`docs/ROADMAP_PHASES.md` 정합.
+- [M2 마무리 A안] `init_sync_db` 멱등·`celery_app` worker_init에서 선 초기화, 크롤 성공 시 Redis `dicee:last_crawl_success` HSET·`/ready`에 `last_crawl_success` 스냅샷, `process_notice_ai_task` 완료 시 메트릭 `notice_ai_extraction_completed_total`·로그·Redis 리스트 `dicee:ai_extraction_completed_queue`(LTRIM 상한). `docs/ROADMAP_PHASES.md`·`docs/decisions/ai-extraction-schema.md` 동기화, `tests/test_database_sync.py`·`test_health` 보강. 검증: `pytest` 300 passed, 3 skipped.
+- [도구·워크플로] gstack를 `.agents/skills/gstack`에 벤더링하고 Codex 형식 스킬·형제 링크를 두었으며 `GSTACK.md`·`AGENTS.md`·`tests/test_gstack_adoption.py`·`.gitignore`(node_modules·browse/dist 제외)·`workflow.mdc`/`todo.md` 정렬로 도입·검증 경로를 고정. 클론 후 Windows는 Git Bash에서 `PATH`에 Node+Bun 두고 `./setup --host codex` 필요. 영향: 에이전트 기본 납품 프로세스는 gstack, CI·아키텍처·pytest 게이트는 동일.
+- [리뷰 후 보완] `normalize_trigger_idempotency_key` 공개로 라우터의 private import 제거, `app/core/url_safety.is_safe_worker_http_url`로 Celery 워커의 `content_url`/이미지 URL GET 전 명백한 내부·링크로컬 대상 차단(SSRF 완화, DNS 재귀 미검사 한계는 주석 명시), `tests/test_url_safety.py` 추가. 검증: `pytest tests/test_url_safety.py tests/test_trigger_idempotency.py` 통과.
+- [문서] README 헬스 섹션을 `app/api/health.py` 계약(`/health`, `/live`, `/ready`, `/health/worker`)에 맞게 정리. Project Docs에 `docs/README.md`·`GSTACK.md` 링크 추가. `docs/README.md` 폴더 표에 `runbooks/` 행 추가. 루트 `CHANGELOG.md` 없음 → 신규 생성 없음(document-release 스코프).
+- [Railway] Release 단계에서 간헐적 `Multiple connection attempts failed`(psycopg 다중 주소 시도) 로그가 있었으나 재배포 로그(13:02Z)에서 연결 오류 없이 마이그레이션·API 기동 정상 확인. `alembic/env.py` 디버그 NDJSON 계측 제거.
+- [타입] `first_element_str` 인자 타입을 `Sequence[object]`로 넓혀 비-str 첫 요소·테스트 `(42,)`와 basedpyright 정합. 검증: `pytest tests/test_typing_helpers.py` 통과.
+- [타입] `tests/test_storage.py`: `_object_key`에 `UUID` 전달, `_upload_local` 반환 `str | None`에 `assert url is not None`로 좁힘. 검증: `pytest tests/test_storage.py` 통과.
+- [타입] `get_client_ip` 인자를 `ClientIpRequestLike` Protocol로 정의(테스트 스텁·Starlette `Request` 공통), `test_invalid_forwarded_header_returns_400`는 `json.loads(bytes(resp.body))`. 검증: 관련 `pytest tests/test_security_features.py` 4개 통과.
+- [타입] `ClientIpRequestLike`: `client`·`headers`를 `@property`로 두고 반환을 Starlette `Address`·`Headers`로 지정해 basedpyright와 `Request` 정합. `tests/test_security_features.py` 스텁을 `Address`·`Headers`로 통일. 검증: `pytest tests/test_security_features.py` 통과.
+- [타입] `celery_app`: `on_after_configure` 훅을 `cast(Any, app.on_after_configure)`로 두고 `@_after_configure_hook.connect` 등록(assert는 데코레이터 줄에서 제어 흐름 좁히기 미적용). 검증: 모듈 import 성공.
+- [타입] `pyjwt-key-fetcher`용 `typings/pyjwt_key_fetcher/__init__.pyi` 추가, `pyrightconfig.json`에 `stubPath: typings`. 영향: basedpyright `reportMissingImports`(lifespan·deps·state·auth_service) 제거.
+- [타입] `crawl_rate_limit.RedisHostRateLimiterAsync`: redis `eval` 반환 `Awaitable[str] | str` 유니온을 `cast(Awaitable[str], ...)`로 좁혀 basedpyright `await` 오류 제거.
+- [타입] `yonsei_glc`: `urljoin`에 `ensure_str_attr`로 href 정규화, `find_all(..., class_=...)` 람다를 `bool(...)`로 감싸 반환 타입을 `bool`로 고정(basedpyright `reportArgumentType`). 검증: `pytest` 302 passed, 3 skipped.
+- [타입] `yonsei_engineering`: `NavigableString`을 `bs4.element`에서 import(`reportPrivateImportUsage` 제거), `find(string=...)` 람다를 `bool(...)`로 감싸 `_NullableStringMatchFunction` 정합. 검증: `pytest` 302 passed, 3 skipped.
+- [타입] `yonsei_dormitory`: `NavigableString`을 `bs4.element`에서 import, `find(..., class_=...)` 람다를 `bool(...)`로 감싸 basedpyright 정합. 검증: `pytest` 302 passed, 3 skipped.
+- [타입] `yonsei_ai`: `NavigableString`을 `bs4.element`에서 import(`reportPrivateImportUsage` 제거).
+- [타입] `yonsei_science`: `find_all("img"|"table")` 결과를 `as_tag`로 `Tag` 좁힘 후 `.get`·속성 대입(basedpyright `PageElement`/`NavigableString` 오류 제거).
+- [타입] `yonsei_international`: `find(..., class_=lambda)` 반환을 `bool(...)`로 고정해 `_StrainableAttribute`/`_NullableStringMatchFunction` 정합.
+- [보안] `environment=production`에서 OpenAPI(`/openapi.json`, `/docs`, `/redoc`) 비활성(`app/main.py`). 내부 트리거 미설정 503·클라이언트 IP 미해결 503 응답 문구 일반화로 배열·엔드포인트 정보 누출 완화(`app/api/internal.py`). 검증: `pytest` 302 passed, 3 skipped.
+- [크롤·페이로드] `_resolve_notice_images`: `type=base64`일 때 `data`가 `bytes`(이미 디코드) 또는 `str`(ASCII base64) 모두 허용(`app/services/crawl_payload.py`). `tests/test_crawl_payload.py` raw bytes 경로 추가. `yonsei_chemistry.get_chemistry_links` 중복 URL 검사를 `seen_urls` set으로 O(n). 검증: `pytest` 303 passed, 3 skipped.
+- [FastAPI 개선 계획] `post_google_auth`: SQLAlchemy `OperationalError`·`TimeoutError`(및 내장 `TimeoutError`) → 503·rollback(`app/api/v1/auth.py`). `college_codes_for_openapi`로 트리거 `college_code` Query 설명 보강(`crawler_config`, `internal`). 공개 `GET /v1/notices`·`/v1/notices/{id}`: DTO `notice_public_contracts`·`notice_public_service`·라우터(`schemas`는 API만)·`main` 등록. 워커 `crawl_pipeline_peak_pending_drafts` 게이지·완료 로그(`pipeline_sync`, `metrics`). 테스트·`conftest` 더미 `session_maker`가 `execution_options` 수용. 검증: `lint-imports`, `pytest` 310 passed, 3 skipped.
 
 ---
 ## 2026-03-23

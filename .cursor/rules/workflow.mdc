@@ -5,6 +5,8 @@ alwaysApply: true
 
 # 워크플로 규칙
 
+**실행 순서·에이전트 역할의 최우선 안내는 루트 `GSTACK.md`(gstack 스킬)다.** 아래 Composer·todo·문서 진입점은 gstack 스프린트와 겹치면 **gstack 단계에 맞춰** 적용하고, 기술 DoD·pytest·WORK_LOG·CI 게이트는 여전히 필수다.
+
 ROADMAP·ROADMAP_PHASES·WORK_LOG 관련 내용은 `roadmap-and-worklog.mdc`를 따른다. 아래는 **실행 습관**(시작 전·Composer·품질)만 정리한다.
 
 **완료 정의(DoD)·품질 게이트·Self-Correction·최종 보고 포맷**은 **.cursorrules §3·§4·§5**를 따른다.

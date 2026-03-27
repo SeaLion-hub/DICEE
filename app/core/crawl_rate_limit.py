@@ -8,6 +8,7 @@ import asyncio
 import logging
 import threading
 import time
+from collections.abc import Awaitable
 from typing import cast
 from urllib.parse import urlparse
 
@@ -187,12 +188,15 @@ class RedisHostRateLimiterAsync:
         key = f"{RATE_LIMIT_KEY_PREFIX}{host}"
         try:
             now = time.monotonic()
-            result = await self._client.eval(
-                LUA_RATE_LIMIT,
-                1,
-                key,
-                str(now),
-                str(self.min_interval_sec),
+            result = await cast(
+                Awaitable[str],
+                self._client.eval(
+                    LUA_RATE_LIMIT,
+                    1,
+                    key,
+                    str(now),
+                    str(self.min_interval_sec),
+                ),
             )
             wait_sec = float(result)
             if wait_sec > 0:

@@ -12,6 +12,7 @@ from starlette.datastructures import State
 
 from app.api import health, internal
 from app.api.v1 import auth as v1_auth
+from app.api.v1 import notices as v1_notices
 from app.core.config import settings
 
 if settings.app_entry != "api":
@@ -43,16 +44,24 @@ from app.middleware import RequestIDMiddleware, RequestMetricsMiddleware, Saniti
 
 logger = logging.getLogger(__name__)
 
+_env = (settings.environment or "").strip().lower()
+# 프로덕션: 스키마·엔드포인트 노출 축소 (OpenAPI/Swagger/ReDoc 비활성)
+_OPENAPI_DISABLED = _env == "production"
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """앱 수명 주기: init_sentry → init_database → check_startup_pool_budget → create_app_state → yield → teardown."""
     init_sentry()
     warn_trusted_proxy_configuration()
+    # Structured logging (safe rollout via LOG_FORMAT=json|pretty)
+    from app.core.logging import configure_logging
+
     # 요청별 로그 컨텍스트(request_id, endpoint 등) 주입
     from app.core.logging_context import DevelopmentLogFilter, LoggingContextFilter
 
     current_env = (settings.environment or "").strip().lower()
+    configure_logging(environment=current_env)
     logging.getLogger().addFilter(LoggingContextFilter())
     # development일 때 [DEV] 접두사로 로컬/운영 로그 구분
     if current_env == "development":
@@ -77,11 +86,15 @@ app = FastAPI(
     description="연세대 공지 매칭 백엔드",
     version="0.1.0",
     lifespan=lifespan,
+    docs_url=None if _OPENAPI_DISABLED else "/docs",
+    redoc_url=None if _OPENAPI_DISABLED else "/redoc",
+    openapi_url=None if _OPENAPI_DISABLED else "/openapi.json",
 )
 
 app.include_router(health.router)
 app.include_router(internal.router)
 app.include_router(v1_auth.router, prefix="/v1")
+app.include_router(v1_notices.router, prefix="/v1")
 
 app.add_middleware(Sanitize5xxMiddleware)
 app.add_middleware(RequestMetricsMiddleware)

@@ -193,5 +193,6 @@
 
 - `JWT_SIGNING_MODE=auto` now has fixed precedence: RS key pair wins over HS secret.
 - Internal protected endpoints (`/internal/trigger-crawl`, `/internal/crawl-stats`) fail-closed (`503`) when client IP cannot be determined.
+- `POST /internal/trigger-crawl`: if one or more colleges fail to enqueue (broker error, lock error, etc.), the API returns **HTTP 503** with JSON body (`code`: `ALL_ENQUEUES_FAILED` or `PARTIAL_ENQUEUE_FAILURE`). Success is **200**; Idempotency-Key replay is **202**. Cron and monitors must not treat HTTP 2xx as the only success signal for this endpoint (see [RELEASE_GATE](RELEASE_GATE.md) P0).
 - If external AI calls are added to `process_notice_ai_task`, do not hold a DB connection during the external call. Split claim/update transactions around the call.
 - Config package extension rule: no circular imports and no submodule import of runtime `settings`.

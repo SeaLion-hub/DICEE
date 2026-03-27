@@ -340,6 +340,10 @@ class ReadOnlySessionWrapper:
         return getattr(self._session, name)
 
 
+# Read path can accept either real AsyncSession or the read-only wrapper.
+AsyncSessionLike = AsyncSession | ReadOnlySessionWrapper
+
+
 @asynccontextmanager
 async def read_only_session_cm(
     maker: async_sessionmaker[AsyncSession] | None,

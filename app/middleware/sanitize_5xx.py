@@ -2,12 +2,16 @@
 
 import json
 import logging
+from typing import Any, cast
 
 from fastapi import Request
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.responses import JSONResponse
+from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
+from starlette.responses import JSONResponse, Response
 
 logger = logging.getLogger(__name__)
+
+# 503 치환 응답에 원본에 Retry-After가 없을 때 권장 재시도 간격(초).
+_DEFAULT_503_RETRY_AFTER = "60"
 
 # 5xx 응답에서 허용하는 최소 안전 본문. 이 구조가 아니거나 traceback/예외 메시지 의심 시 교체.
 _SAFE_500_BODY = {"detail": "Internal server error", "code": "INTERNAL_ERROR"}
@@ -27,6 +31,15 @@ _UNSAFE_FORWARD_HEADERS = {
 }
 
 
+def _response_body_to_str(body: object) -> str:
+    """JSONResponse.body 등 Starlette 혼합 타입을 순수 str로 정규화 (타입 체커·in 연산자용)."""
+    if isinstance(body, str):
+        return body
+    if isinstance(body, bytes | bytearray):
+        return body.decode("utf-8", errors="replace")
+    return bytes(cast(Any, body)).decode("utf-8", errors="replace")
+
+
 def _filtered_error_headers(headers: dict[str, str]) -> dict[str, str]:
     """5xx 치환 응답으로 전달하면 안 되는 헤더를 제거한다."""
     out: dict[str, str] = {}
@@ -43,7 +56,7 @@ class Sanitize5xxMiddleware(BaseHTTPMiddleware):
     global_exception_handler가 이미 안전 응답만 반환하더라도, 이중 방어로 원천 차단.
     """
 
-    async def dispatch(self, request: Request, call_next):
+    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         response = await call_next(request)
         if response.status_code < 500:
             return response
@@ -54,7 +67,7 @@ class Sanitize5xxMiddleware(BaseHTTPMiddleware):
             body = response.body
             if not body:
                 return response
-            text = body.decode("utf-8", errors="replace")
+            text = _response_body_to_str(body)
             # 이미 안전한 JSON(detail + code만)이면 유지
             try:
                 data = json.loads(text)
@@ -64,10 +77,13 @@ class Sanitize5xxMiddleware(BaseHTTPMiddleware):
             except (json.JSONDecodeError, TypeError):
                 pass
             # 민감 마커 포함 또는 비표준 구조면 안전 본문으로 교체
+            safe_headers = _filtered_error_headers(dict(response.headers))
+            if response.status_code == 503 and not any(k.lower() == "retry-after" for k in safe_headers):
+                safe_headers = {**safe_headers, "Retry-After": _DEFAULT_503_RETRY_AFTER}
             return JSONResponse(
                 status_code=response.status_code,
                 content=_SAFE_500_BODY,
-                headers=_filtered_error_headers(dict(response.headers)),
+                headers=safe_headers,
             )
         except Exception as e:
             logger.warning("Sanitize5xxMiddleware: %s", e, exc_info=True)

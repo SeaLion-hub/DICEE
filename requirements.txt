@@ -35,3 +35,6 @@ instructor[google-genai]>=1.0.0
 
 # Monitoring
 sentry-sdk==2.18.0
+
+# Logging (structured)
+structlog==25.5.0

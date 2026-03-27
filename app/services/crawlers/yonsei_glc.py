@@ -77,10 +77,10 @@ def get_glc_links(url):
             if title_td and isinstance(title_td, Tag):
                 a_tag = title_td.find("a")
                 if a_tag and isinstance(a_tag, Tag):
-                    href = a_tag.get("href")
-                    if not href:
+                    href_str = ensure_str_attr(a_tag.get("href"))
+                    if not href_str:
                         continue
-                    full_url = urljoin(url, href)
+                    full_url = urljoin(url, href_str)
 
                     # 제목 텍스트 (kboard-default-cut-strings <div> 안의 텍스트 추출)
                     title_div = a_tag.find("div", class_="kboard-default-cut-strings")
@@ -170,7 +170,9 @@ def scrape_glc_detail(url):
         # 5. 첨부파일 추출
         attachments = []
         attachment_names_glc: set[str] = set()
-        buttons = soup.find_all("button", class_=lambda c: c and "kboard-button-download" in c)
+        buttons = soup.find_all(
+            "button", class_=lambda c: bool(c and "kboard-button-download" in c)
+        )
         for btn in buttons:
             if not isinstance(btn, Tag):
                 continue
@@ -272,7 +274,9 @@ async def scrape_glc_detail_async(client: httpx.AsyncClient, url: str):
             content_html = "(본문 영역을 찾을 수 없습니다)"
         attachments = []
         attachment_names_glc_async: set[str] = set()
-        for btn in soup.find_all("button", class_=lambda c: c and "kboard-button-download" in c):
+        for btn in soup.find_all(
+            "button", class_=lambda c: bool(c and "kboard-button-download" in c)
+        ):
             if isinstance(btn, Tag):
                 fname = btn.get_text(strip=True)
                 if fname and fname not in attachment_names_glc_async:

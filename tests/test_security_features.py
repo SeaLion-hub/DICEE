@@ -300,10 +300,12 @@ def test_get_client_ip_no_trusted_proxy_uses_client_host(monkeypatch):
 
     monkeypatch.setattr(settings, "trusted_proxy_ips", "")
 
+    from starlette.datastructures import Address, Headers
+
     # client.host가 trusted에 없으면 항상 fallback
     class _Req:
-        client = type("_C", (), {"host": "1.2.3.4"})()
-        headers = {"x-forwarded-for": "10.0.0.1, 5.6.7.8"}
+        client = Address("1.2.3.4", 0)
+        headers = Headers({"x-forwarded-for": "10.0.0.1, 5.6.7.8"})
 
     assert get_client_ip(_Req()) == "1.2.3.4"
 
@@ -314,7 +316,7 @@ def test_get_client_ip_records_resolution_metrics(monkeypatch):
     from app.core import metrics as metrics_module
     from app.core import network as network_module
     from app.core.network import get_client_ip
-    from starlette.datastructures import Headers
+    from starlette.datastructures import Address, Headers
 
     mock_settings = MagicMock()
     mock_settings.trusted_proxy_ips_set = frozenset({"10.0.0.1"})
@@ -327,11 +329,11 @@ def test_get_client_ip_records_resolution_metrics(monkeypatch):
     xff_before = metrics_module.get_counter(metrics_module.CLIENT_IP_RESOLUTION_TOTAL, labels=xff_labels)
 
     class _ReqFallback:
-        client = type("_C", (), {"host": "1.2.3.4"})()
+        client = Address("1.2.3.4", 0)
         headers = Headers({"x-forwarded-for": "8.8.8.8"})
 
     class _ReqXff:
-        client = type("_C", (), {"host": "10.0.0.1"})()
+        client = Address("10.0.0.1", 0)
         headers = Headers({"x-forwarded-for": "8.8.8.8,10.0.0.1"})
 
     assert get_client_ip(_ReqFallback()) == "1.2.3.4"
@@ -347,7 +349,7 @@ def test_get_client_ip_trusted_proxy_invalid_header_raises(monkeypatch):
     """신뢰 프록시 경유 시 X-Forwarded-For에 비IP 문자열이 있으면 InvalidForwardedHeaderError → 400."""
     from unittest.mock import MagicMock  # noqa: I001
 
-    from starlette.datastructures import Headers
+    from starlette.datastructures import Address, Headers
 
     from app.core import metrics as metrics_module
     from app.core import network as network_module
@@ -362,7 +364,7 @@ def test_get_client_ip_trusted_proxy_invalid_header_raises(monkeypatch):
     before = metrics_module.get_counter(metrics_module.INVALID_XFF_TOTAL)
 
     class _Req:
-        client = type("_C", (), {"host": "10.0.0.1"})()
+        client = Address("10.0.0.1", 0)
         headers = Headers({"x-forwarded-for": "10.0.0.1, not-an-ip"})
 
     with pytest.raises(InvalidForwardedHeaderError):
@@ -396,6 +398,17 @@ def test_request_id_sanitize_rejects_long_or_invalid_charset():
     assert valid == "MyReq-123.ab:cd"
 
 
+def test_request_id_sanitize_accepts_max_length_and_rejects_blank():
+    """허용 최대 길이(128)는 통과, 공백-only는 새 UUID 생성."""
+    from app.middleware.request_id import _sanitize_request_id
+
+    max_len = "a" * 128
+    assert _sanitize_request_id(max_len) == max_len
+    blank = _sanitize_request_id("   ")
+    assert blank != "   "
+    assert len(blank) == 36 and blank.count("-") == 4
+
+
 def test_invalid_forwarded_header_returns_400(client, monkeypatch):
     """InvalidForwardedHeaderError 발생 시 앱이 400 Bad Request + code INVALID_FORWARDED_HEADER를 반환한다."""
     import asyncio  # noqa: I001
@@ -417,20 +430,20 @@ def test_invalid_forwarded_header_returns_400(client, monkeypatch):
     finally:
         loop.close()
     assert resp.status_code == 400
-    data = json.loads(resp.body)
+    data = json.loads(bytes(resp.body))
     assert data.get("code") == "INVALID_FORWARDED_HEADER"
     assert "Invalid" in (data.get("detail") or "")
 
 
 def test_trigger_crawl_all_enqueues_fail_returns_503(client, monkeypatch):
-    """POST /internal/trigger-crawl에서 enqueue가 전부 실패하면 200 + ALL_ENQUEUES_FAILED (부분 실패 정책)."""
+    """POST /internal/trigger-crawl에서 enqueue가 전부 실패하면 503 + ALL_ENQUEUES_FAILED (RELEASE_GATE P0)."""
     from unittest.mock import AsyncMock, MagicMock
 
     from app.api import internal as internal_module
     from app.core.deps import get_redis_trigger_lock
     from app.main import app
 
-    # 인증 우회: 이 테스트는 enqueue 실패 시 200 + 실패 코드 반환 검증
+    # 인증 우회: 이 테스트는 enqueue 전부 실패 시 503 + 실패 코드 본문 검증
     def _noop_authorize(request, x_secret, auth):
         pass
 
@@ -468,7 +481,7 @@ def test_trigger_crawl_all_enqueues_fail_returns_503(client, monkeypatch):
         )
     finally:
         app.dependency_overrides.pop(get_redis_trigger_lock, None)
-    assert response.status_code == 200
+    assert response.status_code == 503
     data = response.json()
     assert data.get("code") == "ALL_ENQUEUES_FAILED"
     assert "failed" in data or "enqueued" in data
@@ -647,7 +660,7 @@ def test_trigger_crawl_returns_503_when_client_ip_unresolved(client, monkeypatch
         app.dependency_overrides.pop(get_redis_trigger_lock, None)
 
     assert response.status_code == 503
-    assert "Client IP could not be determined" in response.json().get("detail", "")
+    assert "Client identity could not be determined" in response.json().get("detail", "")
 
 
 def test_check_crawl_trigger_secret_valid_and_invalid(monkeypatch):
@@ -714,7 +727,7 @@ def test_crawl_stats_returns_503_when_client_ip_unresolved(client, monkeypatch):
         app.dependency_overrides.pop(get_redis_trigger_lock, None)
 
     assert response.status_code == 503
-    assert "Client IP could not be determined" in response.json().get("detail", "")
+    assert "Client identity could not be determined" in response.json().get("detail", "")
 
 
 def test_logout_blocklist_unavailable_returns_503(client, monkeypatch):

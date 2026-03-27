@@ -122,10 +122,13 @@ def run_crawl_job_sync(
     """
     크롤 작업 한 건 실행 (college 조회 + crawl_run 생성/갱신 + crawl_college_sync).
     반환: (upserted 개수, enqueued_ai 개수).
+    enqueued_ai는 on_chunk_processed가 성공적으로 호출된 notice id 수 기준.
     """
-    from app.core.logging_context import get_request_context, set_request_context
+    from app.core.logging_context import clear_request_context, get_request_context, set_request_context
 
-    set_request_context(event_code="")
+    # Celery worker is long-lived: always reset context at task start.
+    clear_request_context()
+    set_request_context(event_code="", college_code=college_code, task_id=task_id, phase="job")
 
     college = get_college_by_external_id_sync(session, college_code)
     if not college:
@@ -133,13 +136,23 @@ def run_crawl_job_sync(
     run_id = ensure_crawl_run_task_sync(session, task_id)
     create_or_update_crawl_run_sync(session, run_id, college.id)
     session.commit()
+    set_request_context(run_id=str(run_id))
+    enqueued_ai_count = 0
+
+    def _counting_chunk_handler(ids: list[uuid.UUID]) -> None:
+        nonlocal enqueued_ai_count
+        if not ids:
+            return
+        on_chunk_processed(ids)
+        enqueued_ai_count += len(ids)
+
     try:
         count, _ = crawl_college_sync(
             session,
             college_code,
             run_id=run_id,
             task_id=task_id,
-            on_chunk_processed=on_chunk_processed,
+            on_chunk_processed=_counting_chunk_handler,
         )
         update_crawl_run_sync(
             session,
@@ -149,11 +162,13 @@ def run_crawl_job_sync(
             notices_upserted=count,
         )
         session.commit()
-        return (count, count)
+        return (count, enqueued_ai_count)
     except Exception as e:
         session.rollback()
         error_msg = (str(e))[:2000]
-        reason = (get_request_context().get("event_code") or "").strip() or "unknown"
+        reason_raw = get_request_context().get("event_code")
+        reason = reason_raw.strip() if isinstance(reason_raw, str) else "unknown"
+        reason = reason or "unknown"
         event = CrawlJobFailed(
             run_id=run_id,
             task_id=task_id,
@@ -164,3 +179,5 @@ def run_crawl_job_sync(
         publisher = failure_publisher if failure_publisher is not None else _noop_failure_publisher
         publisher(event)
         raise
+    finally:
+        clear_request_context()

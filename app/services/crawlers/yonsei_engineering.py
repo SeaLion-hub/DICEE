@@ -4,8 +4,8 @@ import re
 from urllib.parse import urljoin
 
 import httpx
-from bs4 import BeautifulSoup, Comment, NavigableString, Tag
-from bs4.element import PageElement
+from bs4 import BeautifulSoup, Comment, Tag
+from bs4.element import NavigableString, PageElement
 from requests.exceptions import RequestException
 
 from app.core.crawl_http import (
@@ -92,7 +92,7 @@ def scrape_yonsei_engineering_precise(url):
 
         # 제목
         title = "제목 없음"
-        title_label = soup.find(string=lambda t: t and "제목" in t)
+        title_label = soup.find(string=lambda t: bool(t and "제목" in t))
         if title_label:
             title_container = title_label.find_parent(["dt", "th", "td"])
             if title_container:
@@ -113,7 +113,7 @@ def scrape_yonsei_engineering_precise(url):
         # 본문 (정밀 타격)
         content_text = ""
         main_container = None
-        anchor_text = soup.find(string=lambda t: t and "게시글 내용" in t)
+        anchor_text = soup.find(string=lambda t: bool(t and "게시글 내용" in t))
         if anchor_text:
             start_tag = anchor_text.find_parent(["dt", "th", "td"])
             if start_tag and isinstance(start_tag, Tag):
@@ -302,7 +302,7 @@ async def scrape_yonsei_engineering_precise_async(client: httpx.AsyncClient, url
         text = await fetch_html_async(client, url, timeout=10.0)
         soup = BeautifulSoup(text, "html.parser")
         title = "제목 없음"
-        title_label = soup.find(string=lambda t: t and "제목" in t)
+        title_label = soup.find(string=lambda t: bool(t and "제목" in t))
         if title_label:
             title_container = title_label.find_parent(["dt", "th", "td"])
             if title_container:
@@ -319,7 +319,7 @@ async def scrape_yonsei_engineering_precise_async(client: httpx.AsyncClient, url
             date = date_match.group()
         content_text = ""
         main_container = None
-        anchor_text = soup.find(string=lambda t: t and "게시글 내용" in t)
+        anchor_text = soup.find(string=lambda t: bool(t and "게시글 내용" in t))
         if anchor_text:
             start_tag = anchor_text.find_parent(["dt", "th", "td"])
             if start_tag and isinstance(start_tag, Tag):

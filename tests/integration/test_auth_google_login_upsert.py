@@ -9,6 +9,8 @@ import pytest
 
 pytest.importorskip("sqlalchemy.ext.asyncio")
 
+pytestmark = pytest.mark.integration
+
 
 @pytest.fixture(scope="module")
 def _ensure_db():

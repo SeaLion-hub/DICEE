@@ -6,6 +6,7 @@ Celery 앱 단일 진입점. broker=Redis, result_backend, beat_schedule, includ
 import logging
 import os
 import ssl
+from typing import Any, cast
 
 # Celery CLI가 이 모듈을 로드할 때 APP_ENTRY가 없으면 celery로 설정. Settings() 검증 통과용.
 os.environ.setdefault("APP_ENTRY", "celery")
@@ -16,6 +17,7 @@ from kombu import Queue  # type: ignore[import-untyped]
 
 from app.core.config import settings
 from app.core.crawler_config import validate_crawler_contract
+from app.core.database_sync import init_sync_db
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +67,7 @@ app.conf.update(
         "app.services.tasks.close_stale_crawl_runs_task": {"queue": "critical"},
         "app.services.tasks.crawl_college_task": {"queue": "crawl"},
         "app.services.tasks.process_notice_ai_task": {"queue": "ai"},
+        "app.services.tasks.process_notice_ai_batch_task": {"queue": "ai"},
         "app.services.tasks.drain_content_spool_task": {"queue": "critical"},
     },
     beat_schedule={
@@ -90,12 +93,16 @@ if broker_url.startswith("rediss://"):
 
 @worker_init.connect
 def _on_worker_init(**kwargs):
-    """워커 프로세스 기동 시에만 APP_ENTRY=celery 검사. API에서 tasks import 시에는 검사하지 않음."""
+    """워커 프로세스 기동 시 APP_ENTRY 검사·동기 DB 초기화(fail-fast)·크롤러 계약 검증."""
     _ensure_celery_entry()
+    init_sync_db()
     validate_crawler_contract()
 
 
-@app.on_after_configure.connect
+_after_configure_hook = cast(Any, app.on_after_configure)
+
+
+@_after_configure_hook.connect
 def _on_after_configure(**kwargs):
     """프로덕션 워커: API와 동일한 예외/로그 마스킹 필터 등록. development: [DEV] 접두사."""
     root = logging.getLogger()

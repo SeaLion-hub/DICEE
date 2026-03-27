@@ -188,3 +188,18 @@ def test_resolve_notice_images_base64_uploads_and_returns_url(mock_upload_image)
     assert call_kw["external_id"] == "ext-1"
     assert call_kw["index"] == 0
     assert call_kw["filename_hint"] == "image_1.png"
+
+
+@patch("app.services.crawl_payload.upload_notice_image")
+def test_resolve_notice_images_base64_raw_bytes_passed_to_upload(mock_upload_image):
+    """type=base64이고 data가 이미 디코드된 bytes면 재디코드 없이 그대로 업로드한다."""
+    mock_upload_image.return_value = "https://storage/college/ext1/images/0_raw.jpg"
+    college_id = uuid.uuid4()
+    raw_png = b"\x89PNG\r\n\x1a\n\x00"
+    images = [{"type": "base64", "data": raw_png, "name": "inline.png"}]
+    out = _resolve_notice_images(images, college_id=college_id, external_id="ext-9", ctx=None)
+    assert len(out) == 1
+    assert out[0]["url"] == "https://storage/college/ext1/images/0_raw.jpg"
+    mock_upload_image.assert_called_once()
+    call_pos = mock_upload_image.call_args[0]
+    assert call_pos[0] == raw_png

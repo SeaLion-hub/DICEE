@@ -20,6 +20,8 @@ Composer(Cmd+I) 사용 시 **@todo.md**를 반드시 포함해 세션 컨텍스�
 
 ## [Plan] — 계획서
 
+**gstack 우선**: 큰 작업은 루트 `GSTACK.md`의 스프린트(Think→Plan→Build→Review→Test→Ship→Reflect)와 `.agents/skills/` 스킬을 먼저 쓰고, 세부 실행은 아래 Composer·todo 습관으로 맞춘다.
+
 작업 시작 전 또는 사용자 지시에 따라 여기에 **계획**을 적어 둔다. 새 크롤러·새 API·스키마 변경 시 관련 결정 문서를 참조해 작성한다.
 
 - **예시(새 대학 크롤러)**: @docs/decisions/database-spec.md를 참고해 Notice 스키마·필수 필드(published_at, external_id, title, url 등)를 확인한 뒤, 베이스/기존 크롤러 패턴을 따라 단계별 계획을 적는다.

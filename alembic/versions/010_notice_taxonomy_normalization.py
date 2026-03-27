@@ -12,6 +12,7 @@ from typing import Sequence, Union
 
 import sqlalchemy as sa
 from alembic import op
+from sqlalchemy import inspect
 from sqlalchemy.dialects import postgresql
 
 revision: str = "010_notice_taxonomy"
@@ -20,57 +21,72 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
+def _ensure_notice_taxonomy_indexes(bind: sa.Connection) -> None:
+    insp = inspect(bind)
+    existing = {ix["name"] for ix in insp.get_indexes("notice_taxonomy_mappings")}
+    if "ix_notice_taxonomy_mappings_notice_id" not in existing:
+        op.create_index(
+            "ix_notice_taxonomy_mappings_notice_id",
+            "notice_taxonomy_mappings",
+            ["notice_id"],
+            unique=False,
+        )
+    if "ix_notice_taxonomy_main_notice" not in existing:
+        op.create_index(
+            "ix_notice_taxonomy_main_notice",
+            "notice_taxonomy_mappings",
+            ["main_category", "notice_id"],
+            unique=False,
+        )
+    if "ix_notice_taxonomy_main_sub_notice" not in existing:
+        op.create_index(
+            "ix_notice_taxonomy_main_sub_notice",
+            "notice_taxonomy_mappings",
+            ["main_category", "sub_category", "notice_id"],
+            unique=False,
+        )
+
+
 def upgrade() -> None:
-    op.create_table(
-        "notice_taxonomy_mappings",
-        sa.Column(
-            "id",
-            postgresql.UUID(as_uuid=True),
-            server_default=sa.text("gen_random_uuid()"),
-            nullable=False,
-        ),
-        sa.Column("notice_id", postgresql.UUID(as_uuid=True), nullable=False),
-        sa.Column("main_category", sa.String(length=64), nullable=False),
-        sa.Column("sub_category", sa.String(length=64), nullable=False),
-        sa.Column(
-            "created_at",
-            sa.DateTime(timezone=True),
-            nullable=False,
-            server_default=sa.text("now()"),
-        ),
-        sa.Column(
-            "updated_at",
-            sa.DateTime(timezone=True),
-            nullable=False,
-            server_default=sa.text("now()"),
-        ),
-        sa.ForeignKeyConstraint(["notice_id"], ["notices.id"], ondelete="CASCADE"),
-        sa.PrimaryKeyConstraint("id"),
-        sa.UniqueConstraint(
-            "notice_id",
-            "main_category",
-            "sub_category",
-            name="uq_notice_taxonomy_mappings_triplet",
-        ),
-    )
-    op.create_index(
-        "ix_notice_taxonomy_mappings_notice_id",
-        "notice_taxonomy_mappings",
-        ["notice_id"],
-        unique=False,
-    )
-    op.create_index(
-        "ix_notice_taxonomy_main_notice",
-        "notice_taxonomy_mappings",
-        ["main_category", "notice_id"],
-        unique=False,
-    )
-    op.create_index(
-        "ix_notice_taxonomy_main_sub_notice",
-        "notice_taxonomy_mappings",
-        ["main_category", "sub_category", "notice_id"],
-        unique=False,
-    )
+    bind = op.get_bind()
+    insp = inspect(bind)
+
+    if not insp.has_table("notice_taxonomy_mappings"):
+        op.create_table(
+            "notice_taxonomy_mappings",
+            sa.Column(
+                "id",
+                postgresql.UUID(as_uuid=True),
+                server_default=sa.text("gen_random_uuid()"),
+                nullable=False,
+            ),
+            sa.Column("notice_id", postgresql.UUID(as_uuid=True), nullable=False),
+            sa.Column("main_category", sa.String(length=64), nullable=False),
+            sa.Column("sub_category", sa.String(length=64), nullable=False),
+            sa.Column(
+                "created_at",
+                sa.DateTime(timezone=True),
+                nullable=False,
+                server_default=sa.text("now()"),
+            ),
+            sa.Column(
+                "updated_at",
+                sa.DateTime(timezone=True),
+                nullable=False,
+                server_default=sa.text("now()"),
+            ),
+            sa.ForeignKeyConstraint(["notice_id"], ["notices.id"], ondelete="CASCADE"),
+            sa.PrimaryKeyConstraint("id"),
+            sa.UniqueConstraint(
+                "notice_id",
+                "main_category",
+                "sub_category",
+                name="uq_notice_taxonomy_mappings_triplet",
+            ),
+        )
+        _ensure_notice_taxonomy_indexes(bind)
+    else:
+        _ensure_notice_taxonomy_indexes(bind)
 
     # Backfill from structured extraction json taxonomy_mappings.
     op.execute(
@@ -114,8 +130,11 @@ def upgrade() -> None:
     )
 
     op.execute(sa.text("DROP INDEX IF EXISTS ix_notices_category"))
-    op.drop_column("notices", "sub_category")
-    op.drop_column("notices", "category")
+    notice_cols = {c["name"] for c in insp.get_columns("notices")}
+    if "sub_category" in notice_cols:
+        op.drop_column("notices", "sub_category")
+    if "category" in notice_cols:
+        op.drop_column("notices", "category")
 
 
 def downgrade() -> None:
