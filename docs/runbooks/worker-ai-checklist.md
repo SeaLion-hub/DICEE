@@ -38,7 +38,7 @@ celery -A app.core.celery_app:app worker -l info -O fair --pool=solo -Q critical
 ## 2) AI 태스크 재처리 체크
 
 - [ ] `ai_status='pending'` 전환은 **이미 크롤링되어 DB에 저장된 기존 공지를 재처리할 때만** 사용한다.
-  - 신규 크롤링으로 들어온 공지는 파이프라인에서 자동으로 AI 큐에 들어가므로 수동 `pending` 전환이 필요 없다.
+  - 신규 크롤링으로 들어온 공지는 `AI_PIPELINE_ENABLED=true`일 때 파이프라인에서 자동으로 AI 큐에 들어가므로 수동 `pending` 전환이 필요 없다.
 - [ ] 대상 notice를 `ai_status='pending'`으로 되돌렸다.
 - [ ] `process_notice_ai_task`를 큐에 재등록했다.
 - [ ] 워커 로그에서 아래를 확인했다:
@@ -85,6 +85,7 @@ celery -A app.core.celery_app:app worker -l info -O fair --pool=solo -Q critical
   - [ ] 워커 재시작 후 AI 태스크 재처리
 - 주의:
   - [ ] 이 방법은 임시 복구이며, 이후 원인(DB URL/마이그레이션 경로)을 반드시 정리한다
+  - [ ] `create(checkfirst=True)`는 **테이블 생성만** 보장한다. 마이그레이션 `010_notice_taxonomy`에 포함된 백필·인덱스·`notices` 컬럼 변경 등은 적용되지 않으므로, 정상 경로는 여전히 `alembic upgrade head`로 맞춘다.
 
 ---
 
