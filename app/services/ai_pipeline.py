@@ -124,9 +124,7 @@ class ExtractionEnvelope:
     """
 
     status: Literal["ok", "fallback"] = "ok"
-    result: NoticeAIExtraction = field(
-        default_factory=lambda: NoticeAIExtraction(target_departments=[])
-    )
+    result: NoticeAIExtraction = field(default_factory=lambda: NoticeAIExtraction(target_departments=[]))
     usage: TokenUsage = field(default_factory=TokenUsage)
     meta: ExtractionRunMeta = field(default_factory=ExtractionRunMeta)
 
@@ -232,9 +230,7 @@ def validate_extraction_raw_substrings(
     """
     if extraction.raw_eligibility_text and extraction.raw_eligibility_text.strip():
         if extraction.raw_eligibility_text.strip() not in source_text:
-            raise ValueError(
-                "raw_eligibility_text must be a substring of the source notice text."
-            )
+            raise ValueError("raw_eligibility_text must be a substring of the source notice text.")
     for item in extraction.schedules:
         for raw_val in (item.date_raw, item.start_date_raw, item.end_date_raw):
             if raw_val and raw_val.strip():
@@ -271,25 +267,16 @@ def validate_and_normalize_taxonomy(
         return extraction
 
     mains = extraction.main_categories
-    if (
-        NoticeMainCategory.CAMPUS_LIFE in mains
-        and len(mains) > 1
-    ):
-        raise ValueError(
-            "'캠퍼스생활' is a fallback main category and must be assigned as a single category only."
-        )
+    if NoticeMainCategory.CAMPUS_LIFE in mains and len(mains) > 1:
+        raise ValueError("'캠퍼스생활' is a fallback main category and must be assigned as a single category only.")
     if not extraction.taxonomy_mappings:
-        raise ValueError(
-            "taxonomy_mappings are required when main_categories are provided."
-        )
+        raise ValueError("taxonomy_mappings are required when main_categories are provided.")
 
     normalized_mappings: list[TaxonomyMappingItem] = []
     seen_mains: set[NoticeMainCategory] = set()
     for item in extraction.taxonomy_mappings:
         if item.main_category in seen_mains:
-            raise ValueError(
-                "taxonomy_mappings must not contain duplicate main_category entries."
-            )
+            raise ValueError("taxonomy_mappings must not contain duplicate main_category entries.")
         seen_mains.add(item.main_category)
 
         deduped_sub_categories: list[str] = []
@@ -313,9 +300,7 @@ def validate_and_normalize_taxonomy(
         )
 
     if set(mains) != {item.main_category for item in normalized_mappings}:
-        raise ValueError(
-            "main_categories and taxonomy_mappings must reference the same set of main categories."
-        )
+        raise ValueError("main_categories and taxonomy_mappings must reference the same set of main categories.")
 
     return extraction.model_copy(update={"taxonomy_mappings": normalized_mappings})
 
@@ -375,9 +360,7 @@ def extract_notice_info(
                     elapsed_ms=elapsed_ms,
                 ),
             )
-        if getattr(settings, "ai_extraction_enforce_raw_substrings", False) and not (
-            image_urls or []
-        ):
+        if getattr(settings, "ai_extraction_enforce_raw_substrings", False) and not (image_urls or []):
             try:
                 validate_extraction_raw_substrings(extraction, validation_source)
             except ValueError:
@@ -439,9 +422,7 @@ def extract_notice_info(
                 InstructorRetryException as _InstructorRetryImported,
             )
         except ImportError:
-            _instructor_retry_exc_type: type[BaseException] = type(
-                "InstructorRetryException", (Exception,), {}
-            )
+            _instructor_retry_exc_type: type[BaseException] = type("InstructorRetryException", (Exception,), {})
         else:
             _instructor_retry_exc_type = _InstructorRetryImported
 

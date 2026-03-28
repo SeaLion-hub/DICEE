@@ -7,14 +7,14 @@ Create Date: 2026-03-23
 008에서 추가한 ix_notices_list_by_college / ix_notices_list_global 끝에 id DESC를 붙여
 동일 (published_at, created_at) 구간에서 정렬·키셋 일치를 돕는다.
 """
-from typing import Sequence, Union
+from collections.abc import Sequence
 
 from alembic import op
 
 revision: str = "011_notices_list_id"
-down_revision: Union[str, Sequence[str], None] = "010_notice_taxonomy"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | Sequence[str] | None = "010_notice_taxonomy"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:

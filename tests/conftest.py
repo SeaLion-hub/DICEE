@@ -1,7 +1,12 @@
 """Pytest fixtures. 테스트 시 DB 없이 실행 가능하도록 환경 조정."""
 
+import asyncio
 import importlib
 import os
+import sys
+
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING

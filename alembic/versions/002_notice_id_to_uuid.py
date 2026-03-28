@@ -7,16 +7,16 @@ Create Date: 2026-02-24
 기존 Integer PK/FK를 UUID로 변환. gen_random_uuid() 사용.
 이미 notices.id가 UUID인 경우(001 적용 DB) 스킵.
 """
-from typing import Sequence, Union
+from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
 revision: str = "002_notice_uuid"
-down_revision: Union[str, Sequence[str], None] = "v7_001"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | Sequence[str] | None = "v7_001"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def _notices_id_is_uuid(conn) -> bool:

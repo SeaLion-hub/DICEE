@@ -10,7 +10,7 @@ from enum import Enum
 from typing import Any
 
 from fastapi import Request
-from sqlalchemy import text
+from sqlalchemy import event, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
@@ -230,6 +230,13 @@ def init_db() -> None:
         echo=False,
         **pool_kw,
     )
+    if isinstance(_db_holder.engine, AsyncEngine):
+        from pgvector.psycopg import register_vector_async
+
+        @event.listens_for(_db_holder.engine.sync_engine, "connect")
+        def _pgvector_register_async(dbapi_connection: Any, connection_record: Any) -> None:
+            dbapi_connection.run_async(register_vector_async)
+
     _db_holder.async_session_maker = async_sessionmaker(
         _db_holder.engine,
         class_=AsyncSession,

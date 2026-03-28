@@ -4,6 +4,7 @@ Sentry 전송 전 스크러빙, fingerprint 정책, 알림 억제(Option B).
 """
 
 import time
+from typing import Any
 
 # 전송 전 제거할 요청 헤더 키 (소문자). Cookie, Authorization 등 민감 정보.
 _SENSITIVE_HEADERS = frozenset(
@@ -15,7 +16,7 @@ _SENTRY_DEDUP_TTL_SECONDS = 60
 _sentry_dedup_last_sent: dict[str, float] = {}
 
 
-def _event_signature(event: dict) -> str | None:
+def _event_signature(event: dict[str, Any]) -> str | None:
     """이벤트별 시그니처. fingerprint 또는 exception type+message, 또는 message. 추론 불가 시 None(디듀프 스킵)."""
     try:
         if "fingerprint" in event and isinstance(event["fingerprint"], list):
@@ -34,7 +35,7 @@ def _event_signature(event: dict) -> str | None:
     return None
 
 
-def before_send_scrub(event: dict, hint: dict) -> dict | None:
+def before_send_scrub(event: dict[str, Any], hint: dict[str, Any]) -> dict[str, Any] | None:
     """
     Sentry init 시 before_send로 등록.
     - 요청 헤더/바디 스크러빙, fingerprint 적용.

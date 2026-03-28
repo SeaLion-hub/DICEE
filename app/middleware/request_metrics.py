@@ -6,9 +6,11 @@ request_total, request_error_total, request_duration_seconds.
 
 import re
 import time
+from collections.abc import Awaitable, Callable
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
+from starlette.responses import Response
 
 from app.core.metrics import (
     REQUEST_DURATION_SECONDS,
@@ -18,9 +20,7 @@ from app.core.metrics import (
     set_gauge,
 )
 
-_UUID_PATTERN = re.compile(
-    r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
-)
+_UUID_PATTERN = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
 
 
 def _endpoint_template(path: str) -> str:
@@ -35,7 +35,9 @@ def _endpoint_template(path: str) -> str:
 class RequestMetricsMiddleware(BaseHTTPMiddleware):
     """요청 수·에러 수·지연을 골든 시그널로 기록. 라벨은 endpoint_template, status_class, method만 사용."""
 
-    async def dispatch(self, request: Request, call_next):
+    async def dispatch(
+        self, request: Request, call_next: Callable[[Request], Awaitable[Response]]
+    ) -> Response:
         start = time.perf_counter()
         path = getattr(request.url, "path", "") or ""
         endpoint_template = _endpoint_template(path)

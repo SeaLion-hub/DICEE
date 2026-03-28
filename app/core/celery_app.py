@@ -68,6 +68,7 @@ app.conf.update(
         "app.services.tasks.crawl_college_task": {"queue": "crawl"},
         "app.services.tasks.process_notice_ai_task": {"queue": "ai"},
         "app.services.tasks.process_notice_ai_batch_task": {"queue": "ai"},
+        "app.services.tasks.backfill_notice_embedding_task": {"queue": "ai"},
         "app.services.tasks.drain_content_spool_task": {"queue": "critical"},
     },
     beat_schedule={

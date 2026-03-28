@@ -39,8 +39,7 @@ class CeleryCrawlDispatcher:
             kwargs: dict[str, Any] | None = None,
             countdown: int | None = None,
             **options: Any,
-        ) -> Any:
-            ...
+        ) -> Any: ...
 
     async def enqueue(
         self,
@@ -52,7 +51,7 @@ class CeleryCrawlDispatcher:
         """Dispatch crawl task and return task_id while preserving existing method contract."""
         from app.services.tasks import crawl_college_task
 
-        task: CeleryCrawlDispatcher._CeleryTaskProtocol = crawl_college_task  # type: ignore[assignment]
+        task: CeleryCrawlDispatcher._CeleryTaskProtocol = crawl_college_task
 
         labels = {"college_code": college_code}
         snapshot = await asyncio.to_thread(_collect_resource_snapshot)
@@ -130,4 +129,3 @@ def _compute_backpressure_seconds(memory_mb: float | None) -> int:
     overflow_ratio = (memory_mb - soft_limit) / soft_limit
     levels = max(1, math.ceil(overflow_ratio))
     return min(max_extra, levels * step)
-

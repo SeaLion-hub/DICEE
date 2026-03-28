@@ -1,4 +1,4 @@
-﻿"""Scrapy-style item pipeline primitives for crawl payload processing and persistence."""
+"""Scrapy-style item pipeline primitives for crawl payload processing and persistence."""
 
 from __future__ import annotations
 
@@ -17,11 +17,9 @@ from app.services.crawlers.base import ScrapeResult
 
 
 class _SeenSet(Protocol):
-    def add(self, x: str) -> None:
-        ...
+    def add(self, x: str) -> None: ...
 
-    def __contains__(self, x: str) -> bool:
-        ...
+    def __contains__(self, x: str) -> bool: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,8 +32,9 @@ class RawNoticeItem:
 
 
 class ItemPipelineStage(Protocol):
-    def process(self, item: RawNoticeItem | NoticeDraft, ctx: CrawlLogContext) -> RawNoticeItem | NoticeDraft | None:
-        ...
+    def process(
+        self, item: RawNoticeItem | NoticeDraft, ctx: CrawlLogContext
+    ) -> RawNoticeItem | NoticeDraft | None: ...
 
 
 class ExternalIdResolveStage:
@@ -151,4 +150,3 @@ class NoticeBulkUpsertPipeline:
         if not drafts:
             return []
         return self._upsert_fn(session, drafts)
-

@@ -28,8 +28,16 @@ line-length = 120
 src = ["app", "tests"]
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "N", "W", "UP"]
+select = ["B", "E", "F", "I", "N", "W", "UP"]
 ignore = ["F821", "UP037"]  # SQLAlchemy forward ref, quoted annotations
+
+# Migrations: long single-line DDL is normal. Scripts: sys.path/env bootstrap before app imports.
+# B008: FastAPI Depends()/Header() in defaults is intentional DI.
+[tool.ruff.lint.per-file-ignores]
+"alembic/**/*.py" = ["E501"]
+"scripts/**/*.py" = ["E402", "E501"]
+"app/api/**/*.py" = ["B008"]
+"app/core/deps.py" = ["B008"]
 
 [tool.mypy]
 python_version = "3.11"
@@ -47,6 +55,11 @@ disallow_untyped_defs = false
 [[tool.mypy.overrides]]
 module = ["celery", "celery.*"]
 ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["pgvector", "pgvector.*"]
+ignore_missing_imports = true
+disable_error_code = ["import-untyped"]
 
 # NOTE:
 # Keep `mypy app` baseline green first. Add strictness later with per-module flags

@@ -13,9 +13,7 @@ from typing import Annotated, Any
 
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator, model_validator
 
-_DEPARTMENT_PLACEHOLDER_VALUES = frozenset(
-    {"없음", "알 수 없음", "해당없음", "해당 없음", "-", "없음.", "알수없음"}
-)
+_DEPARTMENT_PLACEHOLDER_VALUES = frozenset({"없음", "알 수 없음", "해당없음", "해당 없음", "-", "없음.", "알수없음"})
 _PLACEHOLDER_LOWER = frozenset({"none", "n/a", "na"})
 _MAX_ELIGIBILITY_RULES = 20
 _MAX_TARGET_DEPARTMENTS = 50
@@ -106,24 +104,14 @@ _SUBCATEGORY_POOL: dict[NoticeMainCategory, frozenset[str]] = {
     NoticeMainCategory.SCHOLARSHIP_SUPPORT: frozenset(
         {"교내/성적장학", "가계지원/국가장학", "근로/활동장학", "외부장학"}
     ),
-    NoticeMainCategory.CAREER_EMPLOYMENT: frozenset(
-        {"채용/인턴", "진로/프로그램", "고시/자격증", "창업지원"}
-    ),
+    NoticeMainCategory.CAREER_EMPLOYMENT: frozenset({"채용/인턴", "진로/프로그램", "고시/자격증", "창업지원"}),
     NoticeMainCategory.INTERNATIONAL_EXCHANGE: frozenset(
         {"교환/방문학생", "단기연수/캠프", "유학생지원", "어학프로그램"}
     ),
-    NoticeMainCategory.RESEARCH_LAB: frozenset(
-        {"학부연구생(인턴)", "대학원진학", "연구과제/참여", "실험실안전"}
-    ),
-    NoticeMainCategory.CONTEST_COMPETITION: frozenset(
-        {"교내경진대회", "외부공모전", "해커톤/아이디어"}
-    ),
-    NoticeMainCategory.CULTURE_EVENT: frozenset(
-        {"특강/세미나", "축제/공연", "동아리/학생회", "봉사활동"}
-    ),
-    NoticeMainCategory.CAMPUS_LIFE: frozenset(
-        {"시설/공간대여", "IT/시스템안내", "보건/복지", "기타안내"}
-    ),
+    NoticeMainCategory.RESEARCH_LAB: frozenset({"학부연구생(인턴)", "대학원진학", "연구과제/참여", "실험실안전"}),
+    NoticeMainCategory.CONTEST_COMPETITION: frozenset({"교내경진대회", "외부공모전", "해커톤/아이디어"}),
+    NoticeMainCategory.CULTURE_EVENT: frozenset({"특강/세미나", "축제/공연", "동아리/학생회", "봉사활동"}),
+    NoticeMainCategory.CAMPUS_LIFE: frozenset({"시설/공간대여", "IT/시스템안내", "보건/복지", "기타안내"}),
 }
 
 
@@ -207,13 +195,9 @@ class ScheduleItem(BaseModel):
             return self
         updates: dict[str, datetime | None] = {}
         if self.starts_at is not None:
-            updates["starts_at"] = self.starts_at.replace(
-                hour=0, minute=0, second=0, microsecond=0
-            )
+            updates["starts_at"] = self.starts_at.replace(hour=0, minute=0, second=0, microsecond=0)
         if self.ends_at is not None:
-            updates["ends_at"] = self.ends_at.replace(
-                hour=0, minute=0, second=0, microsecond=0
-            )
+            updates["ends_at"] = self.ends_at.replace(hour=0, minute=0, second=0, microsecond=0)
         if not updates:
             return self
         return self.model_copy(update=updates)
@@ -228,21 +212,14 @@ class ScheduleItem(BaseModel):
             and self.end_date_raw is None
         ):
             raise ValueError(
-                "ScheduleItem must have at least one of starts_at, ends_at, "
-                "date_raw, start_date_raw, end_date_raw."
+                "ScheduleItem must have at least one of starts_at, ends_at, " "date_raw, start_date_raw, end_date_raw."
             )
-        if self.date_raw is not None and (
-            self.start_date_raw is not None or self.end_date_raw is not None
-        ):
+        if self.date_raw is not None and (self.start_date_raw is not None or self.end_date_raw is not None):
             raise ValueError(
                 "Use date_raw only when both start and end are fuzzy; "
                 "do not combine it with start_date_raw or end_date_raw."
             )
-        if (
-            self.starts_at is not None
-            and self.ends_at is not None
-            and self.starts_at > self.ends_at
-        ):
+        if self.starts_at is not None and self.ends_at is not None and self.starts_at > self.ends_at:
             raise ValueError("starts_at must be less than or equal to ends_at.")
         return self
 
@@ -290,9 +267,7 @@ class TaxonomyMappingItem(BaseModel):
     @model_validator(mode="after")
     def _validate_sub_categories_in_pool(self) -> TaxonomyMappingItem:
         if not self.sub_categories:
-            raise ValueError(
-                "Each taxonomy mapping must include at least one sub-category."
-            )
+            raise ValueError("Each taxonomy mapping must include at least one sub-category.")
         allowed = _SUBCATEGORY_POOL[self.main_category]
         invalid = [sub for sub in self.sub_categories if sub not in allowed]
         if invalid:
@@ -319,16 +294,12 @@ class NoticeAIExtraction(BaseModel):
     main_categories: list[NoticeMainCategory] = Field(
         default_factory=list,
         description=(
-            "Step 1 결과 대분류 목록 (multi-label). "
-            "'캠퍼스생활'은 fallback이므로 다른 대분류와 공존 불가."
+            "Step 1 결과 대분류 목록 (multi-label). " "'캠퍼스생활'은 fallback이므로 다른 대분류와 공존 불가."
         ),
     )
     taxonomy_mappings: list[TaxonomyMappingItem] = Field(
         default_factory=list,
-        description=(
-            "Step 2 결과. main_category별 소분류 매핑 목록. "
-            "교차 매핑(다른 대분류의 소분류 선택) 금지."
-        ),
+        description=("Step 2 결과. main_category별 소분류 매핑 목록. " "교차 매핑(다른 대분류의 소분류 선택) 금지."),
     )
 
     category: NoticeCategory = Field(
@@ -485,13 +456,9 @@ class NoticeAIExtraction(BaseModel):
 
     @model_validator(mode="after")
     def _validate_taxonomy_block(self) -> NoticeAIExtraction:
-        mapping_mains: list[NoticeMainCategory] = [
-            item.main_category for item in self.taxonomy_mappings
-        ]
+        mapping_mains: list[NoticeMainCategory] = [item.main_category for item in self.taxonomy_mappings]
         if len(mapping_mains) != len(set(mapping_mains)):
-            raise ValueError(
-                "taxonomy_mappings must not contain duplicate main_category entries."
-            )
+            raise ValueError("taxonomy_mappings must not contain duplicate main_category entries.")
 
         main_categories = self.main_categories
         if not main_categories and mapping_mains:
@@ -501,34 +468,23 @@ class NoticeAIExtraction(BaseModel):
             main_categories = ordered
 
         if main_categories and not self.taxonomy_mappings:
-            raise ValueError(
-                "taxonomy_mappings are required when main_categories are provided."
-            )
+            raise ValueError("taxonomy_mappings are required when main_categories are provided.")
 
         if main_categories:
             if set(main_categories) != set(mapping_mains):
                 raise ValueError(
-                    "main_categories and taxonomy_mappings must reference the same "
-                    "set of main categories."
+                    "main_categories and taxonomy_mappings must reference the same " "set of main categories."
                 )
-            if (
-                NoticeMainCategory.CAMPUS_LIFE in main_categories
-                and len(main_categories) > 1
-            ):
+            if NoticeMainCategory.CAMPUS_LIFE in main_categories and len(main_categories) > 1:
                 raise ValueError(
-                    "'캠퍼스생활' is a fallback main category and must be assigned "
-                    "as a single category only."
+                    "'캠퍼스생활' is a fallback main category and must be assigned " "as a single category only."
                 )
         return self
 
     @model_validator(mode="after")
     def _validate_eligibility_block(self) -> NoticeAIExtraction:
-        if (
-            (self.eligibility_rules or self.target_departments or self.target_grades)
-            and not self.raw_eligibility_text
-        ):
+        if (self.eligibility_rules or self.target_departments or self.target_grades) and not self.raw_eligibility_text:
             raise ValueError(
-                "eligibility_rules/target_departments/target_grades require "
-                "raw_eligibility_text to be set."
+                "eligibility_rules/target_departments/target_grades require " "raw_eligibility_text to be set."
             )
         return self

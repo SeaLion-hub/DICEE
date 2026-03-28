@@ -8,16 +8,16 @@ ORM과 마이그레이션 nullable 불일치 수정.
 created_at, updated_at를 nullable=False로 변경 (ORM Mapped[datetime]과 일치).
 
 """
-from typing import Sequence, Union
+from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = "002"
-down_revision: Union[str, Sequence[str], None] = "001"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | Sequence[str] | None = "001"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 # for alter_column existing_type
 dt_tz = sa.DateTime(timezone=True)

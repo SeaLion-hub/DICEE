@@ -1,4 +1,4 @@
-﻿"""
+"""
 ?щ·??怨듯넻 HTTP ?섑띁. OOM 諛⑹?: Content-Length fail-fast + 臾댁“嫄?stream chunking.
 ?낆쓽???쒕쾭媛 Content-Length瑜??띿뿬???꾩쟻 諛붿씠??罹≪쑝濡?諛⑹뼱.
 ?숆린(?뚯빱?? fetch_html, 鍮꾨룞湲??뱀슜) fetch_html_async.
@@ -237,4 +237,3 @@ async def _fetch_html_stream_async(
         status_code=response.status_code,
         headers=dict(response.headers),
     )
-

@@ -849,8 +849,6 @@ def test_process_scrape_result_increments_drop_metric_with_reason(monkeypatch):
     assert payload is None
     assert raise_exc is None
     drop_duplicate = [
-        c
-        for c in increment_calls
-        if c[0] == CRAWL_DROP_TOTAL and (c[2] or {}).get("reason") == DROP_REASON_DUPLICATE
+        c for c in increment_calls if c[0] == CRAWL_DROP_TOTAL and (c[2] or {}).get("reason") == DROP_REASON_DUPLICATE
     ]
     assert len(drop_duplicate) == 1

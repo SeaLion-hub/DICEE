@@ -68,25 +68,21 @@ def _render_engineering_preview_html(rows: list[NoticePreviewRow], *, limit: int
     for row in rows:
         title_html = escape(row.title or "(제목 없음)")
         url_html = (
-            f'<a href="{escape(row.url)}" target="_blank" rel="noopener noreferrer">원문 링크</a>'
-            if row.url
-            else "-"
+            f'<a href="{escape(row.url)}" target="_blank" rel="noopener noreferrer">원문 링크</a>' if row.url else "-"
         )
         body_rows.append(
-            (
-                "<tr>"
-                f"<td>{title_html}</td>"
-                f"<td>{escape(row.published_at or '-')}</td>"
-                f"<td>{url_html}</td>"
-                f"<td>{_render_preview_cell([row.content_url], empty_text='-')}</td>"
-                f"<td>{_render_preview_cell(row.image_urls)}</td>"
-                f"<td>{_render_preview_cell(row.attachment_names)}</td>"
-                f"<td>{_render_preview_cell(row.eligibility)}</td>"
-                f"<td>{_render_preview_cell(row.dates)}</td>"
-                f"<td>{_render_preview_cell(row.main_categories)}</td>"
-                f"<td>{_render_preview_cell(row.sub_categories)}</td>"
-                "</tr>"
-            )
+            "<tr>"
+            f"<td>{title_html}</td>"
+            f"<td>{escape(row.published_at or '-')}</td>"
+            f"<td>{url_html}</td>"
+            f"<td>{_render_preview_cell([row.content_url], empty_text='-')}</td>"
+            f"<td>{_render_preview_cell(row.image_urls)}</td>"
+            f"<td>{_render_preview_cell(row.attachment_names)}</td>"
+            f"<td>{_render_preview_cell(row.eligibility)}</td>"
+            f"<td>{_render_preview_cell(row.dates)}</td>"
+            f"<td>{_render_preview_cell(row.main_categories)}</td>"
+            f"<td>{_render_preview_cell(row.sub_categories)}</td>"
+            "</tr>"
         )
     rows_html = "".join(body_rows) or (
         "<tr><td colspan='10'>데이터가 없습니다. 공대 크롤링/AI 처리 후 다시 확인해 주세요.</td></tr>"

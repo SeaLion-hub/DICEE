@@ -49,6 +49,7 @@ CRAWLER_HEADERS = {
     "Accept-Language": "ko-KR,ko;q=0.9,en;q=0.8",
 }
 
+
 def _discover_crawler_specs() -> tuple[dict[str, str], dict[str, dict[str, Any]]]:
     """
     app.services.crawlers 패키지에서 CRAWLER_SPEC을 가진 모듈을 수집.
@@ -59,16 +60,14 @@ def _discover_crawler_specs() -> tuple[dict[str, str], dict[str, dict[str, Any]]
     seen_codes: set[str] = set()
     specs: list[tuple[str, CrawlerModuleSpec]] = []
 
-    for importer, modname, ispkg in pkgutil.iter_modules(crawlers_pkg.__path__, prefix=""):
+    for _importer, modname, ispkg in pkgutil.iter_modules(crawlers_pkg.__path__, prefix=""):
         if ispkg or modname in ("base", "typing_helpers"):
             continue
         fullname = f"app.services.crawlers.{modname}"
         try:
             mod = importlib.import_module(fullname)
         except Exception as e:
-            raise ValueError(
-                f"Crawler module import failed: {fullname}. Fix or remove."
-            ) from e
+            raise ValueError(f"Crawler module import failed: {fullname}. Fix or remove.") from e
         spec = getattr(mod, "CRAWLER_SPEC", None)
         if not isinstance(spec, CrawlerModuleSpec):
             continue
@@ -79,28 +78,22 @@ def _discover_crawler_specs() -> tuple[dict[str, str], dict[str, dict[str, Any]]
             )
         seen_codes.add(spec.college_code)
         if not (spec.list_url or "").strip():
-            raise ValueError(
-                f"Crawler {modname} CRAWLER_SPEC.list_url is empty. Set a valid list URL."
-            )
+            raise ValueError(f"Crawler {modname} CRAWLER_SPEC.list_url is empty. Set a valid list URL.")
         try:
             parsed = urlparse(spec.list_url)
             if not parsed.scheme or not parsed.netloc:
                 raise ValueError("URL missing scheme or netloc")
         except Exception as e:
-            raise ValueError(
-                f"Crawler {modname} CRAWLER_SPEC.list_url invalid: {spec.list_url}"
-            ) from e
+            raise ValueError(f"Crawler {modname} CRAWLER_SPEC.list_url invalid: {spec.list_url}") from e
         get_links = (spec.get_links or "").strip() or "get_notice_links"
         scrape_detail = (spec.scrape_detail or "").strip() or "scrape_detail"
         if not callable(getattr(mod, get_links, None)):
             raise ValueError(
-                f"Crawler module {modname} missing callable: {get_links}. "
-                f"Add {get_links} to {fullname}."
+                f"Crawler module {modname} missing callable: {get_links}. " f"Add {get_links} to {fullname}."
             )
         if not callable(getattr(mod, scrape_detail, None)):
             raise ValueError(
-                f"Crawler module {modname} missing callable: {scrape_detail}. "
-                f"Add {scrape_detail} to {fullname}."
+                f"Crawler module {modname} missing callable: {scrape_detail}. " f"Add {scrape_detail} to {fullname}."
             )
         specs.append((modname, spec))
 
@@ -183,7 +176,7 @@ def get_crawler_spec(module_name: str) -> CrawlerSpec | None:
     )
 
 
-def get_crawler(module_name: str) -> tuple[Callable[..., list], Callable[..., tuple]]:
+def get_crawler(module_name: str) -> tuple[Callable[..., Any], Callable[..., Any]]:
     """
     CRAWLER_CONFIG(스펙) 기준으로 (get_links_fn, scrape_detail_fn) 반환. 동기용.
     크롤러 모듈은 지연 임포트(순환 임포트 회피).

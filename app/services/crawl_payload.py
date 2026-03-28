@@ -190,7 +190,7 @@ def _external_id_from_url(url: str, ctx: CrawlLogContext | None = None) -> str:
         if segment and segment.isalnum():
             return segment
         path_only = _url_path_only_for_hash(url)
-        return hashlib.sha256(path_only.encode()).hexdigest().lower()[:32]
+        return hashlib.sha256(path_only.encode("utf-8", errors="replace")).hexdigest().lower()[:32]
     except (ValueError, KeyError, AttributeError, IndexError) as e:
         logger.warning(
             "_external_id_from_url fallback to hash: url=%s error=%s",
@@ -200,7 +200,7 @@ def _external_id_from_url(url: str, ctx: CrawlLogContext | None = None) -> str:
         )
         _capture_crawl_sentry_exception("crawl_payload:external_id_fallback", e, ctx=ctx)
         path_only = _url_path_only_for_hash(url)
-        return hashlib.sha256(path_only.encode()).hexdigest().lower()[:32]
+        return hashlib.sha256(path_only.encode("utf-8", errors="replace")).hexdigest().lower()[:32]
 
 
 def _content_hash_from_title_and_html(

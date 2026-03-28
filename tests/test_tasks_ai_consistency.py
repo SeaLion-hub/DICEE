@@ -131,6 +131,7 @@ def test_process_notice_ai_task_provider_error_does_not_call_update_and_raises()
         patch("app.services.tasks._get_notice_image_urls_for_ai", return_value=[]),
         patch.object(process_notice_ai_task, "retry") as mock_retry,
     ):
+
         def _raise_original(exc=None, *args, **kwargs):
             # Celery autoretry는 기본적으로 Retry 예외를 던지지만,
             # 이 테스트에서는 원래 provider 예외(RequestException)를 그대로 전파하도록 강제한다.

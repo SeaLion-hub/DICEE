@@ -7,16 +7,16 @@ Create Date: 2026-02-24
 gen_random_uuid() 사용. 이미 UUID인 경우 스킵.
 """
 
-from typing import Sequence, Union
+from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
 revision: str = "004_colleges_users_uuid"
-down_revision: Union[str, Sequence[str], None] = "003_notice_contents"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | Sequence[str] | None = "003_notice_contents"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def _col_type(conn, table: str, column: str) -> str | None:

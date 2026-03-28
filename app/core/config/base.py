@@ -193,9 +193,7 @@ class Settings(BaseSettings):
     crawl_http_retry_backoff_max_seconds: float = Field(8.0, ge=0.1, le=300.0)
     crawl_retry_403_hosts: str = Field(
         "",
-        description=(
-            "Comma-separated hostnames that should retry HTTP 403 to handle host-specific WAF behavior."
-        ),
+        description=("Comma-separated hostnames that should retry HTTP 403 to handle host-specific WAF behavior."),
     )
     crawl_upsert_chunk_size: int = Field(50, ge=1, le=1000)
     crawl_collect_sync_max_workers: int = Field(5, ge=1, le=32)
@@ -609,9 +607,7 @@ class Settings(BaseSettings):
 
         # API only: trigger-crawl idempotency must fail-closed (RELEASE_GATE P0).
         if self.app_entry == "api" and not self.redis_trigger_idempotency_required:
-            missing.append(
-                "REDIS_TRIGGER_IDEMPOTENCY_REQUIRED must be true in production when APP_ENTRY=api"
-            )
+            missing.append("REDIS_TRIGGER_IDEMPOTENCY_REQUIRED must be true in production when APP_ENTRY=api")
 
         has_google_client = bool(
             (self.google_client_id or "").strip() or (self.google_client_secret.get_secret_value() or "").strip()

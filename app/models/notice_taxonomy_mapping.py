@@ -64,4 +64,3 @@ class NoticeTaxonomyMapping(Base):
     )
 
     notice: Mapped["Notice"] = relationship("Notice", back_populates="taxonomy_mappings")
-

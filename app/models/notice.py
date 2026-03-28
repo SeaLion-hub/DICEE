@@ -12,11 +12,13 @@ if TYPE_CHECKING:
     from app.models.notice_taxonomy_mapping import NoticeTaxonomyMapping
     from app.models.user_calendar_event import UserCalendarEvent
 
+from pgvector.sqlalchemy import Vector
 from sqlalchemy import DateTime, ForeignKey, Index, String, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from app.constants.embeddings import EMBEDDING_DIM
 from app.models.base import Base
 
 
@@ -27,6 +29,13 @@ class Notice(Base):
         Index("ix_notices_hashtags_gin", "hashtags", postgresql_using="gin"),
         Index("ix_notices_eligibility_gin", "eligibility", postgresql_using="gin"),
         Index("ix_notices_college_published", "college_id", "published_at"),
+        Index(
+            "ix_notices_embedding_hnsw_cosine",
+            "embedding",
+            postgresql_using="hnsw",
+            postgresql_with={"m": 16, "ef_construction": 64},
+            postgresql_ops={"embedding": "vector_cosine_ops"},
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -56,6 +65,9 @@ class Notice(Base):
     # AI Raw 결과 및 기타 태그
     ai_extracted_json: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     hashtags: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
+
+    # Gemini text-embedding-004 등 (EMBEDDING_DIM). 코사인 HNSW: ix_notices_embedding_hnsw_cosine
+    embedding: Mapped[list[float] | None] = mapped_column(Vector(EMBEDDING_DIM), nullable=True)
 
     # 3. 운영용 필드
     # AI 처리 선점·멱등: pending → processing(선점) → done. FOR UPDATE SKIP LOCKED와 연동.

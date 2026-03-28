@@ -9,6 +9,7 @@ uvicorn==0.32.1
 sqlalchemy==2.0.36
 psycopg[binary]==3.3.2
 alembic==1.14.0
+pgvector==0.4.2
 
 # Config & schemas
 pydantic==2.11.7

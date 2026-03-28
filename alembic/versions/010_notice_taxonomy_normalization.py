@@ -8,7 +8,7 @@ Creates notice_taxonomy_mappings and drops notices.category/sub_category.
 Backfills rows from ai_extracted_json.taxonomy_mappings and legacy columns.
 """
 
-from typing import Sequence, Union
+from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op
@@ -16,9 +16,9 @@ from sqlalchemy import inspect
 from sqlalchemy.dialects import postgresql
 
 revision: str = "010_notice_taxonomy"
-down_revision: Union[str, Sequence[str], None] = "009_crawl_runs"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | Sequence[str] | None = "009_crawl_runs"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def _ensure_notice_taxonomy_indexes(bind: sa.Connection) -> None:

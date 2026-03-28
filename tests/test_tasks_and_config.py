@@ -110,6 +110,7 @@ def test_get_notice_image_urls_for_ai_from_url_and_src():
             {"src": "https://cdn.example.com/b.jpg"},
             {"url": "http://example.com/c.gif"},
         ]
+
     got = _get_notice_image_urls_for_ai(NoticeWithImages())
     assert got == [
         "https://cdn.example.com/a.png",
@@ -124,6 +125,7 @@ def test_get_notice_image_urls_for_ai_max_count():
 
     class NoticeMany:
         images = [{"url": f"https://ex.co/{i}.png"} for i in range(10)]
+
     got = _get_notice_image_urls_for_ai(NoticeMany(), max_count=3)
     assert len(got) == 3
     assert got == ["https://ex.co/0.png", "https://ex.co/1.png", "https://ex.co/2.png"]
@@ -140,6 +142,7 @@ def test_get_notice_image_urls_for_ai_filters_non_http():
             {"url": ""},
             {"src": "javascript:void(0)"},
         ]
+
     got = _get_notice_image_urls_for_ai(NoticeMixed())
     assert got == ["https://ok.com/a.png"]
 

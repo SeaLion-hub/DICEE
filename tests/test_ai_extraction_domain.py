@@ -132,4 +132,3 @@ def test_target_grades_limited_to_max_items() -> None:
         target_grades=grades,
     )
     assert len(extraction.target_grades) == 20
-

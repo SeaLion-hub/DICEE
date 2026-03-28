@@ -7,14 +7,14 @@ Create Date: 2026-03-01
 WHERE deleted_at IS NULL + 정렬 컬럼(published_at DESC NULLS LAST, created_at DESC)으로
 목록 쿼리가 인덱스 스캔만으로 처리되도록 함.
 """
-from typing import Sequence, Union
+from collections.abc import Sequence
 
 from alembic import op
 
 revision: str = "008_notices_list"
-down_revision: Union[str, Sequence[str], None] = "007_merge_heads"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | Sequence[str] | None = "007_merge_heads"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:

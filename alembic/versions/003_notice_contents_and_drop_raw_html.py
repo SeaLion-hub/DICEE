@@ -7,16 +7,16 @@ Create Date: 2026-02-24
 명세: 본문은 S3 등에 저장, DB에는 content_url만 notice_contents에 보관.
 """
 
-from typing import Sequence, Union
+from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
 revision: str = "003_notice_contents"
-down_revision: Union[str, Sequence[str], None] = "002_notice_uuid"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | Sequence[str] | None = "002_notice_uuid"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def _has_column(conn, table: str, column: str) -> bool:

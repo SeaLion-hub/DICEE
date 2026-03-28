@@ -93,4 +93,3 @@ def test_streaming_final_result_round_trips_like_non_streaming() -> None:
     NoticeAIExtraction.model_validate(dumped)
     assert strict_result.category == NoticeCategory.EMPLOYMENT
     assert strict_result.sub_category == "인턴"
-

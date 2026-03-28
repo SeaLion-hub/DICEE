@@ -6,6 +6,7 @@ Celery 앱은 실행·작업(Task) 정의.
 import logging
 import threading
 import time
+import types
 import uuid as uuid_mod
 from dataclasses import asdict, is_dataclass
 from pathlib import Path
@@ -56,14 +57,37 @@ from app.core.url_safety import is_safe_worker_http_url
 from app.domain.contracts.ai_extraction import NoticeAIExtraction
 from app.repositories.crawl_run_repository import close_stale_running_runs_sync
 from app.repositories.notice_repository import (
+    get_by_id_sync,
     get_notice_for_ai_sync,
     update_ai_result_sync,
     update_notice_content_url_sync,
+    update_notice_embedding_sync,
 )
 from app.services.ai_pipeline import extract_notice_info, project_extraction_to_notice_fields
 from app.services.crawl_service import handle_crawl_failure_composite, run_crawl_job_sync
+from app.services.gemini_text_embedding import embed_text_sync
 
 logger = logging.getLogger(__name__)
+
+_google_api_exceptions_for_retry: types.ModuleType | None = None
+try:
+    from google.api_core import exceptions as _gae_retry
+except ImportError:  # pragma: no cover
+    pass
+else:
+    _google_api_exceptions_for_retry = _gae_retry
+
+_EMBED_BACKFILL_AUTORETRY: tuple[type[BaseException], ...] = (
+    RequestException,
+    ConnectionError,
+    TimeoutError,
+    OSError,
+)
+if _google_api_exceptions_for_retry is not None:
+    _EMBED_BACKFILL_AUTORETRY = (
+        *_EMBED_BACKFILL_AUTORETRY,
+        _google_api_exceptions_for_retry.GoogleAPIError,
+    )
 
 
 def _coerce_dataclass_or_dict_to_plain_dict(obj: object) -> dict[str, Any]:
@@ -74,6 +98,7 @@ def _coerce_dataclass_or_dict_to_plain_dict(obj: object) -> dict[str, Any]:
     msg = f"Expected dataclass instance or dict, got {type(obj).__name__}"
     raise TypeError(msg)
 
+
 TRIGGER_LOCK_HEARTBEAT_INTERVAL_SECONDS = 60
 NOTICE_HTML_FETCH_TIMEOUT = 30
 
@@ -81,7 +106,6 @@ NOTICE_HTML_FETCH_TIMEOUT = 30
 _AI_ENQUEUE_MAX_ATTEMPTS = 4
 _AI_ENQUEUE_BASE_DELAY_SEC = 0.25
 _AI_ENQUEUE_MAX_DELAY_SEC = 4.0
-
 
 
 def _get_notice_html_for_ai(notice) -> str:
@@ -500,6 +524,50 @@ def process_notice_ai_batch_task(self, notice_ids: list[str]) -> None:
             continue
         with get_sync_session() as session:
             prev_gemini = _execute_notice_ai_pipeline(session, notice_uuid, nid_str, task_id)
+
+
+@app.task(
+    bind=True,
+    name="app.services.tasks.backfill_notice_embedding_task",
+    autoretry_for=_EMBED_BACKFILL_AUTORETRY,
+    retry_backoff=True,
+    retry_backoff_max=600,
+    retry_jitter=True,
+    rate_limit="10/m",
+    max_retries=6,
+    soft_time_limit=120,
+    time_limit=180,
+)
+def backfill_notice_embedding_task(self, notice_id: str) -> dict[str, str]:
+    """
+    공지 제목을 Gemini text-embedding-004로 임베딩해 notices.embedding을 채운다.
+    이미 embedding이 있으면 스킵(멱등). 제목이 비어 있으면 스킵.
+    """
+    try:
+        notice_uuid = uuid_mod.UUID(notice_id)
+    except ValueError:
+        logger.warning("backfill_notice_embedding_task: invalid notice_id=%r", notice_id)
+        return {"status": "invalid_id"}
+    task_id = getattr(self.request, "id", None) or ""
+    _set_task_context(str(task_id) if task_id else None)
+    with get_sync_session() as session:
+        notice = get_by_id_sync(session, notice_uuid)
+        if notice is None:
+            return {"status": "not_found"}
+        if notice.embedding is not None:
+            return {"status": "skipped_already_set"}
+        title = (notice.title or "").strip()
+        if not title:
+            logger.warning("backfill_notice_embedding_task: empty title notice_id=%s", notice_id)
+            return {"status": "skipped_empty_title"}
+        try:
+            vec = embed_text_sync(title)
+        except ValueError as e:
+            logger.warning("backfill_notice_embedding_task: embed validation %s", e)
+            return {"status": "skipped_invalid_text"}
+        update_notice_embedding_sync(session, notice_uuid, vec)
+        session.commit()
+    return {"status": "ok"}
 
 
 def _resolve_spool_backend_ops(backend: str):

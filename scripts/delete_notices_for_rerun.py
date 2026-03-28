@@ -11,11 +11,10 @@ from datetime import datetime
 # 프로젝트 루트 (스크립트 디렉터리의 상위)
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from sqlalchemy import delete, select
-
 from app.core.database_sync import get_sync_session, init_sync_db
 from app.models.college import College
 from app.models.notice import Notice
+from sqlalchemy import delete, select
 
 
 def main():

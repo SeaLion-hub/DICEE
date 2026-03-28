@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+import requests
 import responses
 from app.core.crawl_http import HtmlTooLargeError, fetch_html
 
@@ -59,6 +60,5 @@ def test_fetch_html_non_2xx_raises() -> None:
         body=b"nope",
         status=404,
     )
-    with pytest.raises(Exception):
+    with pytest.raises(requests.HTTPError):
         fetch_html(url, max_bytes=1024)
-

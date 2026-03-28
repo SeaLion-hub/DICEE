@@ -6,12 +6,16 @@ from fastapi import APIRouter, HTTPException, Query
 
 from app.core.deps import ReadOnlySessionDep
 from app.domain.contracts.notice_public_contracts import NoticePublicDetailDTO, NoticePublicListItemDTO
+from app.models.notice import Notice
 from app.schemas.notice_public import NoticeDetailResponse, NoticeListItem, NoticeListResponse
+from app.schemas.notice_semantic import NoticeSemanticSearchRequest, NoticeSemanticSearchResponse
+from app.services.gemini_text_embedding import EmbeddingProviderError
 from app.services.notice_public_service import (
     UnknownCollegeExternalIdError,
     get_public_notice_by_id,
     list_public_notices,
 )
+from app.services.notice_semantic_search_service import search_public_notices_semantic
 
 router = APIRouter(prefix="/notices", tags=["notices"])
 
@@ -24,6 +28,19 @@ def _list_dto_to_schema(d: NoticePublicListItemDTO) -> NoticeListItem:
         title=d.title,
         url=d.url,
         published_at=d.published_at,
+    )
+
+
+def _notice_model_to_list_item(n: Notice) -> NoticeListItem:
+    college = n.college
+    ext = college.external_id if college is not None else ""
+    return NoticeListItem(
+        id=n.id,
+        college_external_id=ext,
+        external_id=n.external_id,
+        title=n.title,
+        url=n.url,
+        published_at=n.published_at,
     )
 
 
@@ -67,6 +84,32 @@ async def list_notices(
         items=[_list_dto_to_schema(x) for x in items],
         next_cursor=next_cursor,
         limit=limit,
+    )
+
+
+@router.post("/search/semantic", response_model=NoticeSemanticSearchResponse)
+async def semantic_search_notices(
+    session: ReadOnlySessionDep,
+    body: NoticeSemanticSearchRequest,
+) -> NoticeSemanticSearchResponse:
+    try:
+        rows = await search_public_notices_semantic(
+            session,
+            college_external_id=body.college_external_id,
+            published_from=body.published_from,
+            published_to=body.published_to,
+            query=body.query,
+            limit=body.limit,
+        )
+    except UnknownCollegeExternalIdError:
+        raise HTTPException(status_code=404, detail="College not found") from None
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except EmbeddingProviderError:
+        raise HTTPException(status_code=503, detail="Embedding service unavailable") from None
+    return NoticeSemanticSearchResponse(
+        items=[_notice_model_to_list_item(n) for n in rows],
+        limit=body.limit,
     )
 
 

@@ -106,9 +106,7 @@ def test_extract_notice_info_passes_empty_image_urls():
     ) as mock_extract:
         result = extract_notice_info("<p>html</p>")
     assert result.result is stub
-    mock_extract.assert_called_once_with(
-        "<p>html</p>", image_urls=None, title=None, college_name=None
-    )
+    mock_extract.assert_called_once_with("<p>html</p>", image_urls=None, title=None, college_name=None)
 
 
 def test_project_extraction_to_notice_fields_includes_envelope_meta() -> None:
@@ -287,9 +285,7 @@ def test_validate_extraction_raw_substrings_pass() -> None:
         raw_eligibility_text="3학년 이상 전공 무관",
         target_departments=[],
     )
-    validate_extraction_raw_substrings(
-        extraction, "본문 내용. 3학년 이상 전공 무관 지원 가능."
-    )
+    validate_extraction_raw_substrings(extraction, "본문 내용. 3학년 이상 전공 무관 지원 가능.")
 
 
 def test_validate_extraction_raw_substrings_fail() -> None:

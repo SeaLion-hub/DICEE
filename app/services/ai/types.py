@@ -27,5 +27,4 @@ class InstructorExtractionClient(Protocol):
         *,
         messages: list[dict[str, object]],
         response_model: type[TModel],
-    ) -> TModel:
-        ...
+    ) -> TModel: ...

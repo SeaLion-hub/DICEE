@@ -9,16 +9,16 @@ user_calendar_events notice_id/title/start_at/end_at, crawl_runs notices_upserte
 crawl_run_tasks remains the idempotency store; crawl_runs stores run data only (no celery_task_id).
 """
 
-from typing import Sequence, Union
+from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
 revision: str = "006_schema_contract_fix"
-down_revision: Union[str, Sequence[str], None] = "005_login_audits"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | Sequence[str] | None = "005_login_audits"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:

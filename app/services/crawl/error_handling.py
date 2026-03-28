@@ -1,4 +1,4 @@
-﻿"""Standardized crawl error classification and monitoring hooks."""
+"""Standardized crawl error classification and monitoring hooks."""
 
 from __future__ import annotations
 
@@ -130,8 +130,7 @@ class CrawlErrorHandler:
             )
 
         if status is not None and (
-            status in HTTP_RETRY_STATUS_CODES
-            or HTTP_RETRY_STATUS_MIN_5XX <= status <= HTTP_RETRY_STATUS_MAX_5XX
+            status in HTTP_RETRY_STATUS_CODES or HTTP_RETRY_STATUS_MIN_5XX <= status <= HTTP_RETRY_STATUS_MAX_5XX
         ):
             self._log(
                 "crawl_error",
@@ -285,4 +284,3 @@ def _status_code(exc: BaseException) -> int | None:
         except (TypeError, ValueError):
             return None
     return None
-

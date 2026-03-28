@@ -15,6 +15,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session, defer, selectinload
 
+from app.constants.embeddings import EMBEDDING_DIM
 from app.core.database import AsyncSessionLike
 from app.domain.contracts.crawl_contracts import NoticeDraft
 from app.models.college import College
@@ -193,6 +194,52 @@ async def list_recent_notices_for_college_preview(
     return list(result.scalars().unique().all())
 
 
+async def search_notices_by_embedding(
+    session: AsyncSessionLike,
+    *,
+    college_id: uuid.UUID,
+    published_from: datetime,
+    published_to: datetime,
+    query_embedding: Sequence[float],
+    limit: int = 20,
+) -> list[Notice]:
+    """
+    단과대·게시 기간으로 좁힌 뒤 query_embedding과의 코사인 거리 오름차순으로 공지를 반환한다.
+    embedding이 NULL인 행은 제외한다. deleted_at IS NULL만 포함.
+    """
+    if len(query_embedding) != EMBEDDING_DIM:
+        raise ValueError(f"embedding dim must be {EMBEDDING_DIM}")
+    q = list(query_embedding)
+    distance = Notice.embedding.cosine_distance(q)
+    stmt = (
+        select(Notice)
+        .where(
+            Notice.college_id == college_id,
+            Notice.published_at >= published_from,
+            Notice.published_at < published_to,
+            Notice.embedding.is_not(None),
+            Notice.deleted_at.is_(None),
+        )
+        .options(
+            *NOTICE_LIST_DEFER_OPTIONS,
+            selectinload(Notice.college),
+        )
+        .order_by(distance.asc())
+        .limit(limit)
+    )
+    result = await session.execute(stmt)
+    return list(result.scalars().unique().all())
+
+
+def update_notice_embedding_sync(session: Session, notice_id: uuid.UUID, embedding: Sequence[float]) -> None:
+    """공지 embedding 컬럼 갱신 (동기, Celery·백필용)."""
+    if len(embedding) != EMBEDDING_DIM:
+        raise ValueError(f"embedding dim must be {EMBEDDING_DIM}")
+    stmt = update(Notice).where(Notice.id == notice_id).values(embedding=list(embedding))
+    session.execute(stmt)
+    session.flush()
+
+
 def get_by_id_sync(session: Session, notice_id: uuid.UUID) -> Notice | None:
     """notice_id로 1건 조회 (동기, 워커용)."""
     result = session.execute(select(Notice).where(Notice.id == notice_id).limit(1))
@@ -259,9 +306,7 @@ def _replace_notice_taxonomy_rows_sync(
     taxonomy_rows: list[dict[str, str]],
 ) -> None:
     """notice_id의 taxonomy 매핑을 전달된 행 목록으로 완전 교체한다."""
-    session.execute(
-        delete(NoticeTaxonomyMapping).where(NoticeTaxonomyMapping.notice_id == notice_id)
-    )
+    session.execute(delete(NoticeTaxonomyMapping).where(NoticeTaxonomyMapping.notice_id == notice_id))
     if not taxonomy_rows:
         return
 

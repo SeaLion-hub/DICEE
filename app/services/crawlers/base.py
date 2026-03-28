@@ -1,4 +1,4 @@
-﻿"""Crawler contracts and scaffolding for function-based and class-based plugins."""
+"""Crawler contracts and scaffolding for function-based and class-based plugins."""
 
 from __future__ import annotations
 
@@ -33,11 +33,9 @@ class ScrapeResult:
 class CrawlerStrategy(Protocol):
     """Sync crawler contract used by the crawl pipeline registry."""
 
-    def get_links(self, list_url: str) -> list[LinkItem]:
-        ...
+    def get_links(self, list_url: str) -> list[LinkItem]: ...
 
-    def scrape_detail(self, url: str) -> ScrapeResult:
-        ...
+    def scrape_detail(self, url: str) -> ScrapeResult: ...
 
 
 class BaseCrawler(ABC):
@@ -86,12 +84,10 @@ class BaseCrawler(ABC):
         return self.parse_detail(html, url)
 
     @abstractmethod
-    def parse_links(self, html: str, list_url: str) -> list[LinkItem]:
-        ...
+    def parse_links(self, html: str, list_url: str) -> list[LinkItem]: ...
 
     @abstractmethod
-    def parse_detail(self, html: str, url: str) -> ScrapeResult:
-        ...
+    def parse_detail(self, html: str, url: str) -> ScrapeResult: ...
 
     def to_crawler_spec(
         self,
@@ -135,4 +131,3 @@ class FunctionCrawlerAdapter:
 
     def scrape_detail(self, url: str) -> ScrapeResult:
         return self._scrape_detail_fn(url)
-

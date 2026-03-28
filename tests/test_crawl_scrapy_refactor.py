@@ -293,4 +293,3 @@ def test_base_crawler_scaffold_exports_legacy_callables(monkeypatch):
     assert spec.college_code == "demo"
     assert spec.get_links == "get_notice_links"
     assert spec.scrape_detail == "scrape_detail"
-

@@ -6,9 +6,11 @@ FastAPI 웹은 psycopg(비동기), 워커는 이 모듈만 사용해 "Too many c
 import logging
 from collections.abc import Generator
 from contextlib import contextmanager
+from typing import Any
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
+from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import settings
@@ -93,6 +95,13 @@ def init_sync_db() -> None:
         pool_pre_ping=True,
         **pool_kw,
     )
+    if isinstance(sync_engine, Engine):
+        from pgvector.psycopg import register_vector
+
+        @event.listens_for(sync_engine, "connect")
+        def _pgvector_register_sync(dbapi_connection: Any, connection_record: Any) -> None:
+            register_vector(dbapi_connection)
+
     sync_session_factory = sessionmaker(
         bind=sync_engine,
         autocommit=False,

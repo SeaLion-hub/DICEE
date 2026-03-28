@@ -14,6 +14,7 @@ class BaseSchema(BaseModel):
         str_strip_whitespace=True,
     )
 
+
 IdType = Annotated[str, Field(..., min_length=1, max_length=64, description="Identifier")]
 SlugType = Annotated[
     str,

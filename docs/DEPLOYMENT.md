@@ -14,6 +14,17 @@
 
 ---
 
+## PostgreSQL / pgvector
+
+공지 시맨틱 검색(`notices.embedding`, HNSW)은 **pgvector 확장**이 필요합니다.
+
+- **로컬·CI:** Docker 이미지 `pgvector/pgvector:pg15` 사용 ([`compose.yml`](../compose.yml)의 `db` 서비스, GitHub Actions `services.postgres`와 동일).
+- **Railway:** 사용 중인 **PostgreSQL 플랜/템플릿이 `CREATE EXTENSION vector`를 허용하는지** 대시보드·문서로 확인하세요. 확장을 켤 수 없는 템플릿이면 pgvector 지원 인스턴스로 교체하거나, 확장 설치가 가능한 관리형 Postgres로 옮겨야 합니다.
+- **마이그레이션:** Alembic `012_notice_embedding`이 `CREATE EXTENSION IF NOT EXISTS vector` 및 `embedding vector(768)` 컬럼·HNSW 인덱스를 적용합니다. 인덱스 생성은 `SET LOCAL statement_timeout = 0`으로 긴 작업을 허용합니다. **대용량 `notices` 테이블**이면 유지보수 창에서 실행하는 것을 권장합니다.
+- **실행 주체:** API 프로세스는 마이그레이션을 돌리지 않습니다. Railway **Release Command** `alembic upgrade head` 또는 Compose의 **`migrate` 서비스**만 마이그레이션을 실행합니다 ([Quick Start](#quick-start-5분) 원칙과 동일).
+
+---
+
 ## Quick Start (5분)
 
 1. Railway에서 **New Project → Deploy from GitHub repo**로 서비스 생성
@@ -117,6 +128,8 @@ celery -A app.core.celery_app:app worker -l info -O fair -Q critical,crawl,ai --
 ```bash
 celery -A app.core.celery_app:app worker -l info -O fair -Q critical,crawl,ai --pool=solo
 ```
+
+- **임베딩 백필:** `app.services.tasks.backfill_notice_embedding_task` — `ai` 큐, `GEMINI_API_KEY` 또는 `gemini_api_key` 설정 필요. `backfill_notice_embedding_task.delay("<notice_uuid>")`로 호출. 공지 **제목**만 `text-embedding-004`로 임베딩하며, `embedding`이 이미 있으면 스킵(멱등).
 
 ### 3) Cron 트리거
 

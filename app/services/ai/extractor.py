@@ -308,9 +308,7 @@ def extract_notice_structured_with_usage(
     has_body_text = bool((html_content or "").strip())
     normalized_urls = _normalize_image_urls(image_urls)
     if not has_body_text and not normalized_urls:
-        raise ValueError(
-            "At least one of html_content or image_urls is required for sub-category extraction."
-        )
+        raise ValueError("At least one of html_content or image_urls is required for sub-category extraction.")
 
     client = _get_instructor_client()
     preselected_main_categories = _extract_preselected_main_categories(

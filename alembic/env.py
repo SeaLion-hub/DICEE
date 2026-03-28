@@ -18,6 +18,7 @@ from logging.config import fileConfig
 from urllib.parse import unquote, urlparse
 
 import psycopg
+from pgvector.psycopg import register_vector
 
 from alembic import context
 from sqlalchemy import create_engine, pool, text
@@ -124,10 +125,16 @@ def run_migrations_online() -> None:
     last_error = None
     for attempt in range(max_attempts):
         try:
+
+            def _connect_migrate() -> psycopg.Connection:
+                conn = psycopg.connect(**conn_args)
+                register_vector(conn)
+                return conn
+
             connectable = create_engine(
                 "postgresql+psycopg://",
                 poolclass=pool.NullPool,
-                creator=lambda: psycopg.connect(**conn_args),
+                creator=_connect_migrate,
             )
             with connectable.connect() as connection:
                 # Serialize migration: only one process may run alembic upgrade at a time.

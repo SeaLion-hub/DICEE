@@ -7,9 +7,9 @@ from typing import TYPE_CHECKING, Annotated, cast
 import httpx
 
 if TYPE_CHECKING:
-    from app.services.notice_preview_service import NoticePreviewService
     from app.services.crawl_stats_service import CrawlStatsService
     from app.services.internal_crawl_service import InternalCrawlService
+    from app.services.notice_preview_service import NoticePreviewService
 from fastapi import Depends, Request
 from pyjwt_key_fetcher import AsyncKeyFetcher
 from redis.asyncio import Redis as RedisAsyncio

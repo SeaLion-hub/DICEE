@@ -76,11 +76,7 @@ def stream_notice_extraction(
         user_content = [
             text,
             "아래 이미지는 공지 본문(포스터·첨부 등)입니다. HTML과 함께 참고하여 지원자격·일정·날짜를 추출하세요.",
-        ] + [
-            Image.from_url(u)
-            for u in urls
-            if u and (u.startswith("http://") or u.startswith("https://"))
-        ]
+        ] + [Image.from_url(u) for u in urls if u and (u.startswith("http://") or u.startswith("https://"))]
 
     final_model: NoticeExtractionDraft | None = None
 
@@ -117,4 +113,3 @@ def stream_notice_extraction(
         target_grades=[],
         hashtags=[],
     )
-

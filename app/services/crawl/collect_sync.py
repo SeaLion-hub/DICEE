@@ -269,9 +269,7 @@ def _collect_payloads_sync(
     ?숆린: Bounded in-flight(K)濡?留곹겕 泥섎━. Semaphore + as_completed濡??쒖뼱 ?⑥닚??
     O(K) 硫붾え由? ?뚯꽌/援ъ“ ?덉쇅???꾧퀎移?珥덇낵 ??CrawlThresholdExceeded raise.
     """
-    seen_for_dedup: set[str] | _BoundedSeenSet | _RedisSeenSet = (
-        seen if seen is not None else set()
-    )
+    seen_for_dedup: set[str] | _BoundedSeenSet | _RedisSeenSet = seen if seen is not None else set()
     item_pipeline = DefaultNoticeItemPipeline(seen_for_dedup)
     rate_limiter = get_host_rate_limiter_sync(delay_sec)
     tracker = CrawlErrorTracker()
@@ -343,6 +341,3 @@ def _collect_payloads_sync(
                 close_fn()
             except Exception:
                 pass
-
-
-

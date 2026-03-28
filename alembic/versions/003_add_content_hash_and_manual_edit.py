@@ -7,16 +7,16 @@ Create Date: 2026-02-17
 content_hash: 제목+본문 해시. 3·4단계 변경 감지용.
 is_manual_edited: 관리자 수동 수정 여부. AI 재덮어쓰기 방지.
 """
-from typing import Sequence, Union
+from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = "003"
-down_revision: Union[str, Sequence[str], None] = "002"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | Sequence[str] | None = "002"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:

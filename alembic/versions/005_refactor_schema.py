@@ -5,17 +5,17 @@ Revises: 534657f22f86
 Create Date: 2026-02-18
 
 """
-from typing import Sequence, Union
+from collections.abc import Sequence
 
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
 revision: str = '005'
-down_revision: Union[str, Sequence[str], None] = '534657f22f86' # published_at 추가했던 버전
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | Sequence[str] | None = '534657f22f86' # published_at 추가했던 버전
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
@@ -41,7 +41,7 @@ def downgrade() -> None:
     op.add_column('notices', sa.Column('event_end', postgresql.TIMESTAMP(timezone=True), autoincrement=False, nullable=True))
     op.add_column('notices', sa.Column('event_start', postgresql.TIMESTAMP(timezone=True), autoincrement=False, nullable=True))
     op.add_column('notices', sa.Column('deadline', postgresql.TIMESTAMP(timezone=True), autoincrement=False, nullable=True))
-    
+
     op.drop_column('notices', 'eligibility')
     op.drop_column('notices', 'dates')
     op.drop_column('notices', 'attachments')

@@ -289,7 +289,7 @@ async def refresh_tokens(
     try:
         token_version = int(raw_version)
     except (TypeError, ValueError):
-        raise AuthError("Refresh token revoked or invalid")
+        raise AuthError("Refresh token revoked or invalid") from None
     if token_version < 0:
         raise AuthError("Refresh token revoked or invalid")
     new_version = await rotate_refresh_token_version(session, user_id, token_version)

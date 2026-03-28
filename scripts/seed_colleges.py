@@ -26,18 +26,18 @@ else:
 
 # 스크립트 단독 실행 시 Settings에 필요한 최소 env (필드가 없으면 기본값)
 import os as _os
+
 if "APP_ENTRY" not in _os.environ:
     _os.environ.setdefault("APP_ENTRY", "api")
 
 from dataclasses import dataclass
 
-from sqlalchemy import select
-from sqlalchemy.engine import make_url
-
 from app.core import database
 from app.core.config import settings
 from app.core.crawler_config import get_seed_colleges_from_crawlers
 from app.models.college import College
+from sqlalchemy import select
+from sqlalchemy.engine import make_url
 
 logger = logging.getLogger("seed_colleges")
 

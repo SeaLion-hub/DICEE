@@ -72,14 +72,10 @@ def test_structlog_bind_fail_open_logs_warning_then_debug(caplog) -> None:
             set_request_context(request_id="req-1")
             set_request_context(request_id="req-2")
     warning_logs = [
-        r
-        for r in caplog.records
-        if r.levelname == "WARNING" and "structlog context bind failed" in r.getMessage()
+        r for r in caplog.records if r.levelname == "WARNING" and "structlog context bind failed" in r.getMessage()
     ]
     debug_logs = [
-        r
-        for r in caplog.records
-        if r.levelname == "DEBUG" and "structlog context bind failed again" in r.getMessage()
+        r for r in caplog.records if r.levelname == "DEBUG" and "structlog context bind failed again" in r.getMessage()
     ]
     assert len(warning_logs) >= 1
     assert len(debug_logs) >= 1
@@ -95,4 +91,3 @@ def test_structlog_clear_fail_open_logs_warning(caplog) -> None:
         if r.levelname == "WARNING" and "structlog context clear failed once" in r.getMessage()
     ]
     assert len(warning_logs) >= 1
-

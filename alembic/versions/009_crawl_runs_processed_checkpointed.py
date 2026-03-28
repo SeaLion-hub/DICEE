@@ -6,15 +6,15 @@ Create Date: 2026-03-01
 
 진행률 가시성 및 향후 Resume 설계 기반. 체크포인트는 청크 upsert와 동일 트랜잭션에 갱신.
 """
-from typing import Sequence, Union
+from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op
 
 revision: str = "009_crawl_runs"
-down_revision: Union[str, Sequence[str], None] = "008_notices_list"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | Sequence[str] | None = "008_notices_list"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:

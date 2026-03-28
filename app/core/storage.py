@@ -242,12 +242,12 @@ def _upload_local_image(body_bytes: bytes, key: str) -> str | None:
 
     try:
         path.relative_to(base)
-    except ValueError:
+    except ValueError as e:
         logger.error("Local image path escaped base: base=%s key=%s path=%s", base, key, path)
         increment(CONTENT_UPLOAD_FAILURE_TOTAL)
         policy = (settings.content_upload_failure_policy or "").strip().lower()
         if policy == "fail":
-            raise ValueError("Invalid image key; escaped storage base directory")
+            raise ValueError("Invalid image key; escaped storage base directory") from e
         return None
 
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -299,12 +299,12 @@ def _upload_local(html_content: str, key: str) -> str | None:
 
     try:
         path.relative_to(base)
-    except ValueError:
+    except ValueError as e:
         logger.error("Local content path escaped base: base=%s key=%s path=%s", base, key, path)
         increment(CONTENT_UPLOAD_FAILURE_TOTAL)
         policy = (settings.content_upload_failure_policy or "").strip().lower()
         if policy == "fail":
-            raise ValueError("Invalid content key; escaped storage base directory")
+            raise ValueError("Invalid content key; escaped storage base directory") from e
         return None
 
     path.parent.mkdir(parents=True, exist_ok=True)
