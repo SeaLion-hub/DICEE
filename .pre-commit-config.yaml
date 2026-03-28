@@ -1,8 +1,20 @@
 # See https://pre-commit.com for usage.
+# 첫 훅 실패 시 나머지 생략 → 로그가 짧아져 원인 파악이 쉬움.
+fail_fast: true
+
 default_language_version:
   python: python3.11
 
 repos:
+  - repo: local
+    hooks:
+      - id: check-mixed-stage-python
+        name: check mixed stage (app/tests *.py)
+        entry: python scripts/pre_commit_check_mixed_stage.py
+        language: system
+        pass_filenames: false
+        always_run: true
+
   - repo: https://github.com/psf/black
     rev: 24.10.0
     hooks:

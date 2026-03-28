@@ -6,8 +6,8 @@ import pytest
 
 pytest.importorskip("google.api_core.exceptions")
 
-from app.services.gemini_text_embedding import EmbeddingProviderError, embed_text_sync  # noqa: E402
-from google.api_core import exceptions as gae  # noqa: E402
+from app.services.gemini_text_embedding import EmbeddingProviderError, embed_text_sync
+from google.api_core import exceptions as gae
 
 
 def test_embed_text_sync_wraps_google_api_error(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -37,10 +37,12 @@ select = ["B", "E", "F", "I", "N", "W", "UP"]
 ignore = ["F821", "UP037"]  # SQLAlchemy forward ref, quoted annotations
 
 # Migrations: long single-line DDL is normal. Scripts: sys.path/env bootstrap before app imports.
+# Tests: pytest.importorskip / optional deps before app imports (same class as scripts).
 # B008: FastAPI Depends()/Header() in defaults is intentional DI.
 [tool.ruff.lint.per-file-ignores]
 "alembic/**/*.py" = ["E501"]
 "scripts/**/*.py" = ["E402", "E501"]
+"tests/**/*.py" = ["E402"]
 "app/api/**/*.py" = ["B008"]
 "app/core/deps.py" = ["B008"]
 
