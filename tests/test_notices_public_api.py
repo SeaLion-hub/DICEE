@@ -3,15 +3,17 @@
 import uuid
 from unittest.mock import AsyncMock, patch
 
+import httpx
+import pytest
 from app.domain.contracts.notice_public_contracts import NoticePublicDetailDTO, NoticePublicListItemDTO
 from app.services.notice_public_service import UnknownCollegeExternalIdError
-from fastapi.testclient import TestClient
 
 
-def test_list_notices_returns_200_empty(client: TestClient) -> None:
+@pytest.mark.asyncio
+async def test_list_notices_returns_200_empty(async_client: httpx.AsyncClient) -> None:
     with patch("app.api.v1.notices.list_public_notices", new_callable=AsyncMock) as m:
         m.return_value = ([], None)
-        resp = client.get("/v1/notices")
+        resp = await async_client.get("/v1/notices")
         assert resp.status_code == 200
         data = resp.json()
         assert data["items"] == []
@@ -19,15 +21,17 @@ def test_list_notices_returns_200_empty(client: TestClient) -> None:
         assert data["limit"] == 20
 
 
-def test_list_notices_unknown_college_returns_404(client: TestClient) -> None:
+@pytest.mark.asyncio
+async def test_list_notices_unknown_college_returns_404(async_client: httpx.AsyncClient) -> None:
     with patch("app.api.v1.notices.list_public_notices", new_callable=AsyncMock) as m:
         m.side_effect = UnknownCollegeExternalIdError("no-such-college")
-        resp = client.get("/v1/notices", params={"college_external_id": "no-such-college"})
+        resp = await async_client.get("/v1/notices", params={"college_external_id": "no-such-college"})
         assert resp.status_code == 404
         assert "College" in resp.json().get("detail", "")
 
 
-def test_list_notices_respects_limit_query(client: TestClient) -> None:
+@pytest.mark.asyncio
+async def test_list_notices_respects_limit_query(async_client: httpx.AsyncClient) -> None:
     nid = uuid.uuid4()
     item = NoticePublicListItemDTO(
         id=nid,
@@ -39,7 +43,7 @@ def test_list_notices_respects_limit_query(client: TestClient) -> None:
     )
     with patch("app.api.v1.notices.list_public_notices", new_callable=AsyncMock) as m:
         m.return_value = ([item], "next-page-cursor")
-        resp = client.get("/v1/notices", params={"limit": 5})
+        resp = await async_client.get("/v1/notices", params={"limit": 5})
         assert resp.status_code == 200
         body = resp.json()
         assert body["limit"] == 5
@@ -47,15 +51,17 @@ def test_list_notices_respects_limit_query(client: TestClient) -> None:
         assert body["next_cursor"] == "next-page-cursor"
 
 
-def test_get_notice_not_found_returns_404(client: TestClient) -> None:
+@pytest.mark.asyncio
+async def test_get_notice_not_found_returns_404(async_client: httpx.AsyncClient) -> None:
     nid = uuid.uuid4()
     with patch("app.api.v1.notices.get_public_notice_by_id", new_callable=AsyncMock) as m:
         m.return_value = None
-        resp = client.get(f"/v1/notices/{nid}")
+        resp = await async_client.get(f"/v1/notices/{nid}")
         assert resp.status_code == 404
 
 
-def test_get_notice_found_returns_200(client: TestClient) -> None:
+@pytest.mark.asyncio
+async def test_get_notice_found_returns_200(async_client: httpx.AsyncClient) -> None:
     nid = uuid.uuid4()
     from datetime import UTC, datetime
 
@@ -73,15 +79,16 @@ def test_get_notice_found_returns_200(client: TestClient) -> None:
     )
     with patch("app.api.v1.notices.get_public_notice_by_id", new_callable=AsyncMock) as m:
         m.return_value = detail
-        resp = client.get(f"/v1/notices/{nid}")
+        resp = await async_client.get(f"/v1/notices/{nid}")
         assert resp.status_code == 200
         data = resp.json()
         assert data["title"] == "Hello"
         assert data["content_url"] == "https://bucket/x"
 
 
-def test_list_notices_invalid_limit_422(client: TestClient) -> None:
+@pytest.mark.asyncio
+async def test_list_notices_invalid_limit_422(async_client: httpx.AsyncClient) -> None:
     with patch("app.api.v1.notices.list_public_notices", new_callable=AsyncMock) as m:
         m.return_value = ([], None)
-        resp = client.get("/v1/notices", params={"limit": 0})
+        resp = await async_client.get("/v1/notices", params={"limit": 0})
         assert resp.status_code == 422

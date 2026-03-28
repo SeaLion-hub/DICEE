@@ -57,6 +57,7 @@
 - [운영 런북] `docs/runbooks/worker-ai-checklist.md` 추가. 워커/AI 실행을 사전점검→실행→재처리→오류(404/429/스키마) 대응→검수→원복 순서 체크리스트로 표준화.
 - [운영 런북 보강] `docs/runbooks/worker-ai-checklist.md`에 "Alembic 상태 불일치(upgrade 로그와 current 불일치)" 점검 및 로컬/디버그 한정 응급 복구 절차(`checkfirst=True` 테이블 보장, 워커 재시작, 원인 추적) 추가.
 - [운영 런북 정합] `docs/runbooks/worker-ai-checklist.md`에 신규 크롤→AI 자동 큐잉 조건(`AI_PIPELINE_ENABLED=true`) 및 응급 `create()`가 마이그레이션 전체(백필·인덱스·컬럼 변경)를 대체하지 않음을 명시.
+- [FastAPI eng] `tests/conftest.py`: `api_app` 단일 인스턴스·`async_client`(httpx `ASGITransport`) 추가, lifespan 직후 `async_session_maker` 더미로 TestClient와 동일 DB-less 계약; `test_health.py`·`test_notices_public_api.py`를 `async_client` 비동기 테스트로 전환. `app/models/base.py`: Postgres용 `MetaData.naming_convention` 부여(신규 객체 이름 일관, 기존 테이블 rename 없음). 이후 `alembic revision --autogenerate` 시 의도치 않은 rename·drop-create diff만 수동 검토 권장. 검증: `pytest` 337 passed, 3 skipped.
 
 ---
 ## 2026-03-27

@@ -3,16 +3,18 @@
 import pytest
 
 
-def test_live_returns_200_always(client):
+@pytest.mark.asyncio
+async def test_live_returns_200_always(async_client):
     """GET /live → 200. DB/Redis 미체크."""
-    response = client.get("/live")
+    response = await async_client.get("/live")
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
 
 
-def test_ready_returns_200_or_503(client):
+@pytest.mark.asyncio
+async def test_ready_returns_200_or_503(async_client):
     """GET /ready → DB·Redis(blocklist·trigger_lock) 준비 시 200, 아니면 503."""
-    response = client.get("/ready")
+    response = await async_client.get("/ready")
     data = response.json()
     assert "status" in data
     assert "db" in data
@@ -25,7 +27,8 @@ def test_ready_returns_200_or_503(client):
         assert data["status"] == "not_ready"
 
 
-def test_ready_includes_last_crawl_success_when_snapshot_available(client, monkeypatch):
+@pytest.mark.asyncio
+async def test_ready_includes_last_crawl_success_when_snapshot_available(async_client, monkeypatch):
     """Redis 스냅샷이 있으면 last_crawl_success 필드를 노출(ready 판정과 독립)."""
     from app.api import health as health_module
 
@@ -46,14 +49,15 @@ def test_ready_includes_last_crawl_success_when_snapshot_available(client, monke
     monkeypatch.setattr(health_module, "_check_redis_trigger_lock", _mock_trigger_lock_ok)
     monkeypatch.setattr(health_module, "_last_crawl_success_snapshot", _mock_last)
 
-    response = client.get("/ready")
+    response = await async_client.get("/ready")
     assert response.status_code == 200
     data = response.json()
     assert data["last_crawl_success"] == {"engineering": "2026-03-27T12:00:00+00:00"}
 
 
 @pytest.mark.parametrize("redis_blocklist_fail_closed", [False, True])
-def test_ready_blocklist_error_returns_503(client, monkeypatch, redis_blocklist_fail_closed):
+@pytest.mark.asyncio
+async def test_ready_blocklist_error_returns_503(async_client, monkeypatch, redis_blocklist_fail_closed):
     """Readiness는 의존성 상태 그대로 노출. blocklist Redis 장애 시 fail_closed와 무관하게 항상 503."""
     from app.api import health as health_module
     from app.core.config import settings
@@ -73,22 +77,24 @@ def test_ready_blocklist_error_returns_503(client, monkeypatch, redis_blocklist_
     monkeypatch.setattr(health_module, "_check_redis_blocklist", _mock_blocklist_error)
     monkeypatch.setattr(health_module, "_check_redis_trigger_lock", _mock_trigger_lock_ok)
 
-    response = client.get("/ready")
+    response = await async_client.get("/ready")
     data = response.json()
     assert data["redis_blocklist"] == "error"
     assert response.status_code == 503
     assert data["status"] == "not_ready"
 
 
-def test_health_returns_200(client):
+@pytest.mark.asyncio
+async def test_health_returns_200(async_client):
     """GET /health → 200 + status ok (플랫폼 헬스체크용, DB/Redis 미체크)."""
-    response = client.get("/health")
+    response = await async_client.get("/health")
     assert response.status_code == 200
     data = response.json()
     assert data == {"status": "ok"}
 
 
-def test_worker_health_returns_200_when_worker_alive(client, monkeypatch):
+@pytest.mark.asyncio
+async def test_worker_health_returns_200_when_worker_alive(async_client, monkeypatch):
     from app.api import health as health_module
 
     async def _mock_ok():
@@ -96,7 +102,7 @@ def test_worker_health_returns_200_when_worker_alive(client, monkeypatch):
 
     monkeypatch.setattr(health_module, "_check_celery_workers", _mock_ok)
 
-    response = client.get("/health/worker")
+    response = await async_client.get("/health/worker")
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "ok"
@@ -105,7 +111,8 @@ def test_worker_health_returns_200_when_worker_alive(client, monkeypatch):
     assert data["workers"] == ["celery@dicee-worker-1"]
 
 
-def test_worker_health_returns_503_when_worker_unavailable(client, monkeypatch):
+@pytest.mark.asyncio
+async def test_worker_health_returns_503_when_worker_unavailable(async_client, monkeypatch):
     from app.api import health as health_module
 
     async def _mock_unavailable():
@@ -113,7 +120,7 @@ def test_worker_health_returns_503_when_worker_unavailable(client, monkeypatch):
 
     monkeypatch.setattr(health_module, "_check_celery_workers", _mock_unavailable)
 
-    response = client.get("/health/worker")
+    response = await async_client.get("/health/worker")
     assert response.status_code == 503
     data = response.json()
     assert data["status"] == "not_ready"

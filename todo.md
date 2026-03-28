@@ -29,6 +29,8 @@ Composer(Cmd+I) 사용 시 **@todo.md**를 반드시 포함해 세션 컨텍스�
 
 (최신) md 문서 uptodate 확인·최신화: README(Celery 진입점·헬스 엔드포인트·현재 M2 문구), CAUTIONS(DATABASE_URL psycopg), error-handling(청크 commit·expunge_all), WORK_LOG·PLAN_REMEDIATION_68 반영.
 
+- **백로그 (FastAPI eng)**: 동일 리소스 타입으로 「없으면 404」 흐름이 **3곳 이상** 반복되면, 해당 엔드포인트 그룹(예: 공개 공지)에만 `app/core/deps.py` 스타일 `valid_*` 파일럿 검토 후 효과 보면 확장.
+
 ---
 
 ## [Context] — 맥락 노트
