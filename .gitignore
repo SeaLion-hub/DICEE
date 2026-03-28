@@ -27,9 +27,9 @@ wheels/
 .installed.cfg
 *.egg
 
-# Virtual
+# Virtual (.venv-* = CI/metric/mypy-test 등 로컬 전용 venv)
 .venv/
-.venv-ci-audit/
+.venv-*/
 venv/
 ENV/
 env/
@@ -46,6 +46,10 @@ env/
 .coverage
 htmlcov/
 
+# Type check / lint caches
+.mypy_cache/
+.ruff_cache/
+
 # gstack (vendored under .agents/skills/gstack; run setup after clone)
 .agents/skills/gstack/node_modules/
 .agents/skills/gstack/browse/dist/
@@ -57,9 +61,12 @@ htmlcov/
 # Symlinks/copies created by ./setup --host codex at repo root (skills live under gstack/.agents/skills/)
 .agents/skills/gstack-*/
 
+# Static analysis / local metric reports (radon, xenon)
+radon_*.txt
+xenon_*.txt
+
 # Misc
 .DS_Store
-.env
 tmp/
 dispatch_repo
 .cursor/debug.log

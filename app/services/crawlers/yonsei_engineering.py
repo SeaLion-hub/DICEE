@@ -79,6 +79,129 @@ def finalize_text(text):
     return text.strip()
 
 
+def parse_yonsei_engineering_precise_from_html(html: str, detail_url: str) -> ScrapeResult:
+    """상세 HTML만 파싱해 ScrapeResult 생성. I/O 없음(단위 테스트·재사용용)."""
+    soup = BeautifulSoup(html, "html.parser")
+
+    title = "제목 없음"
+    title_label = soup.find(string=lambda t: bool(t and "제목" in t))
+    if title_label:
+        title_container = title_label.find_parent(["dt", "th", "td"])
+        if title_container:
+            title_elem = title_container.find_next_sibling(["dd", "td"])
+            if title_elem:
+                title = get_text_structurally(title_elem).strip()
+    if title == "제목 없음":
+        h3 = soup.find("h3")
+        if h3:
+            title = get_text_structurally(h3).strip()
+
+    date = "날짜 없음"
+    date_match = re.search(r"\d{4}[.-]\d{2}[.-]\d{2}", soup.get_text())
+    if date_match:
+        date = date_match.group()
+
+    content_text = ""
+    main_container = None
+    anchor_text = soup.find(string=lambda t: bool(t and "게시글 내용" in t))
+    if anchor_text:
+        start_tag = anchor_text.find_parent(["dt", "th", "td"])
+        if start_tag and isinstance(start_tag, Tag):
+            target_body = start_tag.find_next_sibling(["dd", "td"])
+            if target_body and isinstance(target_body, Tag):
+                main_container = target_body
+                garbage_selectors = [".btn_area", ".btn-wrap", "#bo_v_share", "ul.btn_bo_user", "div.btn_confirm"]
+                for selector in garbage_selectors:
+                    for tag in main_container.select(selector):
+                        tag.decompose()
+                raw_text = get_text_structurally(main_container)
+                stop_keywords = ["관리자 if문", "답변글 버튼", "목록 List 버튼", "등록 버튼"]
+                for keyword in stop_keywords:
+                    if keyword in raw_text:
+                        raw_text = raw_text.split(keyword)[0]
+                content_text = finalize_text(raw_text)
+
+    if not content_text:
+        content_text = "(본문 영역인 <dd> 태그를 찾지 못했습니다.)"
+
+    images_data: list[dict] = []
+    seen_image_urls: set[str] = set()
+    if main_container and isinstance(main_container, Tag):
+        img_tags = main_container.find_all("img")
+        for idx, img in enumerate(img_tags):
+            if not isinstance(img, Tag):
+                continue
+            src = ensure_str_attr(img.get("src", ""))
+            if not src:
+                continue
+            if src.startswith("data:image"):
+                try:
+                    header, encoded = src.split(",", 1)
+                    ext = "png"
+                    if "jpeg" in header or "jpg" in header:
+                        ext = "jpg"
+                    images_data.append(
+                        {
+                            "type": "base64",
+                            "data": encoded,
+                            "ext": ext,
+                            "name": f"image_{idx+1}.{ext}",
+                        }
+                    )
+                except (ValueError, IndexError):
+                    logger.warning(
+                        "parse_yonsei_engineering_precise_from_html inline image parse failed url=%s index=%s",
+                        detail_url,
+                        idx,
+                        exc_info=True,
+                    )
+                    continue
+            else:
+                if any(x in src for x in ["icon", "btn", "button", "search", "blank"]):
+                    continue
+                if src.startswith("/"):
+                    full_url = "https://engineering.yonsei.ac.kr" + src
+                elif src.startswith("http"):
+                    full_url = src
+                else:
+                    continue
+                if full_url in seen_image_urls:
+                    continue
+                seen_image_urls.add(full_url)
+                fn_raw = img.get("data-file_name")
+                file_name = fn_raw if isinstance(fn_raw, str) and fn_raw else os.path.basename(src.split("?")[0])
+                if not file_name or "." not in file_name:
+                    file_name = f"image_{idx+1}.jpg"
+                images_data.append(
+                    {
+                        "type": "url",
+                        "data": full_url,
+                        "ext": file_name.split(".")[-1],
+                        "name": file_name,
+                    }
+                )
+
+    attachment_names_set: set[str] = set()
+    attach_labels = soup.find_all(string=re.compile("첨부"))
+    for label in attach_labels:
+        parent_row = label.find_parent(["tr", "li", "div", "dl", "dt", "dd"])
+        if isinstance(parent_row, Tag) and parent_row.name == "dt":
+            next_dd = parent_row.find_next_sibling("dd")
+            parent_row = next_dd if isinstance(next_dd, Tag) else parent_row
+        if isinstance(parent_row, Tag):
+            links = parent_row.find_all("a")
+            for link in links:
+                if not isinstance(link, Tag):
+                    continue
+                file_name = link.get_text(strip=True)
+                href = ensure_str_attr(link.get("href", ""))
+                if href and not href.startswith("#") and "javascript" not in href:
+                    if file_name and file_name not in attachment_names_set:
+                        attachment_names_set.add(file_name)
+
+    return ScrapeResult(title, date, content_text, images_data, list(attachment_names_set))
+
+
 def scrape_yonsei_engineering_precise(url):
     try:
         try:
@@ -88,131 +211,7 @@ def scrape_yonsei_engineering_precise(url):
             raise
         except RequestException:
             raise
-        soup = BeautifulSoup(text, "html.parser")
-
-        # 제목
-        title = "제목 없음"
-        title_label = soup.find(string=lambda t: bool(t and "제목" in t))
-        if title_label:
-            title_container = title_label.find_parent(["dt", "th", "td"])
-            if title_container:
-                title_elem = title_container.find_next_sibling(["dd", "td"])
-                if title_elem:
-                    title = get_text_structurally(title_elem).strip()
-        if title == "제목 없음":
-            h3 = soup.find("h3")
-            if h3:
-                title = get_text_structurally(h3).strip()
-
-        # 게시일
-        date = "날짜 없음"
-        date_match = re.search(r"\d{4}[.-]\d{2}[.-]\d{2}", soup.get_text())
-        if date_match:
-            date = date_match.group()
-
-        # 본문 (정밀 타격)
-        content_text = ""
-        main_container = None
-        anchor_text = soup.find(string=lambda t: bool(t and "게시글 내용" in t))
-        if anchor_text:
-            start_tag = anchor_text.find_parent(["dt", "th", "td"])
-            if start_tag and isinstance(start_tag, Tag):
-                target_body = start_tag.find_next_sibling(["dd", "td"])
-                if target_body and isinstance(target_body, Tag):
-                    main_container = target_body
-                    garbage_selectors = [".btn_area", ".btn-wrap", "#bo_v_share", "ul.btn_bo_user", "div.btn_confirm"]
-                    for selector in garbage_selectors:
-                        for tag in main_container.select(selector):
-                            tag.decompose()
-                    raw_text = get_text_structurally(main_container)
-                    stop_keywords = ["관리자 if문", "답변글 버튼", "목록 List 버튼", "등록 버튼"]
-                    for keyword in stop_keywords:
-                        if keyword in raw_text:
-                            raw_text = raw_text.split(keyword)[0]
-                    content_text = finalize_text(raw_text)
-
-        if not content_text:
-            content_text = "(본문 영역인 <dd> 태그를 찾지 못했습니다.)"
-
-        # 이미지
-        images_data = []
-        seen_image_urls: set[str] = set()
-        if main_container and isinstance(main_container, Tag):
-            img_tags = main_container.find_all("img")
-            for idx, img in enumerate(img_tags):
-                if not isinstance(img, Tag):
-                    continue
-                src = ensure_str_attr(img.get("src", ""))
-                if not src:
-                    continue
-                if src.startswith("data:image"):
-                    try:
-                        header, encoded = src.split(",", 1)
-                        ext = "png"
-                        if "jpeg" in header or "jpg" in header:
-                            ext = "jpg"
-                        images_data.append(
-                            {
-                                "type": "base64",
-                                "data": encoded,
-                                "ext": ext,
-                                "name": f"image_{idx+1}.{ext}",
-                            }
-                        )
-                    except (ValueError, IndexError):
-                        logger.warning(
-                            "scrape_yonsei_engineering_precise inline image parse failed url=%s index=%s",
-                            url,
-                            idx,
-                            exc_info=True,
-                        )
-                        continue
-                else:
-                    if any(x in src for x in ["icon", "btn", "button", "search", "blank"]):
-                        continue
-                    if src.startswith("/"):
-                        full_url = "https://engineering.yonsei.ac.kr" + src
-                    elif src.startswith("http"):
-                        full_url = src
-                    else:
-                        continue
-                    if full_url in seen_image_urls:
-                        continue
-                    seen_image_urls.add(full_url)
-                    fn_raw = img.get("data-file_name")
-                    file_name = fn_raw if isinstance(fn_raw, str) and fn_raw else os.path.basename(src.split("?")[0])
-                    if not file_name or "." not in file_name:
-                        file_name = f"image_{idx+1}.jpg"
-                    images_data.append(
-                        {
-                            "type": "url",
-                            "data": full_url,
-                            "ext": file_name.split(".")[-1],
-                            "name": file_name,
-                        }
-                    )
-
-        # 첨부파일
-        attachment_names_set: set[str] = set()
-        attach_labels = soup.find_all(string=re.compile("첨부"))
-        for label in attach_labels:
-            parent_row = label.find_parent(["tr", "li", "div", "dl", "dt", "dd"])
-            if isinstance(parent_row, Tag) and parent_row.name == "dt":
-                next_dd = parent_row.find_next_sibling("dd")
-                parent_row = next_dd if isinstance(next_dd, Tag) else parent_row
-            if isinstance(parent_row, Tag):
-                links = parent_row.find_all("a")
-                for link in links:
-                    if not isinstance(link, Tag):
-                        continue
-                    file_name = link.get_text(strip=True)
-                    href = ensure_str_attr(link.get("href", ""))
-                    if href and not href.startswith("#") and "javascript" not in href:
-                        if file_name and file_name not in attachment_names_set:
-                            attachment_names_set.add(file_name)
-
-        return ScrapeResult(title, date, content_text, images_data, list(attachment_names_set))
-
+        return parse_yonsei_engineering_precise_from_html(text, url)
     except RequestException:
         raise
     except Exception as e:
@@ -300,108 +299,7 @@ async def scrape_yonsei_engineering_precise_async(client: httpx.AsyncClient, url
     """비동기: 상세 페이지 스크래핑. 반환 (title, date, content_text, images_data, attachment_names)."""
     try:
         text = await fetch_html_async(client, url, timeout=10.0)
-        soup = BeautifulSoup(text, "html.parser")
-        title = "제목 없음"
-        title_label = soup.find(string=lambda t: bool(t and "제목" in t))
-        if title_label:
-            title_container = title_label.find_parent(["dt", "th", "td"])
-            if title_container:
-                title_elem = title_container.find_next_sibling(["dd", "td"])
-                if title_elem:
-                    title = get_text_structurally(title_elem).strip()
-        if title == "제목 없음":
-            h3 = soup.find("h3")
-            if h3:
-                title = get_text_structurally(h3).strip()
-        date = "날짜 없음"
-        date_match = re.search(r"\d{4}[.-]\d{2}[.-]\d{2}", soup.get_text())
-        if date_match:
-            date = date_match.group()
-        content_text = ""
-        main_container = None
-        anchor_text = soup.find(string=lambda t: bool(t and "게시글 내용" in t))
-        if anchor_text:
-            start_tag = anchor_text.find_parent(["dt", "th", "td"])
-            if start_tag and isinstance(start_tag, Tag):
-                target_body = start_tag.find_next_sibling(["dd", "td"])
-                if target_body and isinstance(target_body, Tag):
-                    main_container = target_body
-                    for selector in [".btn_area", ".btn-wrap", "#bo_v_share", "ul.btn_bo_user", "div.btn_confirm"]:
-                        for tag in main_container.select(selector):
-                            tag.decompose()
-                    raw_text = get_text_structurally(main_container)
-                    for keyword in ["관리자 if문", "답변글 버튼", "목록 List 버튼", "등록 버튼"]:
-                        if keyword in raw_text:
-                            raw_text = raw_text.split(keyword)[0]
-                    content_text = finalize_text(raw_text)
-        if not content_text:
-            content_text = "(본문 영역인 <dd> 태그를 찾지 못했습니다.)"
-        images_data = []
-        image_urls_async: set[str] = set()
-        if main_container and isinstance(main_container, Tag):
-            for idx, img in enumerate(main_container.find_all("img")):
-                if not isinstance(img, Tag):
-                    continue
-                src = ensure_str_attr(img.get("src", ""))
-                if not src:
-                    continue
-                if src.startswith("data:image"):
-                    try:
-                        header, encoded = src.split(",", 1)
-                        ext = "jpg" if "jpeg" in header or "jpg" in header else "png"
-                        images_data.append(
-                            {"type": "base64", "data": encoded, "ext": ext, "name": f"image_{idx+1}.{ext}"}
-                        )
-                    except (ValueError, IndexError):
-                        logger.warning(
-                            "scrape_yonsei_engineering_precise_async inline image parse failed url=%s index=%s",
-                            url,
-                            idx,
-                            exc_info=True,
-                        )
-                        continue
-                else:
-                    if any(x in src for x in ["icon", "btn", "button", "search", "blank"]):
-                        continue
-                    full_url = (
-                        "https://engineering.yonsei.ac.kr" + src
-                        if src.startswith("/")
-                        else (src if src.startswith("http") else None)
-                    )
-                    if full_url and full_url not in image_urls_async:
-                        image_urls_async.add(full_url)
-                        fn_raw = img.get("data-file_name")
-                        file_name = (
-                            fn_raw if isinstance(fn_raw, str) and fn_raw else os.path.basename(src.split("?")[0])
-                        )
-                        if not file_name or "." not in file_name:
-                            file_name = f"image_{idx+1}.jpg"
-                        images_data.append(
-                            {"type": "url", "data": full_url, "ext": file_name.split(".")[-1], "name": file_name}
-                        )
-        attachment_names = []
-        attachment_names_set: set[str] = set()
-        for label in soup.find_all(string=re.compile("첨부")):
-            parent_row = label.find_parent(["tr", "li", "div", "dl", "dt", "dd"])
-            if isinstance(parent_row, Tag) and parent_row.name == "dt":
-                next_dd = parent_row.find_next_sibling("dd")
-                parent_row = next_dd if isinstance(next_dd, Tag) else parent_row
-            if isinstance(parent_row, Tag):
-                for link in parent_row.find_all("a"):
-                    if not isinstance(link, Tag):
-                        continue
-                    file_name = link.get_text(strip=True)
-                    href = ensure_str_attr(link.get("href", ""))
-                    if (
-                        href
-                        and not href.startswith("#")
-                        and "javascript" not in href
-                        and file_name
-                        and file_name not in attachment_names_set
-                    ):
-                        attachment_names_set.add(file_name)
-                        attachment_names.append(file_name)
-        return ScrapeResult(title, date, content_text, images_data, attachment_names)
+        return parse_yonsei_engineering_precise_from_html(text, url)
     except HtmlTooLargeError as e:
         logger.warning("scrape_yonsei_engineering_precise_async body too large url=%s: %s", url, e)
         raise

@@ -706,3 +706,32 @@ def test_crawl_college_task_on_chunk_enqueue_failure_increments_ai_enqueue_faile
 
     after = get_counter(AI_ENQUEUE_FAILED_TOTAL, labels={"college_code": "engineering"})
     assert after == before + 1
+
+
+def test_production_google_redirect_uris_valid_accepts_https():
+    from app.core.config.base import _production_google_redirect_uris_valid
+
+    assert _production_google_redirect_uris_valid("https://app.example.com/callback") is True
+    assert _production_google_redirect_uris_valid("  , https://x.test/y  ") is True
+
+
+def test_production_google_redirect_uris_valid_rejects_invalid():
+    from app.core.config.base import _production_google_redirect_uris_valid
+
+    assert _production_google_redirect_uris_valid("") is False
+    assert _production_google_redirect_uris_valid("not-a-url") is False
+    assert _production_google_redirect_uris_valid("ftp://example.com/x") is False
+
+
+def test_raise_production_missing_no_op_when_empty():
+    from app.core.config.base import _raise_production_missing
+
+    _raise_production_missing([])
+
+
+def test_raise_production_missing_raises_with_message():
+    from app.core.config.base import _raise_production_missing
+
+    with pytest.raises(ValueError, match="DATABASE_URL") as exc:
+        _raise_production_missing(["DATABASE_URL", "REDIS_URL"])
+    assert "REDIS_URL" in str(exc.value)

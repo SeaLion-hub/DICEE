@@ -1,4 +1,8 @@
-"""Pytest fixtures. 테스트 시 DB 없이 실행 가능하도록 환경 조정."""
+"""Pytest fixtures. 테스트 시 DB 없이 실행 가능하도록 환경 조정.
+
+AsyncKeyFetcher 등이 남기는 aiohttp/anyio ResourceWarning은 `pyproject.toml`의
+`filterwarnings`로 억제한다. 프로덕션 종료 경로는 `app/core/lifespan.py` teardown.
+"""
 
 import asyncio
 import importlib

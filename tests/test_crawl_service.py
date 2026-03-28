@@ -69,8 +69,8 @@ def test_run_crawl_job_sync_rollback_then_failed_on_commit_failure():
         session.rollback.assert_called()
         failed_calls = [c for c in mock_update.call_args_list if c.kwargs.get("status") == CrawlRunStatus.FAILED.value]
         assert len(failed_calls) == 1
-        assert (
-            failed_calls[0].kwargs.get("error_message", "")[:50] == ("simulated DB error on success-path commit"[:50])
+        assert failed_calls[0].kwargs.get("error_message", "")[:50] == (
+            "simulated DB error on success-path commit"[:50]
         )
         assert failed_calls[0].args[0] is session
         assert session.commit.call_count >= 2

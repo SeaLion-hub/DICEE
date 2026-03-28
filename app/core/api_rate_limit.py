@@ -89,7 +89,9 @@ async def _check_rate_limit_inmemory(
         return count <= max_requests
 
 
-_LUA_API_RATE_LIMIT: Final[str] = """
+_LUA_API_RATE_LIMIT: Final[
+    str
+] = """
 local key = KEYS[1]
 local window = tonumber(ARGV[1])
 local max_req = tonumber(ARGV[2])

@@ -47,7 +47,7 @@ from app.domain.contracts.internal_contracts import (
 )
 from app.schemas.internal import CrawlRunStatsItem, CrawlStatsResponse
 from app.services.crawl_stats_service import CrawlStatsService
-from app.services.internal_crawl_service import normalize_trigger_idempotency_key
+from app.services.internal_crawl_service import InternalCrawlService, normalize_trigger_idempotency_key
 from app.services.notice_preview_service import NoticePreviewRow, NoticePreviewService
 
 router = APIRouter(prefix="/internal", tags=["internal"])
@@ -315,8 +315,8 @@ async def post_trigger_crawl(
         pattern=r"^[A-Za-z0-9._:-]+$",
     ),
     redis_client: RedisAsyncio | None = Depends(get_redis_trigger_lock),
-    internal_crawl_service=Depends(get_internal_crawl_service),
-):
+    internal_crawl_service: InternalCrawlService = Depends(get_internal_crawl_service),
+) -> JSONResponse:
     """
     크롤 태스크 enqueue. 보안 키는 Header만 필수. college별 Redis 분산락(SET NX EX)으로 중복 enqueue 방지.
     Idempotency-Key 있으면 동일 키 재요청 시 202 + 캐시된 결과.

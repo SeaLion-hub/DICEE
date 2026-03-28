@@ -51,7 +51,7 @@ class CeleryCrawlDispatcher:
         """Dispatch crawl task and return task_id while preserving existing method contract."""
         from app.services.tasks import crawl_college_task
 
-        task: CeleryCrawlDispatcher._CeleryTaskProtocol = crawl_college_task
+        task: CeleryCrawlDispatcher._CeleryTaskProtocol = crawl_college_task  # type: ignore[assignment]
 
         labels = {"college_code": college_code}
         snapshot = await asyncio.to_thread(_collect_resource_snapshot)

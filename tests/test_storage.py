@@ -1,6 +1,8 @@
 from pathlib import Path
 from uuid import UUID
 
+import app.core.config as app_config
+import app.core.storage._spool_ops as storage_spool_ops
 from app.core import storage
 
 
@@ -26,7 +28,11 @@ def test_sanitize_external_id_empty_uses_unknown_with_hash():
 
 def test_object_key_uses_sanitized_external_id(monkeypatch):
     # s3_content_prefix가 비어 있을 때 college_id/… 형태로 생성되는지 확인
-    monkeypatch.setattr(storage, "settings", storage.settings.model_copy(update={"s3_content_prefix": ""}))
+    monkeypatch.setattr(
+        app_config,
+        "settings",
+        app_config.settings.model_copy(update={"s3_content_prefix": ""}),
+    )
     college_id = UUID("11111111-1111-1111-1111-111111111111")
     external_id = "../weird/id\\with\\separators"
     key = storage._object_key(college_id, external_id, content_hash=None)
@@ -39,9 +45,9 @@ def test_object_key_uses_sanitized_external_id(monkeypatch):
 def test_upload_local_does_not_escape_base(tmp_path, monkeypatch):
     # content_storage_local_path를 임시 디렉터리로 고정
     monkeypatch.setattr(
-        storage,
+        app_config,
         "settings",
-        storage.settings.model_copy(
+        app_config.settings.model_copy(
             update={
                 "content_storage_local_path": str(tmp_path),
                 "content_upload_failure_policy": "allow_none",
@@ -103,11 +109,11 @@ def test_spool_move_to_dlq_s3_writes_dead_letter_metadata(monkeypatch):
             deletes.append(kwargs)
 
     monkeypatch.setattr(
-        storage,
+        app_config,
         "settings",
-        storage.settings.model_copy(update={"s3_bucket": "bucket", "content_spool_s3_prefix": "pref"}),
+        app_config.settings.model_copy(update={"s3_bucket": "bucket", "content_spool_s3_prefix": "pref"}),
     )
-    monkeypatch.setattr(storage, "_build_s3_client", lambda: _FakeClient())
+    monkeypatch.setattr(storage_spool_ops, "_build_s3_client", lambda: _FakeClient())
 
     moved = storage.spool_move_to_dlq_s3(
         "pref/123.json",
@@ -141,11 +147,11 @@ def test_spool_list_s3_skips_dlq_entries(monkeypatch):
             return _FakePaginator()
 
     monkeypatch.setattr(
-        storage,
+        app_config,
         "settings",
-        storage.settings.model_copy(update={"s3_bucket": "bucket", "content_spool_s3_prefix": "pref"}),
+        app_config.settings.model_copy(update={"s3_bucket": "bucket", "content_spool_s3_prefix": "pref"}),
     )
-    monkeypatch.setattr(storage, "_build_s3_client", lambda: _FakeClient())
+    monkeypatch.setattr(storage_spool_ops, "_build_s3_client", lambda: _FakeClient())
 
     keys = storage.spool_list_s3()
     assert keys == ["pref/1.json"]

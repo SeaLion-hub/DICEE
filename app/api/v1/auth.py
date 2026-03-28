@@ -3,7 +3,7 @@
 import hashlib
 import logging
 import uuid as uuid_mod
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Annotated, Any, cast
 
@@ -81,7 +81,7 @@ def _auth_rate_limit_dep(
     action: str,
     max_requests_getter: Callable[[], int],
     too_many_detail: str,
-):
+) -> Callable[[Request, RedisAsyncio | None], Awaitable[str]]:
     """Auth 전용 rate-limit 의존성 팩토리. client_ip 확인 → 503, 제한 초과 → 429, 통과 시 client_ip 반환."""
 
     async def _dep(

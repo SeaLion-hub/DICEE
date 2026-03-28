@@ -59,9 +59,7 @@ async def test_search_notices_by_embedding_orders_by_cosine_distance(_ensure_asy
 
         cid = college.id
         for ext, emb in (("embed-a", u0), ("embed-b", u1)):
-            existing = await session.execute(
-                select(Notice).where(Notice.college_id == cid, Notice.external_id == ext)
-            )
+            existing = await session.execute(select(Notice).where(Notice.college_id == cid, Notice.external_id == ext))
             row = existing.scalar_one_or_none()
             if row is None:
                 n = Notice(

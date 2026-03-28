@@ -543,102 +543,102 @@ class Settings(BaseSettings):
         if (self.environment or "").strip().lower() != "production":
             return self
 
-        missing: list[str] = []
-
-        if not (self.database_url or "").strip():
-            missing.append("DATABASE_URL")
-
+        missing = _production_collect_database_missing(self)
         if self.app_entry == "migrate":
-            if missing:
-                raise ValueError(
-                    "Production environment requires these variables to be set: "
-                    + ", ".join(missing)
-                    + ". Set them in Secret Manager or environment before boot."
-                )
+            _raise_production_missing(missing)
             return self
 
-        if not (self.redis_url or "").strip():
-            missing.append("REDIS_URL")
-
-        if self.app_entry != "celery":
-            try:
-                resolve_jwt_signing_algorithm(
-                    self.jwt_signing_mode,
-                    jwt_secret=self.jwt_secret.get_secret_value(),
-                    jwt_private_key_pem=(
-                        self.jwt_private_key_pem.get_secret_value() if self.jwt_private_key_pem else None
-                    ),
-                    jwt_public_key_pem=(
-                        self.jwt_public_key_pem.get_secret_value() if self.jwt_public_key_pem else None
-                    ),
-                )
-            except ValueError as e:
-                missing.append(str(e))
-            if not (self.ip_hmac_key.get_secret_value() or "").strip():
-                missing.append("IP_HMAC_KEY")
-
-        crawl_secret = self.crawl_trigger_secret.get_secret_value() if self.crawl_trigger_secret else ""
-        if not (crawl_secret or "").strip():
-            missing.append("CRAWL_TRIGGER_SECRET")
-
-        policy = (self.content_upload_failure_policy or "").strip().lower()
-        backend = (self.content_spool_backend or "").strip().lower()
-
-        # Production: treat unset or default as 'fail' so deploy works without CONTENT_UPLOAD_FAILURE_POLICY.
-        if policy in ("", "allow_none"):
-            object.__setattr__(self, "content_upload_failure_policy", "fail")
-            policy = "fail"
-        elif policy != "fail":
-            missing.append("CONTENT_UPLOAD_FAILURE_POLICY must be 'fail' in production (or unset)")
-
-        # Production + local backend: require explicit CONTENT_SPOOL_ALLOW_EPHEMERAL=true (fail-fast).
-        if policy == "fail" and backend == "local" and not self.content_spool_allow_ephemeral:
-            missing.append(
-                "CONTENT_SPOOL_ALLOW_EPHEMERAL must be 'true' in production when CONTENT_SPOOL_BACKEND=local "
-                "(explicit allow only; do not auto-override)."
-            )
-
-        if not self.trusted_proxy_skip_fast and not (self.trusted_proxy_ips or "").strip():
-            missing.append("TRUSTED_PROXY_IPS")
-
-        # API only: production must use fail-closed for Redis blocklist (JWT invalidation).
-        if self.app_entry == "api" and not self.redis_blocklist_fail_closed:
-            missing.append("REDIS_BLOCKLIST_FAIL_CLOSED must be true in production when APP_ENTRY=api")
-
-        # API only: trigger-crawl idempotency must fail-closed (RELEASE_GATE P0).
-        if self.app_entry == "api" and not self.redis_trigger_idempotency_required:
-            missing.append("REDIS_TRIGGER_IDEMPOTENCY_REQUIRED must be true in production when APP_ENTRY=api")
-
-        has_google_client = bool(
-            (self.google_client_id or "").strip() or (self.google_client_secret.get_secret_value() or "").strip()
-        )
-        if has_google_client:
-            raw_uris = (self.google_redirect_uris or "").strip()
-            if not raw_uris:
-                missing.append("GOOGLE_REDIRECT_URIS")
-            else:
-                from urllib.parse import urlparse
-
-                valid = False
-                for raw_uri in raw_uris.split(","):
-                    uri = raw_uri.strip()
-                    if not uri:
-                        continue
-                    try:
-                        parsed = urlparse(uri)
-                        if parsed.scheme in ("http", "https") and parsed.netloc:
-                            valid = True
-                            break
-                    except Exception:
-                        continue
-                if not valid:
-                    missing.append("GOOGLE_REDIRECT_URIS(valid http(s) URL required)")
-
-        if missing:
-            raise ValueError(
-                "Production environment requires these variables to be set: "
-                + ", ".join(missing)
-                + ". Set them in Secret Manager or environment before boot."
-            )
-
+        _production_extend_missing_non_migrate(self, missing)
+        _raise_production_missing(missing)
         return self
+
+
+def _raise_production_missing(missing: list[str]) -> None:
+    if not missing:
+        return
+    raise ValueError(
+        "Production environment requires these variables to be set: "
+        + ", ".join(missing)
+        + ". Set them in Secret Manager or environment before boot."
+    )
+
+
+def _production_collect_database_missing(settings: Settings) -> list[str]:
+    missing: list[str] = []
+    if not (settings.database_url or "").strip():
+        missing.append("DATABASE_URL")
+    return missing
+
+
+def _production_google_redirect_uris_valid(raw_uris: str) -> bool:
+    for raw_uri in raw_uris.split(","):
+        uri = raw_uri.strip()
+        if not uri:
+            continue
+        try:
+            parsed = urlparse(uri)
+            if parsed.scheme in ("http", "https") and parsed.netloc:
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def _production_extend_missing_non_migrate(settings: Settings, missing: list[str]) -> None:
+    if not (settings.redis_url or "").strip():
+        missing.append("REDIS_URL")
+
+    if settings.app_entry != "celery":
+        try:
+            resolve_jwt_signing_algorithm(
+                settings.jwt_signing_mode,
+                jwt_secret=settings.jwt_secret.get_secret_value(),
+                jwt_private_key_pem=(
+                    settings.jwt_private_key_pem.get_secret_value() if settings.jwt_private_key_pem else None
+                ),
+                jwt_public_key_pem=(
+                    settings.jwt_public_key_pem.get_secret_value() if settings.jwt_public_key_pem else None
+                ),
+            )
+        except ValueError as e:
+            missing.append(str(e))
+        if not (settings.ip_hmac_key.get_secret_value() or "").strip():
+            missing.append("IP_HMAC_KEY")
+
+    crawl_secret = settings.crawl_trigger_secret.get_secret_value() if settings.crawl_trigger_secret else ""
+    if not (crawl_secret or "").strip():
+        missing.append("CRAWL_TRIGGER_SECRET")
+
+    policy = (settings.content_upload_failure_policy or "").strip().lower()
+    backend = (settings.content_spool_backend or "").strip().lower()
+
+    if policy in ("", "allow_none"):
+        object.__setattr__(settings, "content_upload_failure_policy", "fail")
+        policy = "fail"
+    elif policy != "fail":
+        missing.append("CONTENT_UPLOAD_FAILURE_POLICY must be 'fail' in production (or unset)")
+
+    if policy == "fail" and backend == "local" and not settings.content_spool_allow_ephemeral:
+        missing.append(
+            "CONTENT_SPOOL_ALLOW_EPHEMERAL must be 'true' in production when CONTENT_SPOOL_BACKEND=local "
+            "(explicit allow only; do not auto-override)."
+        )
+
+    if not settings.trusted_proxy_skip_fast and not (settings.trusted_proxy_ips or "").strip():
+        missing.append("TRUSTED_PROXY_IPS")
+
+    if settings.app_entry == "api" and not settings.redis_blocklist_fail_closed:
+        missing.append("REDIS_BLOCKLIST_FAIL_CLOSED must be true in production when APP_ENTRY=api")
+
+    if settings.app_entry == "api" and not settings.redis_trigger_idempotency_required:
+        missing.append("REDIS_TRIGGER_IDEMPOTENCY_REQUIRED must be true in production when APP_ENTRY=api")
+
+    has_google_client = bool(
+        (settings.google_client_id or "").strip() or (settings.google_client_secret.get_secret_value() or "").strip()
+    )
+    if has_google_client:
+        raw_uris = (settings.google_redirect_uris or "").strip()
+        if not raw_uris:
+            missing.append("GOOGLE_REDIRECT_URIS")
+        elif not _production_google_redirect_uris_valid(raw_uris):
+            missing.append("GOOGLE_REDIRECT_URIS(valid http(s) URL required)")

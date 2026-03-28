@@ -9,7 +9,12 @@ asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
 pythonpath = ["."]
-filterwarnings = ["ignore::DeprecationWarning"]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    # pyjwt-key-fetcher / lifespan teardown vs pytest GC 순서로 세션 정리 경고가 남는 경우가 있음 (프로덕션은 lifespan에서 aclose 시도).
+    "ignore:Unclosed client session:ResourceWarning",
+    "ignore:Unclosed <MemoryObjectReceiveStream:ResourceWarning",
+]
 markers = [
     "integration: tests that need DATABASE_URL or full stack (see tests/integration/)",
     "slow: opt-in long-running tests; exclude locally with -m \"not slow\"",
@@ -56,14 +61,66 @@ disallow_untyped_defs = false
 module = ["celery", "celery.*"]
 ignore_missing_imports = true
 
+# Instructor omitted from pre-commit mypy venv (heavy/unstable dep tree for hooks).
+[[tool.mypy.overrides]]
+module = [
+    "instructor",
+    "instructor.*",
+    "google",
+    "google.generativeai",
+    "google.generativeai.*",
+    "google.api_core",
+    "google.api_core.*",
+    "google.genai",
+    "google.genai.*",
+]
+ignore_missing_imports = true
+
 [[tool.mypy.overrides]]
 module = ["pgvector", "pgvector.*"]
 ignore_missing_imports = true
 disable_error_code = ["import-untyped"]
 
+# Pilot: full defs in-module; expand with more [[tool.mypy.overrides]] blocks below.
+[[tool.mypy.overrides]]
+module = "app.core.sentry_config"
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+
+[[tool.mypy.overrides]]
+module = ["app.repositories.*"]
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+
+[[tool.mypy.overrides]]
+module = [
+    "app.services.ai_html_cleaning",
+    "app.services.ai_pipeline",
+    "app.services.auth_service",
+    "app.services.crawl_payload",
+    "app.services.crawl_policy",
+    "app.services.crawl_service",
+    "app.services.gemini_text_embedding",
+    "app.services.internal_crawl_service",
+    "app.services.logging_context",
+    "app.services.crawl_stats_service",
+    "app.services.notice_preview_service",
+    "app.services.notice_public_service",
+    "app.services.notice_semantic_search_service",
+    "app.services.read_cache",
+]
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+
+[[tool.mypy.overrides]]
+module = ["app.api.*"]
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+
 # NOTE:
 # Keep `mypy app` baseline green first. Add strictness later with per-module flags
 # (e.g. disallow_untyped_defs) instead of `strict = true` in overrides.
+# Celery tasks (`app.services.tasks`): see docs/decisions/celery-mypy-strategy.md — stubs + typed wrappers.
 
 # Import Linter: 계층 규칙 단일 소스. CI 및 test_architecture_imports에서 실행.
 [tool.importlinter]

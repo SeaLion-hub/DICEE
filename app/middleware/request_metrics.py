@@ -35,9 +35,7 @@ def _endpoint_template(path: str) -> str:
 class RequestMetricsMiddleware(BaseHTTPMiddleware):
     """요청 수·에러 수·지연을 골든 시그널로 기록. 라벨은 endpoint_template, status_class, method만 사용."""
 
-    async def dispatch(
-        self, request: Request, call_next: Callable[[Request], Awaitable[Response]]
-    ) -> Response:
+    async def dispatch(self, request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
         start = time.perf_counter()
         path = getattr(request.url, "path", "") or ""
         endpoint_template = _endpoint_template(path)

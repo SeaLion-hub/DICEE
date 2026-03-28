@@ -44,6 +44,12 @@ jobs:
       - name: Ruff
         run: ruff check app tests
 
+      - name: Maintainability metrics (advisory, non-blocking)
+        continue-on-error: true
+        run: |
+          radon cc app -a -nc --total-average | tail -n 25 || true
+          xenon app --max-absolute F --max-modules B || true
+
       - name: Mypy
         run: mypy app
 
