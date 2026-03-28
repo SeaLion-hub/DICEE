@@ -48,7 +48,8 @@ def embed_text_sync(text: str) -> list[float]:
         )
     except Exception as e:
         if _google_api_exceptions is not None and isinstance(e, _google_api_exceptions.GoogleAPIError):
-            raise
+            logger.warning("embed_content Google API error", exc_info=True)
+            raise EmbeddingProviderError("embedding provider request failed") from e
         logger.warning("embed_content failed", exc_info=True)
         raise EmbeddingProviderError("embedding request failed") from e
 

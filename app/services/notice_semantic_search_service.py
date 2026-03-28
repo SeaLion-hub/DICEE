@@ -6,6 +6,7 @@ import asyncio
 from datetime import datetime
 
 from app.core.database import AsyncSessionLike
+from app.core.exceptions import EmptySemanticQueryError
 from app.models.notice import Notice
 from app.repositories import college_repository, notice_repository
 from app.services.gemini_text_embedding import embed_text_sync
@@ -27,7 +28,7 @@ async def search_public_notices_semantic(
     """
     q = (query or "").strip()
     if not q:
-        raise ValueError("query must be non-empty")
+        raise EmptySemanticQueryError()
 
     ext = college_external_id.strip()
     college = await college_repository.get_by_external_id(session, ext)

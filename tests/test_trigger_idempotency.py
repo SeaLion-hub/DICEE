@@ -265,7 +265,7 @@ def test_trigger_crawl_unknown_college_then_same_idempotency_key_succeeds(client
             headers=headers,
         )
         assert r1.status_code == 400, f"First request (unknown college) expected 400, got {r1.status_code}: {r1.json()}"
-        assert "Unknown college_code" in str(r1.json().get("detail", ""))
+        assert "College code is not registered" in str(r1.json().get("detail", ""))
 
         r2 = client.post(
             "/internal/trigger-crawl",

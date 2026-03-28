@@ -369,6 +369,18 @@ async def post_refresh(
             status_code=401,
             detail="Invalid or expired token",
         ) from e
+    except (OperationalError, SQLAlchemyTimeoutError, TimeoutError) as e:
+        await session.rollback()
+        logger.warning(
+            "Refresh DB temporarily unavailable: %s",
+            type(e).__name__,
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="Authentication service temporarily unavailable",
+            headers=_retry_after_headers(),
+        ) from e
     except Exception:
         await session.rollback()
         raise
@@ -398,6 +410,18 @@ async def post_logout(
     try:
         await logout_user(session, user_id)
         await session.commit()
+    except (OperationalError, SQLAlchemyTimeoutError, TimeoutError) as e:
+        await session.rollback()
+        logger.warning(
+            "Logout DB temporarily unavailable: %s",
+            type(e).__name__,
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="Authentication service temporarily unavailable",
+            headers=_retry_after_headers(),
+        ) from e
     except Exception:
         await session.rollback()
         raise

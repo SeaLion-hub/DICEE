@@ -8,7 +8,15 @@ class DICEEError(Exception):
 
 
 class CollegeNotFoundError(DICEEError, ValueError):
-    """미등록 또는 잘못된 college_code. 전역 핸들러에서 400으로 매핑."""
+    """미등록 college_code. 응답 본문에는 허용 목록을 넣지 않는다."""
+
+    def __init__(self, college_code: str) -> None:
+        self.college_code = college_code
+        super().__init__(college_code)
+
+
+class EmptySemanticQueryError(DICEEError):
+    """시맨틱 검색 쿼리가 비어 있음. 라우터에서 고정 detail로 매핑."""
 
     pass
 

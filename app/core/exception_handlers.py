@@ -20,6 +20,7 @@ from app.core.redis import (
 logger = logging.getLogger(__name__)
 
 INTERNAL_CRAWL_503_DETAIL = "Service temporarily unavailable. Try again later."
+COLLEGE_NOT_FOUND_CLIENT_DETAIL = "College code is not registered."
 
 
 def _normalize_detail(detail: Any) -> str:
@@ -91,12 +92,18 @@ async def httpx_error_handler(request: Request, exc: Exception) -> JSONResponse:
 
 
 async def college_not_found_handler(request: Request, exc: Exception) -> JSONResponse:
-    """미등록 college_code. 400 Bad Request."""
+    """미등록 college_code. 400 Bad Request. 허용 코드 전체 열거는 응답에 포함하지 않는다."""
     request_id = getattr(request.state, "request_id", None)
+    c_exc = cast(CollegeNotFoundError, exc)
+    logger.warning(
+        "College code not registered (college_code=%s, request_id=%s)",
+        c_exc.college_code,
+        request_id,
+    )
     return JSONResponse(
         status_code=400,
         content=_error_content(
-            detail=str(cast(CollegeNotFoundError, exc)),
+            detail=COLLEGE_NOT_FOUND_CLIENT_DETAIL,
             code="COLLEGE_NOT_FOUND",
             request_id=request_id,
         ),

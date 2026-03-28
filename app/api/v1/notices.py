@@ -1,10 +1,14 @@
 """공개 공지 목록·상세 API (읽기 전용)."""
 
+import logging
 import uuid
 
 from fastapi import APIRouter, HTTPException, Query
+from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import TimeoutError as SQLAlchemyTimeoutError
 
 from app.core.deps import ReadOnlySessionDep
+from app.core.exceptions import EmptySemanticQueryError
 from app.domain.contracts.notice_public_contracts import NoticePublicDetailDTO, NoticePublicListItemDTO
 from app.models.notice import Notice
 from app.schemas.notice_public import NoticeDetailResponse, NoticeListItem, NoticeListResponse
@@ -18,6 +22,10 @@ from app.services.notice_public_service import (
 from app.services.notice_semantic_search_service import search_public_notices_semantic
 
 router = APIRouter(prefix="/notices", tags=["notices"])
+logger = logging.getLogger(__name__)
+
+_NOTICES_DB_UNAVAILABLE_DETAIL = "Notice service temporarily unavailable. Try again later."
+SEMANTIC_SEARCH_EMPTY_QUERY_DETAIL = "query must be non-empty"
 
 
 def _list_dto_to_schema(d: NoticePublicListItemDTO) -> NoticeListItem:
@@ -80,6 +88,13 @@ async def list_notices(
         )
     except UnknownCollegeExternalIdError:
         raise HTTPException(status_code=404, detail="College not found") from None
+    except (OperationalError, SQLAlchemyTimeoutError, TimeoutError) as e:
+        logger.warning(
+            "Public notices list DB error: %s",
+            type(e).__name__,
+            exc_info=True,
+        )
+        raise HTTPException(status_code=503, detail=_NOTICES_DB_UNAVAILABLE_DETAIL) from e
     return NoticeListResponse(
         items=[_list_dto_to_schema(x) for x in items],
         next_cursor=next_cursor,
@@ -103,10 +118,23 @@ async def semantic_search_notices(
         )
     except UnknownCollegeExternalIdError:
         raise HTTPException(status_code=404, detail="College not found") from None
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
+    except EmptySemanticQueryError:
+        raise HTTPException(status_code=400, detail=SEMANTIC_SEARCH_EMPTY_QUERY_DETAIL) from None
     except EmbeddingProviderError:
         raise HTTPException(status_code=503, detail="Embedding service unavailable") from None
+    except ValueError:
+        logger.warning(
+            "Semantic search unexpected ValueError (client response masked)",
+            exc_info=True,
+        )
+        raise HTTPException(status_code=500, detail="Internal server error") from None
+    except (OperationalError, SQLAlchemyTimeoutError, TimeoutError) as e:
+        logger.warning(
+            "Semantic search DB error: %s",
+            type(e).__name__,
+            exc_info=True,
+        )
+        raise HTTPException(status_code=503, detail=_NOTICES_DB_UNAVAILABLE_DETAIL) from e
     return NoticeSemanticSearchResponse(
         items=[_notice_model_to_list_item(n) for n in rows],
         limit=body.limit,
@@ -118,7 +146,15 @@ async def get_notice(
     notice_id: uuid.UUID,
     session: ReadOnlySessionDep,
 ) -> NoticeDetailResponse:
-    detail = await get_public_notice_by_id(session, notice_id)
+    try:
+        detail = await get_public_notice_by_id(session, notice_id)
+    except (OperationalError, SQLAlchemyTimeoutError, TimeoutError) as e:
+        logger.warning(
+            "Public notice detail DB error: %s",
+            type(e).__name__,
+            exc_info=True,
+        )
+        raise HTTPException(status_code=503, detail=_NOTICES_DB_UNAVAILABLE_DETAIL) from e
     if detail is None:
         raise HTTPException(status_code=404, detail="Notice not found")
     return _detail_dto_to_schema(detail)

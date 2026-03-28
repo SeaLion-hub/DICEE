@@ -487,6 +487,38 @@ def test_trigger_crawl_all_enqueues_fail_returns_503(client, monkeypatch):
     assert "failed" in data or "enqueued" in data
 
 
+def test_trigger_crawl_unknown_college_code_does_not_enumerate_valid_codes(client, monkeypatch):
+    """잘못된 college_code 시 응답에 허용 목록 전체(Valid: ...)가 포함되지 않는다."""
+    from app.api import internal as internal_module
+    from app.core.config import settings
+    from app.core.deps import get_redis_trigger_lock
+    from app.main import app
+
+    def _noop_authorize(request, x_secret, auth):
+        pass
+
+    monkeypatch.setattr(internal_module, "_authorize_internal_trigger", _noop_authorize)
+    monkeypatch.setattr(settings, "redis_trigger_lock_required", False)
+
+    async def _fake_redis():
+        yield None
+
+    app.dependency_overrides[get_redis_trigger_lock] = _fake_redis
+    try:
+        response = client.post(
+            "/internal/trigger-crawl",
+            params={"college_code": "not_a_registered_college_xyz"},
+        )
+    finally:
+        app.dependency_overrides.pop(get_redis_trigger_lock, None)
+
+    assert response.status_code == 400
+    data = response.json()
+    assert data.get("code") == "COLLEGE_NOT_FOUND"
+    assert data.get("detail") == "College code is not registered."
+    assert "Valid" not in response.text
+
+
 def test_trigger_crawl_skipped_then_retry_with_same_idempotency_key_not_stuck(client, monkeypatch):
     from unittest.mock import AsyncMock, MagicMock
 

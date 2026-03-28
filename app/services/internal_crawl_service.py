@@ -45,7 +45,7 @@ def _resolve_college_codes(college_code: str | None) -> list[str]:
     """college_code 정규화·검증 후 코드 목록. 미등록 단일 코드 시 CollegeNotFoundError."""
     normalized = college_code.strip() if college_code and college_code.strip() else None
     if normalized and normalized not in COLLEGE_CODE_TO_MODULE:
-        raise CollegeNotFoundError(f"Unknown college_code: {normalized}. Valid: {list(COLLEGE_CODE_TO_MODULE.keys())}")
+        raise CollegeNotFoundError(normalized)
     return [normalized] if normalized else list(COLLEGE_CODE_TO_MODULE.keys())
 
 

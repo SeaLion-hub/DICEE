@@ -1,4 +1,7 @@
 {
+  "pythonVersion": "3.11",
+  "venvPath": ".",
+  "venv": ".venv",
   "stubPath": "typings",
   "exclude": [
     ".git",

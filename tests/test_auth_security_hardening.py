@@ -113,6 +113,37 @@ def test_post_google_auth_operational_error_returns_503(client: TestClient) -> N
             app.dependency_overrides.pop(get_db, None)
 
 
+def test_post_refresh_operational_error_returns_503(client: TestClient) -> None:
+    """Refresh 경로에서 DB 일시 오류(OperationalError) 시 503, rollback."""
+    from app.core.database import get_db
+    from app.main import app
+
+    call_log: list[str] = []
+    session = MagicMock()
+    session.commit = AsyncMock(side_effect=lambda: call_log.append("commit"))
+    session.rollback = AsyncMock(side_effect=lambda: call_log.append("rollback"))
+
+    async def _get_db():
+        yield session
+
+    _, refresh_token = create_jwt_pair(user_id=uuid.UUID("00000000-0000-7000-8000-000000000001"))
+    with patch("app.api.v1.auth.refresh_tokens", new_callable=AsyncMock) as mock_refresh:
+        mock_refresh.side_effect = OperationalError("SELECT 1", {}, Exception("connection refused"))
+        app.dependency_overrides[get_db] = _get_db
+        try:
+            resp = client.post(
+                "/v1/auth/refresh",
+                json={"refresh_token": refresh_token},
+            )
+            assert resp.status_code == 503
+            data = resp.json()
+            assert "unavailable" in str(data.get("detail", "")).lower()
+            assert "rollback" in call_log
+            assert "commit" not in call_log
+        finally:
+            app.dependency_overrides.pop(get_db, None)
+
+
 def test_post_refresh_rollback_on_unexpected_exception(client: TestClient) -> None:
     """Phase 2: post_refresh에서 예상 외 예외 시 rollback 호출."""
     from app.core.database import get_db
