@@ -15,9 +15,10 @@ from app.schemas.ai import NoticeAIExtraction, NoticeCategory, ScheduleItem, Sch
 from app.services.ai.extractor import (
     EXTRACTOR_SYSTEM_PROMPT,
     MAIN_CATEGORY_SYSTEM_PROMPT,
+    apply_vision_image_gate,
     extract_notice_structured_with_usage,
 )
-from app.services.ai.types import TokenUsage
+from app.services.ai.types import ExtractorCallStats, TokenUsage
 from app.services.ai_pipeline import (
     extract_notice_info,
     project_extraction_to_notice_fields,
@@ -86,7 +87,7 @@ def test_extract_notice_info_passes_image_urls():
     stub = NoticeAIExtraction(target_departments=[])
     with patch(
         "app.services.ai_pipeline.extract_notice_structured_with_usage",
-        return_value=(stub, TokenUsage()),
+        return_value=(stub, TokenUsage(), ExtractorCallStats()),
     ) as mock_extract:
         result = extract_notice_info("<p>html</p>", image_urls=["https://example.com/img.png"])
     assert result.result is stub
@@ -102,11 +103,14 @@ def test_extract_notice_info_passes_empty_image_urls():
     stub = NoticeAIExtraction(target_departments=[])
     with patch(
         "app.services.ai_pipeline.extract_notice_structured_with_usage",
-        return_value=(stub, TokenUsage()),
+        return_value=(stub, TokenUsage(), ExtractorCallStats()),
     ) as mock_extract:
         result = extract_notice_info("<p>html</p>")
     assert result.result is stub
-    mock_extract.assert_called_once_with("<p>html</p>", image_urls=None, title=None, college_name=None)
+    mock_extract.assert_called_once()
+    assert mock_extract.call_args[0][0] == "<p>html</p>"
+    assert mock_extract.call_args[1].get("image_urls") is None
+    assert mock_extract.call_args[1].get("model") == settings.gemini_model
 
 
 def test_project_extraction_to_notice_fields_includes_envelope_meta() -> None:
@@ -226,7 +230,7 @@ def test_extract_notice_info_success_meta_includes_provider() -> None:
     stub = NoticeAIExtraction(target_departments=[])
     with patch(
         "app.services.ai_pipeline.extract_notice_structured_with_usage",
-        return_value=(stub, TokenUsage()),
+        return_value=(stub, TokenUsage(), ExtractorCallStats()),
     ):
         envelope = extract_notice_info("<p>html</p>")
 
@@ -311,7 +315,7 @@ def test_extract_notice_info_raw_substring_validation_fallback(monkeypatch) -> N
     )
     with patch(
         "app.services.ai_pipeline.extract_notice_structured_with_usage",
-        return_value=(stub, TokenUsage()),
+        return_value=(stub, TokenUsage(), ExtractorCallStats()),
     ):
         envelope = extract_notice_info("<p>짧은 본문</p>")
     assert envelope.status == "fallback"
@@ -329,7 +333,7 @@ def test_extract_notice_info_multimodal_skips_raw_substring_validation(monkeypat
     )
     with patch(
         "app.services.ai_pipeline.extract_notice_structured_with_usage",
-        return_value=(stub, TokenUsage()),
+        return_value=(stub, TokenUsage(), ExtractorCallStats()),
     ):
         envelope = extract_notice_info(
             "<p>본문만 있는 HTML</p>",
@@ -370,7 +374,7 @@ def test_extract_notice_info_taxonomy_validation_failure_returns_fallback() -> N
     )
     with patch(
         "app.services.ai_pipeline.extract_notice_structured_with_usage",
-        return_value=(invalid_extraction, TokenUsage()),
+        return_value=(invalid_extraction, TokenUsage(), ExtractorCallStats()),
     ):
         envelope = extract_notice_info("<p>html</p>")
     assert envelope.status == "fallback"
@@ -485,8 +489,8 @@ def test_taxonomy_case_mixed_unselected_parent_subcategory_fails() -> None:
         validate_and_normalize_taxonomy(invalid)
 
 
-def test_two_stage_extraction_requires_title_and_college_name() -> None:
-    """2단계 호출은 title/college_name 필수."""
+def test_single_pass_extraction_requires_title_and_college_name() -> None:
+    """단일 패스 추출은 title/college_name 필수."""
     with pytest.raises(ValueError, match="title is required"):
         extract_notice_structured_with_usage(
             "<p>본문</p>",
@@ -503,8 +507,8 @@ def test_two_stage_extraction_requires_title_and_college_name() -> None:
         )
 
 
-def test_two_stage_extraction_requires_body_or_image() -> None:
-    """소분류 단계는 본문/이미지 둘 다 없으면 실행 불가."""
+def test_single_pass_extraction_requires_body_or_image() -> None:
+    """본문/이미지가 모두 없으면 추출 불가."""
     with pytest.raises(ValueError, match="html_content or image_urls is required"):
         extract_notice_structured_with_usage(
             "",
@@ -514,18 +518,48 @@ def test_two_stage_extraction_requires_body_or_image() -> None:
         )
 
 
-def test_stage1_prompt_uses_allowed_main_categories_and_campus_life_gate() -> None:
-    """Stage 1 프롬프트는 허용 대분류 목록과 캠퍼스생활 배타 규칙을 명시해야 한다."""
+def test_legacy_main_category_prompt_documented() -> None:
+    """레거시 1단계 전용 프롬프트(참고용)에 허용 대분류·캠퍼스생활 배타가 있다."""
     assert "<ALLOWED_MAIN_CATEGORIES>" in MAIN_CATEGORY_SYSTEM_PROMPT
     assert "오직 [제목]과 [college.name(발신 기관명)]" in MAIN_CATEGORY_SYSTEM_PROMPT
     assert "캠퍼스생활 배타 게이트" in MAIN_CATEGORY_SYSTEM_PROMPT
     assert '["캠퍼스생활"]' in MAIN_CATEGORY_SYSTEM_PROMPT
 
 
-def test_stage2_prompt_locks_preselected_main_categories() -> None:
-    """Stage 2 프롬프트는 Stage 1 대분류 고정과 taxonomy pool 검증을 명시해야 한다."""
-    assert "preselected_main_categories" in EXTRACTOR_SYSTEM_PROMPT
-    assert "main_categories는 preselected_main_categories를 그대로 사용" in EXTRACTOR_SYSTEM_PROMPT
-    assert "절대 수정, 삭제, 교체" in EXTRACTOR_SYSTEM_PROMPT
-    assert "Stage 2는 Stage 1의 main_categories를 변경하면 안 됩니다." in EXTRACTOR_SYSTEM_PROMPT
+def test_unified_extractor_prompt_single_pass_taxonomy() -> None:
+    """단일 패스 추출 프롬프트는 대분류 규칙·taxonomy 풀·main/taxonomy 일관성을 명시한다."""
+    assert "preselected_main_categories" not in EXTRACTOR_SYSTEM_PROMPT
+    assert "<ALLOWED_MAIN_CATEGORIES>" in EXTRACTOR_SYSTEM_PROMPT
+    assert "캠퍼스생활 배타 게이트" in EXTRACTOR_SYSTEM_PROMPT
     assert "<TAXONOMY_POOL>" in EXTRACTOR_SYSTEM_PROMPT
+    assert "main_categories와 taxonomy_mappings" in EXTRACTOR_SYSTEM_PROMPT
+
+
+def test_apply_vision_gate_image_only_uses_active_cap(monkeypatch: pytest.MonkeyPatch) -> None:
+    """본문이 비어 이미지만 있으면 Vision 게이트를 열고 active cap까지 URL을 넘긴다."""
+    monkeypatch.setattr(settings, "ai_vision_gate_enabled", True)
+    monkeypatch.setattr(settings, "ai_vision_max_images_active", 5)
+    urls = [f"https://example.com/{i}.png" for i in range(7)]
+    gated, used = apply_vision_image_gate("", urls, "제목")
+    assert used is True
+    assert len(gated) == 5
+
+
+def test_apply_vision_gate_long_html_respects_passive_cap(monkeypatch: pytest.MonkeyPatch) -> None:
+    """긴 본문이면 passive cap(기본 0)으로 Vision을 끈다."""
+    monkeypatch.setattr(settings, "ai_vision_gate_enabled", True)
+    monkeypatch.setattr(settings, "ai_vision_body_char_threshold", 50)
+    monkeypatch.setattr(settings, "ai_vision_max_images_passive", 0)
+    html = "<p>" + ("x" * 200) + "</p>"
+    gated, used = apply_vision_image_gate(html, ["https://example.com/a.png"], "일반 안내")
+    assert gated == []
+    assert used is False
+
+
+def test_apply_vision_gate_disabled_passes_up_to_five(monkeypatch: pytest.MonkeyPatch) -> None:
+    """게이트 비활성 시 기존처럼 최대 5장까지 전달한다."""
+    monkeypatch.setattr(settings, "ai_vision_gate_enabled", False)
+    urls = [f"https://e.com/{i}.jpg" for i in range(8)]
+    gated, used = apply_vision_image_gate("<p>짧음</p>", urls, "t")
+    assert len(gated) == 5
+    assert used is True

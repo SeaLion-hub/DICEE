@@ -48,6 +48,7 @@
 ---
 ## 2026-03-28
 
+- [Alembic·CI] 이중 base 빈 DB에서 `upgrade head` 시 레거시 `001`…`006`이 v7 이후 중복 DDL을 시도하던 문제를 `app/legacy_alembic_guard`(colleges.id UUID면 no-op)로 완화. CI에 `APP_ENTRY=migrate`·`alembic check` 추가, `scripts/dump_alembic_upgrade_order.py`·`scripts/check_migrations.{sh,ps1}` 추가, `docs/decisions/alembic-single-head.md`·`DEPLOYMENT.md` 갱신, `tests/test_legacy_alembic_guard.py`.
 - [Auth·미들웨어] `app/api/v1/auth.py`: `get_verified_access`·`VerifiedAccess`로 JWT 검증 단일화, `Annotated` 의존성 정리, 모든 503에 `Retry-After`(기본 60초) 부여; `POST /logout`은 `response_model=None`으로 204 등록 안전 처리. `sanitize_5xx`: 503 치환 응답에 `Retry-After` 보강. `tests/test_exception_handlers.py` 503 헤더 검증 추가. 검증: `pytest` 통과.
 - [로깅] `structlog` 컨텍스트 바인딩을 강화: `app/core/logging_context.py`에서 `structlog.contextvars`까지 함께 bind/clear, `RequestIDMiddleware` 종료 시 컨텍스트 자동 clear, 크롤 작업 컨텍스트(phase/college_code/run_id/task_id) 바인딩 추가. `docs/DEPLOYMENT.md`에 `LOG_FORMAT`(pretty/json) staging→prod 전환 절차 문서화. 검증: `ruff`, `mypy`, `pytest` 통과.
 - [로깅·크롤 안정화] `logging_context`의 status/duration 타입을 `int|None`으로 통일하고 clear를 `None` 리셋으로 정리, structlog bind/clear fail-open에 1회 warning+누적 debug 관측성 추가; `pipeline_sync` chunk finalize/dispatch 경계 분리, `run_crawl_job_sync` 반환을 `(upserted, enqueued_ai)` 계약으로 수정, sanitize/clear 누수/DB 실패→Redis fallback/반환 계약 테스트 보강 후 `pytest` 전체(326 passed, 3 skipped) 통과.
@@ -67,6 +68,9 @@
 - [타입·회귀] `gemini_text_embedding`·`tasks`: optional `google.api_core.exceptions` import를 `types.ModuleType | None` + try/else로 정리, `_EMBED_BACKFILL_AUTORETRY`를 `tuple[type[BaseException], ...]`로 명시해 `mypy app` 0 errors. 검증: `ruff check app tests`·`mypy app`·단계별·전체 `pytest`(353 passed, 4 skipped, coverage 71.55% ≥ 55%).
 - [품질 게이트 강화] `pyproject.toml`: `app.core.sentry_config` pilot·`app.repositories.*`·선별 `app.services.*`·`app.api.*`에 `disallow_untyped_defs`/`disallow_incomplete_defs`; `internal.post_trigger_crawl`·`auth._auth_rate_limit_dep` 타입 보강. `tests/test_sentry_config.py`, `docs/decisions/celery-mypy-strategy.md`, dev `celery-types`, pytest `filterwarnings`(aiohttp/anyio ResourceWarning), `conftest` 안내. `celery_crawl_dispatcher` `type: ignore[assignment]` 유지. 검증: `ruff`·`mypy app`·`pytest`(364 passed, 4 skipped).
 - [개발 도구] `.pre-commit-config.yaml`: Black(120열)·Ruff(v0.8.4, `--fix`)·mypy(v1.13.0, `app`, `--no-incremental`, 훅 전용 `additional_dependencies`는 `requirements.txt`와 동기화). `requirements-dev.txt`에 `pre-commit`. `pyproject.toml`에 Instructor/Google SDK용 mypy `ignore_missing_imports`(훅 venv에 `instructor` 미포함). Black이 `app`·`tests` 일부 파일 포맷 정리. 검증: `pre-commit run --all-files`·`pytest`.
+- [운영·DB] `scripts/db_pool_stress_test.py`: asyncio 동시성(기본 100)으로 burst/hold 부하·풀 고갈 관측·`pool_size`/`max_overflow` 휴리스틱 출력, `engine.dispose()` 및 `verify_db_connection` 스타일 재시도 시뮬레이션, 선택적 `pg_terminate_backend`로 끊김 후 `pool_pre_ping` 회복 확인. 검증: `pytest` 전체 통과.
+- [문서] `docs/DEPLOYMENT.md`: 230행 이후 인코딩 깨짐(`??`) 중복 블록 제거, Alembic 011·`colleges` 중복 테이블 트러블슈팅 보강, `2026-02-27 Additions` 세부 설명 한국어 반영.
+- [AI 비용] 공지 추출: 단일 패스 구조화 호출, `ai_input_html_char_limit`·Vision 게이트·`ai_extraction_max_retries`·선택적 경량 모델 라우팅+에스컬레이션, `ExtractionRunMeta`에 vision/llm_calls/escalated, `summary`·`raw_eligibility_text` max_length, `docs/decisions/ai-cost-limits.md`. 검증: `pytest`.
 
 ---
 ## 2026-03-27

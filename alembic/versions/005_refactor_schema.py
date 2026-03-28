@@ -9,6 +9,7 @@ from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op
+from app.legacy_alembic_guard import v7_base_schema_present
 from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
@@ -19,6 +20,8 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
+    if v7_base_schema_present(op.get_bind()):
+        return
     # 1. 새로운 JSONB 컬럼 추가 (핵심)
     op.add_column('notices', sa.Column('images', postgresql.JSONB(astext_type=sa.Text()), nullable=True))
     op.add_column('notices', sa.Column('attachments', postgresql.JSONB(astext_type=sa.Text()), nullable=True))

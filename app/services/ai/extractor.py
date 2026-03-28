@@ -1,25 +1,29 @@
 """
-AI 공지 추출: Instructor + Gemini 1.5 Flash.
+AI 공지 추출: Instructor + Gemini (single-pass structured output).
 
 NoticeAIExtraction 구조화 출력. 비대칭 날짜 처리·제한 조건 기반 자격 추출 규칙 적용.
-설계: docs/decisions/ai-extraction-schema.md, PDF 「대학 공지사항 데이터 추출 품질 평가」.
+설계: docs/decisions/ai-extraction-schema.md, docs/decisions/ai-cost-limits.md.
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 
+from bs4 import BeautifulSoup
 from pydantic import BaseModel, Field
 
 from app.core.config import settings
 from app.domain.contracts.ai_extraction import NoticeAIExtraction, NoticeMainCategory
-from app.services.ai.types import InstructorExtractionClient, TokenUsage
+from app.services.ai.types import (
+    ExtractorCallStats,
+    InstructorExtractionClient,
+    TokenUsage,
+)
 
 if TYPE_CHECKING:
     from instructor.processing.multimodal import Image
 
-EXTRACTION_MAX_RETRIES = 3
-
+# Kept for tests and docs; single-pass uses EXTRACTOR_SYSTEM_PROMPT only.
 MAIN_CATEGORY_SYSTEM_PROMPT = """당신은 연세대학교 공지사항의 대분류를 선별하는 최고 수준의 정밀 분류기입니다.
 입력으로 주어지는 정보는 오직 [제목]과 [college.name(발신 기관명)]뿐입니다.
 당신의 유일한 임무는 이 정보만 바탕으로 아래 정의된 <ALLOWED_MAIN_CATEGORIES> 안에서만
@@ -66,41 +70,43 @@ HTML 태그를 그대로 복사하지 말고, 구조를 읽어 일정·자격·t
 
 JSON 출력 스키마(필드 이름과 설명)는 시스템에 이미 정의되어 있습니다.
 필드는 스키마에 정의된 것만 사용하고, 정의되지 않은 임의의 필드는 절대 추가하지 마세요.
-추가 입력으로 전달되는 preselected_main_categories는 Stage 1에서 이미 확정된 대분류 배열입니다.
-main_categories는 preselected_main_categories를 그대로 사용해야 합니다.
-즉, main_categories는 preselected_main_categories를 그대로 재사용해야 하며 절대 수정, 삭제,
-교체, 재정렬하거나 다른 값으로 대체하면 안 됩니다. Stage 2는 taxonomy_mappings와 나머지 구조화
-필드만 정교화해야 합니다.
 
 ---
 
-## Taxonomy 분류 규칙 (Final Stage 2 Prompt)
-입력된 제목, college.name, 본문, 이미지를 모두 종합해 판단하되, taxonomy는 반드시
-"Stage 1에서 확정된 대분류 -> 해당 부모에 속한 허용 소분류 선택" 순서로만 처리하세요.
+## 대분류(main_categories) 선정
+입력으로 [제목], [college.name], 본문(slim HTML), 선택적 이미지를 모두 참고하세요.
 
-[시스템 입력 파라미터 확인]
-- Stage 2 입력에는 title, college.name, 본문 또는 이미지, preselected_main_categories가 포함됩니다.
-- title과 college.name은 분류 판단의 고정 메타데이터입니다.
-- 본문과 이미지 중 하나 이상은 반드시 존재한다고 가정하고, 가능한 한 둘 다 활용하세요.
+[경고: 시스템 무결성 제약]
+아래 <ALLOWED_MAIN_CATEGORIES>에 명시된 8개의 문자열 외에 임의의 대분류 문자열을 생성하지 마세요.
+
+<ALLOWED_MAIN_CATEGORIES>
+- 학사/졸업
+- 장학/지원
+- 진로/취업
+- 국제/교류
+- 연구/실험
+- 대회/공모전
+- 문화/행사
+- 캠퍼스생활
+</ALLOWED_MAIN_CATEGORIES>
+
+[대분류 규칙]
+1. 수요자 중심 절대 원칙: 발신 기관명보다 학생에게 주는 실질 효용(학사/장학/취업 등)을 우선합니다.
+2. 다중 할당: 복합 목적이면 최대 3개까지 main_categories를 선택할 수 있습니다.
+3. 캠퍼스생활 배타 게이트: '캠퍼스생활'은 다른 7개에 해당하지 않을 때만 선택합니다.
+   캠퍼스생활을 고르면 오직 ["캠퍼스생활"] 단독만 반환합니다.
+4. main_categories와 taxonomy_mappings에 등장하는 대분류 집합은 반드시 일치해야 합니다.
+
+---
+
+## Taxonomy 분류 규칙
+제목·기관·본문·이미지를 종합해 main_categories를 확정한 뒤, 각 대분류에 대해 허용 소분류 풀에서만 선택하세요.
 
 [경고: 치명적 오류 방지 규칙]
-1. Stage 1 결과 불변의 법칙
-   - preselected_main_categories는 절대 수정, 삭제, 교체할 수 없는 상수(Constant)입니다.
-   - 본문을 읽고 일부가 부적절해 보여도 main_categories는 preselected_main_categories를 그대로 사용하세요.
-   - Stage 2는 Stage 1의 main_categories를 변경하면 안 됩니다.
-2. 부모-자식 종속 절대 원칙
-   - 선택하는 소분류는 반드시 전달받은 해당 대분류(부모)의 하위 풀 안에 존재하는 단어여야 합니다.
-   - 전달받지 않은 대분류의 하위 소분류를 임의로 끌어다 쓰는 교차 매핑은 절대 금지합니다.
-3. 환각 금지
-   - 아래 <TAXONOMY_POOL>에 명시된 문자열과 토씨 하나 틀리지 않게 작성하세요.
-   - 허용 목록 밖의 대분류/소분류를 상상해서 생성하지 마세요.
-4. 수요자 중심 절대 원칙
-   - 발신 기관명이나 표면 키워드보다 학생 관점의 핵심 효용을 우선 해석하세요.
-   - 장학 공지에 행사 요소가 섞여 있어도 핵심이 장학이면 장학 중심으로,
-     취업 공지에 설명회가 붙어도 핵심이 취업이면 취업 중심으로 해석하세요.
-5. 캠퍼스생활 fallback 규칙
-   - preselected_main_categories가 ["캠퍼스생활"]인 경우에만 캠퍼스생활 taxonomy를 작성하세요.
-   - 캠퍼스생활은 fallback이므로 다른 대분류와 공존하지 않습니다.
+1. 부모-자식 종속: 소분류는 선택한 대분류(부모)의 하위 풀 안에만 있어야 합니다. 교차 매핑 금지.
+2. 환각 금지: <TAXONOMY_POOL> 문자열과 토씨 하나 틀리지 않게 작성하세요.
+3. 수요자 중심: 장학+행사가 섞여 있으면 핵심이 장학이면 장학 중심으로 해석합니다.
+4. 캠퍼스생활은 다른 대분류와 공존하지 않습니다.
 
 <TAXONOMY_POOL>
 {
@@ -116,11 +122,11 @@ main_categories는 preselected_main_categories를 그대로 사용해야 합니�
 </TAXONOMY_POOL>
 
 [매핑 알고리즘 의사코드]
-Step 1. preselected_main_categories를 읽고, main_categories에 동일한 값을 그대로 복사합니다.
-Step 2. 복사한 각 main_category에 대해 <TAXONOMY_POOL>에서 해당 부모의 하위 배열만 로드합니다.
+Step 1. 제목·기관·본문·이미지를 바탕으로 main_categories를 위 규칙에 따라 선택합니다.
+Step 2. 각 main_category에 대해 <TAXONOMY_POOL>에서 해당 부모의 하위 배열만 로드합니다.
 Step 3. 본문/이미지 컨텍스트를 분석하여, 로드된 해당 부모 배열 안에서만
     가장 적합한 sub_categories를 1개 이상 선택합니다.
-Step 4. 소분류를 출력하기 직전, 선택한 각 sub_category가 정말 그 부모의 하위 목록에 존재하는지 1:1 검증합니다.
+Step 4. 소분류를 출력하기 직전, 선택한 각 sub_category가 그 부모의 하위 목록에 존재하는지 1:1 검증합니다.
 Step 5. 각 main_category는 taxonomy_mappings에 정확히 한 번만 등장하도록 구조화합니다.
 
 ---
@@ -148,18 +154,28 @@ Step 5. 각 main_category는 taxonomy_mappings에 정확히 한 번만 등장하
    - 이 경우 raw_eligibility_text=null, eligibility_rules=[], target_departments=[], target_grades=[] 로 두세요.
 
 **필드 순서(Schema-driven CoT)** — 자격을 채울 때는 반드시 아래 순서로 채우세요.
-1. raw_eligibility_text: 본문의 자격 관련 문장을 **가공 없이 그대로** 발췌. 없으면 null.
+1. raw_eligibility_text: 본문의 자격 관련 문장을 **가공 없이 그대로** 발췌(스키마 최대 길이 내). 없으면 null.
 2. eligibility_rules: 위 원문을 바탕으로 분절한 자격 조건 리스트.
 3. target_departments: 위 자격 요건에 명시된 학과 리스트.
    "없음", "알 수 없음", "해당없음" 등 플레이스홀더 사용 금지. 해당 없으면 빈 리스트.
 4. target_grades: 위 자격 요건에 명시된 학년.
-   1~6, all, grad_master, grad_phd, grad_all, other 중 선택. 없으면 빈 리스트."""
+   1~6, all, grad_master, grad_phd, grad_all, other 중 선택. 없으면 빈 리스트.
+
+summary 필드는 꼭 필요할 때만 짧게(한두 문장) 작성하세요. 불필요하면 null로 두세요.
+"""
 
 
 class MainCategorySelection(BaseModel):
-    """1단계 대분류 전용 추출 스키마."""
+    """레거시 1단계 스키마(호환·테스트 참조). 단일 패스 경로에서는 사용하지 않습니다."""
 
     main_categories: list[NoticeMainCategory] = Field(default_factory=list)
+
+
+def html_plain_text_length(html: str) -> int:
+    """Slim HTML에서 태그를 제외한 연속 텍스트 길이(비교·라우팅용)."""
+    if not html or not html.strip():
+        return 0
+    return len(BeautifulSoup(html, "html.parser").get_text(separator="", strip=False).strip())
 
 
 def _require_non_empty_text(value: str | None, *, field_name: str) -> str:
@@ -177,14 +193,58 @@ def _normalize_image_urls(image_urls: list[str] | None) -> list[str]:
     ]
 
 
-def _get_instructor_client() -> InstructorExtractionClient:
+def apply_vision_image_gate(
+    html_content: str,
+    image_urls: list[str] | None,
+    title: str,
+) -> tuple[list[str], bool]:
+    """
+    Vision 입력에 넣을 URL 목록과, 멀티모달 사용 여부를 반환합니다.
+
+    게이트가 꺼지면 기존과 같이 최대 5장까지 전달합니다.
+    """
+    normalized = _normalize_image_urls(image_urls)
+    raw_count = len(normalized)
+    if raw_count == 0:
+        return [], False
+
+    if not getattr(settings, "ai_vision_gate_enabled", True):
+        capped = normalized[:5]
+        return capped, len(capped) > 0
+
+    body_len = html_plain_text_length(html_content)
+    active_cap = int(getattr(settings, "ai_vision_max_images_active", 5) or 5)
+    passive_cap = int(getattr(settings, "ai_vision_max_images_passive", 0) or 0)
+
+    if body_len == 0:
+        out = normalized[:active_cap]
+        return out, len(out) > 0
+
+    threshold = int(getattr(settings, "ai_vision_body_char_threshold", 400) or 0)
+    if body_len < threshold:
+        out = normalized[:active_cap]
+        return out, len(out) > 0
+
+    title_lower = (title or "").lower()
+    for part in str(getattr(settings, "ai_vision_title_keyword_substrings", "") or "").split(","):
+        p = part.strip().lower()
+        if p and p in title_lower:
+            out = normalized[:active_cap]
+            return out, len(out) > 0
+
+    out = normalized[:passive_cap]
+    return out, passive_cap > 0
+
+
+def _get_instructor_client(*, model: str | None = None) -> InstructorExtractionClient:
     """Instructor 클라이언트 팩토리 (Gemini 구조화 출력)."""
     import instructor  # type: ignore[import]
 
     api_key = None
     if settings.gemini_api_key:
         api_key = settings.gemini_api_key.get_secret_value()
-    provider = f"google/{settings.gemini_model}"
+    model_id = (model or settings.gemini_model or "").strip() or settings.gemini_model
+    provider = f"google/{model_id}"
     kwargs: dict[str, object] = {}
     if api_key:
         kwargs["api_key"] = api_key
@@ -194,68 +254,34 @@ def _get_instructor_client() -> InstructorExtractionClient:
     )
 
 
-def _messages_for_main_categories(
-    title: str,
-    college_name: str,
-) -> list[dict[str, object]]:
-    user_text = (
-        "[입력]\n"
-        f"제목: {title}\n"
-        f"college.name: {college_name}\n\n"
-        "[요청]\n"
-        "제목과 college.name만 보고 main_categories를 추론하세요."
-    )
-    return [
-        {"role": "system", "content": MAIN_CATEGORY_SYSTEM_PROMPT},
-        {"role": "user", "content": user_text},
-    ]
-
-
-def _extract_preselected_main_categories(
-    client: InstructorExtractionClient,
-    title: str,
-    college_name: str,
-) -> list[NoticeMainCategory]:
-    messages = _messages_for_main_categories(title=title, college_name=college_name)
-    selection = client.create(
-        messages=messages,
-        response_model=MainCategorySelection,
-    )
-    return cast(list[NoticeMainCategory], selection.main_categories)
-
-
 def _messages_and_content(
     html_content: str,
-    image_urls: list[str] | None = None,
+    gated_image_urls: list[str],
     title: str | None = None,
     college_name: str | None = None,
-    preselected_main_categories: list[NoticeMainCategory] | None = None,
 ) -> tuple[list[dict[str, object]], str | list[str | Image]]:
-    """공통 메시지·user_content 구성 (extract_notice_structured / extract_notice_structured_with_usage)."""
+    """단일 패스용 user 메시지 구성."""
     from instructor.processing.multimodal import Image  # type: ignore[import]
 
-    text = html_content[:100_000] or "(내용 없음)"
-    urls = _normalize_image_urls(image_urls)[:5]
+    text = html_content if html_content else ""
+    if len(text) > 150_000:
+        text = text[:150_000]
+    text = text or "(내용 없음)"
 
     context_prefix = ""
-    if title or college_name or preselected_main_categories:
-        main_text = ", ".join(cat.value for cat in (preselected_main_categories or []))
+    if title or college_name:
         context_prefix = (
-            "[메타정보]\n"
-            f"제목: {title or '없음'}\n"
-            f"단과대/기관: {college_name or '없음'}\n"
-            f"preselected_main_categories: {main_text or '없음'}\n\n"
-            "[본문]\n"
+            "[메타정보]\n" f"제목: {title or '없음'}\n" f"단과대/기관: {college_name or '없음'}\n\n" "[본문]\n"
         )
         text = context_prefix + text
 
-    if not urls:
+    if not gated_image_urls:
         user_content: str | list[str | Image] = text
     else:
         user_content = [
             text,
             "아래 이미지는 공지 본문(포스터·첨부 등)입니다. HTML과 함께 참고하여 지원자격·일정·날짜를 추출하세요.",
-        ] + [Image.from_url(u) for u in urls if u and (u.startswith("http://") or u.startswith("https://"))]
+        ] + [Image.from_url(u) for u in gated_image_urls]
     messages: list[dict[str, object]] = [
         {"role": "system", "content": EXTRACTOR_SYSTEM_PROMPT},
         {"role": "user", "content": user_content},
@@ -282,59 +308,85 @@ def _usage_from_completion(completion: object) -> TokenUsage:
     )
 
 
+def _max_retries_kw() -> dict[str, Any]:
+    n = int(getattr(settings, "ai_extraction_max_retries", 3) or 0)
+    if n <= 0:
+        return {}
+    return {"max_retries": n}
+
+
+def _run_single_extraction_call(
+    client: InstructorExtractionClient,
+    messages: list[dict[str, object]],
+) -> tuple[NoticeAIExtraction, TokenUsage]:
+    mr = _max_retries_kw()
+    create_with_completion = getattr(client, "create_with_completion", None)
+    if create_with_completion is not None:
+        try:
+            extraction, completion = create_with_completion(
+                messages=messages,
+                response_model=NoticeAIExtraction,
+                **mr,
+            )
+        except TypeError:
+            extraction, completion = create_with_completion(
+                messages=messages,
+                response_model=NoticeAIExtraction,
+            )
+        return extraction, _usage_from_completion(completion)
+    try:
+        extraction = client.create(
+            messages=messages,
+            response_model=NoticeAIExtraction,
+            **mr,
+        )
+    except TypeError:
+        extraction = client.create(
+            messages=messages,
+            response_model=NoticeAIExtraction,
+        )
+    return extraction, TokenUsage()
+
+
 def extract_notice_structured_with_usage(
     html_content: str,
     image_urls: list[str] | None = None,
     title: str | None = None,
     college_name: str | None = None,
-) -> tuple[NoticeAIExtraction, TokenUsage]:
+    *,
+    model: str | None = None,
+) -> tuple[NoticeAIExtraction, TokenUsage, ExtractorCallStats]:
     """
-    HTML(및 선택적 이미지)에서 NoticeAIExtraction 추출 + usage 반환.
+    HTML(및 선택적 이미지)에서 NoticeAIExtraction 추출 + usage + 게이트 메타.
 
-    Args:
-        html_content: slim/raw HTML 본문(이미지 전용 공지는 빈 문자열 가능).
-        image_urls: https URL 목록(선택).
-        title: 공지 제목(필수, 공백만 불가).
-        college_name: 단과대/기관명(필수, 공백만 불가).
-
-    Returns:
-        (구조화 추출 결과, 토큰 사용량).
-
-    Raises:
-        ValueError: title 또는 college_name이 비어 있거나, 본문과 유효 image_urls가 모두 없을 때.
+    단일 LLM 호출(Instructor + Gemini). Vision은 설정·휴리스틱에 따라 제한될 수 있습니다.
     """
     title_text = _require_non_empty_text(title, field_name="title")
     college_text = _require_non_empty_text(college_name, field_name="college_name")
-    has_body_text = bool((html_content or "").strip())
     normalized_urls = _normalize_image_urls(image_urls)
+    has_body_text = bool((html_content or "").strip())
     if not has_body_text and not normalized_urls:
         raise ValueError("At least one of html_content or image_urls is required for sub-category extraction.")
 
-    client = _get_instructor_client()
-    preselected_main_categories = _extract_preselected_main_categories(
-        client=client,
-        title=title_text,
-        college_name=college_text,
-    )
+    gated_urls, vision_used = apply_vision_image_gate(html_content, image_urls, title_text)
+    model_id = (model or settings.gemini_model or "").strip() or settings.gemini_model
+    client = _get_instructor_client(model=model_id)
     messages, _ = _messages_and_content(
         html_content,
-        normalized_urls,
+        gated_urls,
         title_text,
         college_text,
-        preselected_main_categories=preselected_main_categories,
     )
-    create_with_completion = getattr(client, "create_with_completion", None)
-    if create_with_completion is not None:
-        extraction, completion = create_with_completion(
-            messages=messages,
-            response_model=NoticeAIExtraction,
-        )
-        return extraction, _usage_from_completion(completion)
-    extraction = client.create(
-        messages=messages,
-        response_model=NoticeAIExtraction,
+    extraction, usage = _run_single_extraction_call(client, messages)
+    stats = ExtractorCallStats(
+        vision_used=vision_used,
+        vision_image_count=len(gated_urls),
+        raw_image_url_count=len(normalized_urls),
+        llm_calls=1,
+        model_id=model_id,
+        escalated=False,
     )
-    return extraction, TokenUsage()
+    return extraction, usage, stats
 
 
 def extract_notice_structured(
@@ -347,7 +399,7 @@ def extract_notice_structured(
     HTML 공지 본문(및 선택적 이미지 URL)에서 NoticeAIExtraction 구조화 추출.
     Instructor + Gemini 사용. image_urls가 있으면 Image.from_url로 멀티모달 입력.
     """
-    extraction, _ = extract_notice_structured_with_usage(
+    extraction, _, _ = extract_notice_structured_with_usage(
         html_content,
         image_urls=image_urls,
         title=title,

@@ -12,6 +12,7 @@ from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op
+from app.legacy_alembic_guard import v7_base_schema_present
 
 # revision identifiers, used by Alembic.
 revision: str = "002"
@@ -24,6 +25,8 @@ dt_tz = sa.DateTime(timezone=True)
 
 
 def upgrade() -> None:
+    if v7_base_schema_present(op.get_bind()):
+        return
     # users
     op.alter_column(
         "users",

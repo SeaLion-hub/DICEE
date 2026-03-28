@@ -1,7 +1,7 @@
 # AI 추출 스키마 설계 (NoticeAIExtraction) — 개선안 반영
 
 **목적**: 4단계 Instructor + Gemini 출력 스키마를 "학생–공지 매칭" 목표에 맞게 견고하게 설계.  
-**관련**: [ROADMAP_PHASES 4·5단계](../ROADMAP_PHASES.md), [database-spec notice_schedules](database-spec.md), [Instructor 적용 계획](.cursor/plans 참고).
+**관련**: [ROADMAP_PHASES 4·5단계](../ROADMAP_PHASES.md), [database-spec notice_schedules](database-spec.md), [AI 비용·입력 한도](ai-cost-limits.md), [Instructor 적용 계획](.cursor/plans 참고).
 
 ---
 

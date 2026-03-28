@@ -168,6 +168,60 @@ class Settings(BaseSettings):
         "gemini-1.5-flash-latest",
         description="Gemini model id for AI extraction (tool-calling supported).",
     )
+    gemini_model_light: str = Field(
+        "gemini-2.0-flash",
+        description="Lower-cost Gemini model for routed simple notices (when ai_extraction_model_routing_enabled).",
+    )
+    ai_extraction_model_routing_enabled: bool = Field(
+        False,
+        description=(
+            "When True, use gemini_model_light for short-body notices without heavy title keywords; "
+            "escalate to gemini_model once on taxonomy validation failure."
+        ),
+    )
+    ai_routing_light_max_body_plain_chars: int = Field(
+        900,
+        ge=0,
+        le=200_000,
+        description="Plain-text length (from slim HTML) below which light model may be used.",
+    )
+    ai_routing_heavy_title_substrings: str = Field(
+        "장학,교환,연구,공모,대회,면접,선발,해커톤,국제,모집공고,인턴,대학원",
+        description="Comma-separated substrings (case-insensitive). If any appear in title, use standard model.",
+    )
+    ai_input_html_char_limit: int = Field(
+        12_000,
+        ge=500,
+        le=500_000,
+        description="Max characters of slim HTML passed to the extraction prompt.",
+    )
+    ai_vision_gate_enabled: bool = Field(
+        True,
+        description="When True, attach fewer poster images unless body is short, keywords match, or image-only.",
+    )
+    ai_vision_max_images_active: int = Field(5, ge=1, le=10, description="Max images when vision gate is open.")
+    ai_vision_max_images_passive: int = Field(
+        0,
+        ge=0,
+        le=10,
+        description="Max images when gate is closed (0 = text-only for long HTML notices).",
+    )
+    ai_vision_body_char_threshold: int = Field(
+        400,
+        ge=0,
+        le=100_000,
+        description="Plain-text length below this (and non-empty body) opens full vision cap.",
+    )
+    ai_vision_title_keyword_substrings: str = Field(
+        "포스터,모집안내,보도자료,팜플렛,홍보",
+        description="Comma-separated; if any substring is in title (case-insensitive), full vision cap.",
+    )
+    ai_extraction_max_retries: int = Field(
+        3,
+        ge=0,
+        le=10,
+        description="Instructor structured-output self-correction retries per LLM call.",
+    )
     ai_extraction_enforce_raw_substrings: bool = Field(
         False,
         description=(

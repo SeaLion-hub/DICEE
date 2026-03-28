@@ -12,6 +12,7 @@ jobs:
     env:
       # Use postgres role (matches POSTGRES_USER). Do not use "root" - PostgreSQL has no default root role.
       DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/dicee_test
+      APP_ENTRY: migrate
     services:
       postgres:
         image: pgvector/pgvector:pg15
@@ -70,6 +71,9 @@ jobs:
 
       - name: Run migrations
         run: alembic upgrade head
+
+      - name: Alembic check (ORM vs DB)
+        run: alembic check
 
       - name: Pytest
         run: pytest tests -v --cov=app --cov-report=term-missing --cov-fail-under=55

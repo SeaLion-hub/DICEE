@@ -11,6 +11,7 @@ from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op
+from app.legacy_alembic_guard import v7_base_schema_present
 
 # revision identifiers, used by Alembic.
 revision: str = "003"
@@ -20,6 +21,8 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
+    if v7_base_schema_present(op.get_bind()):
+        return
     op.add_column(
         "notices",
         sa.Column("content_hash", sa.String(64), nullable=True),

@@ -33,12 +33,13 @@ from app.domain.contracts.ai_extraction import (
     NoticeMainCategory,
     TaxonomyMappingItem,
 )
-from app.services.ai.extractor import extract_notice_structured_with_usage
-from app.services.ai.types import TokenUsage
+from app.services.ai.extractor import (
+    extract_notice_structured_with_usage,
+    html_plain_text_length,
+)
+from app.services.ai.types import ExtractorCallStats, TokenUsage, add_token_usage
 
 logger = logging.getLogger(__name__)
-
-_AI_INPUT_HTML_CHAR_LIMIT = 12_000
 _ALLOWED_SLIM_HTML_TAGS = {
     "article",
     "section",
@@ -101,6 +102,10 @@ class ExtractionRunMeta:
     html_clean_len: int = 0
     image_count: int = 0
     elapsed_ms: int = 0
+    vision_used: bool = False
+    vision_images_sent: int = 0
+    llm_call_count: int = 0
+    model_escalated: bool = False
 
 
 class NoticeAIProjection(TypedDict):
@@ -197,7 +202,28 @@ def _clean_notice_html(html_content: str) -> str:
         slim_html = str(root.decode_contents(formatter="html")).strip()
     else:
         slim_html = str(root).strip()
-    return slim_html[:_AI_INPUT_HTML_CHAR_LIMIT]
+    limit = int(getattr(settings, "ai_input_html_char_limit", 12_000) or 12_000)
+    return slim_html[:limit]
+
+
+def _select_extraction_model(*, title: str, prompt_html: str) -> str:
+    """라우팅 비활성 시 gemini_model. 활성 시 짧은 본문·비중요 제목은 경량 모델."""
+    if not getattr(settings, "ai_extraction_model_routing_enabled", False):
+        return settings.gemini_model
+    heavy_parts = [
+        s.strip().lower()
+        for s in (getattr(settings, "ai_routing_heavy_title_substrings", "") or "").split(",")
+        if s.strip()
+    ]
+    title_lower = (title or "").lower()
+    if any(h in title_lower for h in heavy_parts):
+        return settings.gemini_model
+    max_plain = int(getattr(settings, "ai_routing_light_max_body_plain_chars", 900) or 0)
+    if html_plain_text_length(prompt_html) <= max_plain:
+        light = (getattr(settings, "gemini_model_light", "") or "").strip()
+        if light:
+            return light
+    return settings.gemini_model
 
 
 def _normalize_html_for_substring_validation(source_html: str) -> str:
@@ -329,19 +355,21 @@ def extract_notice_info(
     prompt_html = slim_html or raw_html
     validation_source = _normalize_html_for_substring_validation(prompt_html)
     image_count = len(image_urls or [])
-    provider = f"google/{settings.gemini_model}"
-    model = settings.gemini_model
+    standard_model = settings.gemini_model
+    chosen_model = _select_extraction_model(title=(title or "").strip(), prompt_html=prompt_html)
+    provider = f"google/{standard_model}"
+    model = standard_model
     increment(AI_EXTRACTION_ATTEMPT_TOTAL)
     try:
-        extraction, usage = extract_notice_structured_with_usage(
+        extraction, usage, stats = extract_notice_structured_with_usage(
             prompt_html,
             image_urls=image_urls,
             title=title,
             college_name=college_name,
+            model=chosen_model,
         )
-        try:
-            extraction = validate_and_normalize_taxonomy(extraction)
-        except ValueError:
+
+        def _taxonomy_failed_envelope() -> ExtractionEnvelope:
             elapsed_ms = int((time.monotonic() - started_at) * 1000)
             fallback_result = NoticeAIExtraction(target_departments=[])
             increment(AI_EXTRACTION_FALLBACK_TOTAL)
@@ -351,15 +379,47 @@ def extract_notice_info(
                 result=fallback_result,
                 meta=ExtractionRunMeta(
                     pipeline_version=fallback_result.pipeline_version,
-                    provider=provider,
-                    model=model,
+                    provider=f"google/{stats.model_id}",
+                    model=stats.model_id,
                     fallback_reason="taxonomy_validation_failed",
                     html_raw_len=html_raw_len,
                     html_clean_len=html_clean_len,
                     image_count=image_count,
                     elapsed_ms=elapsed_ms,
+                    vision_used=stats.vision_used,
+                    vision_images_sent=stats.vision_image_count,
+                    llm_call_count=stats.llm_calls,
+                    model_escalated=stats.escalated,
                 ),
             )
+
+        try:
+            extraction = validate_and_normalize_taxonomy(extraction)
+        except ValueError:
+            if getattr(settings, "ai_extraction_model_routing_enabled", False) and chosen_model != standard_model:
+                extraction2, usage2, stats2 = extract_notice_structured_with_usage(
+                    prompt_html,
+                    image_urls=image_urls,
+                    title=title,
+                    college_name=college_name,
+                    model=standard_model,
+                )
+                usage = add_token_usage(usage, usage2)
+                stats = ExtractorCallStats(
+                    vision_used=stats.vision_used or stats2.vision_used,
+                    vision_image_count=max(stats.vision_image_count, stats2.vision_image_count),
+                    raw_image_url_count=stats.raw_image_url_count,
+                    llm_calls=stats.llm_calls + stats2.llm_calls,
+                    model_id=standard_model,
+                    escalated=True,
+                )
+                try:
+                    extraction = validate_and_normalize_taxonomy(extraction2)
+                except ValueError:
+                    return _taxonomy_failed_envelope()
+            else:
+                return _taxonomy_failed_envelope()
+
         if getattr(settings, "ai_extraction_enforce_raw_substrings", False) and not (image_urls or []):
             try:
                 validate_extraction_raw_substrings(extraction, validation_source)
@@ -373,16 +433,21 @@ def extract_notice_info(
                     result=fallback_result,
                     meta=ExtractionRunMeta(
                         pipeline_version=fallback_result.pipeline_version,
-                        provider=provider,
-                        model=model,
+                        provider=f"google/{stats.model_id}",
+                        model=stats.model_id,
                         fallback_reason="raw_substring_validation_failed",
                         html_raw_len=html_raw_len,
                         html_clean_len=html_clean_len,
                         image_count=image_count,
                         elapsed_ms=elapsed_ms,
+                        vision_used=stats.vision_used,
+                        vision_images_sent=stats.vision_image_count,
+                        llm_call_count=stats.llm_calls,
+                        model_escalated=stats.escalated,
                     ),
                 )
         elapsed_ms = int((time.monotonic() - started_at) * 1000)
+        resolved_model = stats.model_id or standard_model
         envelope = ExtractionEnvelope(
             status="ok",
             result=extraction,
@@ -393,13 +458,17 @@ def extract_notice_info(
             ),
             meta=ExtractionRunMeta(
                 pipeline_version=extraction.pipeline_version,
-                provider=provider,
-                model=model,
+                provider=f"google/{resolved_model}",
+                model=resolved_model,
                 fallback_reason=None,
                 html_raw_len=html_raw_len,
                 html_clean_len=html_clean_len,
                 image_count=image_count,
                 elapsed_ms=elapsed_ms,
+                vision_used=stats.vision_used,
+                vision_images_sent=stats.vision_image_count,
+                llm_call_count=stats.llm_calls,
+                model_escalated=stats.escalated,
             ),
         )
         increment(AI_EXTRACTION_SUCCESS_TOTAL)
@@ -413,6 +482,9 @@ def extract_notice_info(
                 "fallback_reason": envelope.meta.fallback_reason or "",
                 "html_raw_len": html_raw_len,
                 "html_clean_len": html_clean_len,
+                "model": resolved_model,
+                "llm_call_count": stats.llm_calls,
+                "vision_used": stats.vision_used,
             },
         )
         return envelope

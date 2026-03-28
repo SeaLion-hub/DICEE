@@ -15,7 +15,11 @@ from instructor import Partial  # type: ignore[import]
 from pydantic import BaseModel, Field
 
 from app.domain.contracts.ai_extraction import NoticeAIExtraction, NoticeCategory
-from app.services.ai.extractor import EXTRACTOR_SYSTEM_PROMPT, _get_instructor_client
+from app.services.ai.extractor import (
+    EXTRACTOR_SYSTEM_PROMPT,
+    _get_instructor_client,
+    apply_vision_image_gate,
+)
 
 
 class NoticeExtractionDraft(BaseModel):
@@ -69,7 +73,8 @@ def stream_notice_extraction(
     from instructor.processing.multimodal import Image  # type: ignore[import]
 
     text = html_content[:100_000] or "(내용 없음)"
-    urls = (image_urls or [])[:5]
+    gated, _vision = apply_vision_image_gate(html_content, image_urls, title="")
+    urls = gated
     if not urls:
         user_content: str | list[Any] = text
     else:

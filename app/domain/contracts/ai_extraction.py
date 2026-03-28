@@ -314,7 +314,8 @@ class NoticeAIExtraction(BaseModel):
 
     summary: str | None = Field(
         default=None,
-        description="공지 내용 요약 (선택)",
+        max_length=500,
+        description="공지 내용 요약 (선택, 짧게 유지)",
     )
 
     schedules: list[ScheduleItem] = Field(
@@ -324,6 +325,7 @@ class NoticeAIExtraction(BaseModel):
 
     raw_eligibility_text: str | None = Field(
         default=None,
+        max_length=2500,
         description="본문에 지원 자격이 있다면, 판단이나 가공 없이 본문의 자격 요건 문장을 그대로 발췌. 없다면 null.",
     )
 
