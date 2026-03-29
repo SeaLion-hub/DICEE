@@ -10,7 +10,7 @@ if TYPE_CHECKING:
     from app.models.notice import Notice
     from app.models.user import User
 
-from sqlalchemy import DateTime, ForeignKey, String, UniqueConstraint
+from sqlalchemy import DateTime, ForeignKey, Index, String, text
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -21,14 +21,21 @@ class UserCalendarEvent(Base):
     """유저가 달력에 추가한 공지 일정. 한 공지를 내 달력에 중복 추가 방지."""
 
     __tablename__ = "user_calendar_events"
-    __table_args__ = (UniqueConstraint("user_id", "notice_id", name="uq_user_calendar_user_notice"),)
+    __table_args__ = (
+        Index(
+            "uq_user_calendar_user_notice",
+            "user_id",
+            "notice_id",
+            unique=True,
+        ),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     user_id: Mapped[uuid.UUID] = mapped_column(
-        PG_UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True
+        PG_UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
     )
     notice_id: Mapped[uuid.UUID] = mapped_column(
-        PG_UUID(as_uuid=True), ForeignKey("notices.id"), nullable=False, index=True
+        PG_UUID(as_uuid=True), ForeignKey("notices.id", ondelete="CASCADE"), nullable=False, index=True
     )
 
     # 표시용 제목·시작·종료
@@ -39,6 +46,7 @@ class UserCalendarEvent(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(UTC),
+        server_default=text("now()"),
     )
 
     user: Mapped["User"] = relationship("User", back_populates="user_calendar_events")

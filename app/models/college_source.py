@@ -6,7 +6,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, String, Text, text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, String, Text, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -20,6 +20,14 @@ if TYPE_CHECKING:
 
 class CollegeSource(Base):
     __tablename__ = "college_sources"
+    __table_args__ = (
+        Index(
+            "uq_college_sources_one_primary",
+            "college_id",
+            unique=True,
+            postgresql_where=text("is_primary = true"),
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         PG_UUID(as_uuid=True),

@@ -49,6 +49,8 @@
 ---
 ## 2026-03-29
 
+- [Alembic] `alembic/env.py` advisory lock 조회가 SQLAlchemy 2 autobegin 트랜잭션을 열어 `alembic upgrade head` 전체가 연결 종료 시 롤백되던 문제를 수정. `app/alembic_runtime.py`에서 lock 획득 후 명시적으로 `commit()`해 Alembic이 외부 트랜잭션으로 오인하지 않게 했고, `tests/test_alembic_runtime.py`로 회귀 테스트를 추가.
+
 - [워커·DB·AI 복구] `015`: `notices.ai_processing_started_at`; AI 파이프라인은 선점 커밋 후 HTTP·Gemini·최종 `update`(only_if_processing)로 분리, 실패 시 `reset_ai_notice_to_pending_after_failed_extraction_sync`; Beat `reset_stale_ai_processing_task`·`requeue_stale_pending_ai_notices_task`+설정·메트릭; `crawl_college_sync`에서 리스트 fetch 전 `commit`/`expunge_all`. 검증: `pytest` 486 passed, 4 skipped.
 - [Eng 리뷰·ingestion 동시성] `014_ingestion_one_running`: `ingestion_attempts`에 `college_source_id`당 `status=running`·`finished_at IS NULL` 부분 유니크 인덱스; `try_begin_ingestion_attempt_sync`는 `begin_nested`+`IntegrityError` 시 `None`; `increment_attempt_completed_batches_sync`는 `UPDATE … completed_batches = completed_batches + 1` 후 재조회. 테스트: `tests/test_ingestion_attempt_repository_sync.py`. 검증: `pytest` 486 passed, 4 skipped.
 - [Onyx 정렬·회귀] `notice_semantic_search_service.search_public_notices_semantic` 복구(임베딩+`search_notices_by_embedding`); 공개 API 시맨틱 503 테스트 패치 경로 수정; `run_crawl_job_sync` 단위 테스트는 `failure.settings`에 `patch.object(…, crawl_ingestion_attempt_enabled, False)`로 다른 테스트의 `MagicMock` settings 누수에도 안전. 검증: `pytest` 484 passed, 4 skipped.

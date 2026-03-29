@@ -10,7 +10,7 @@ if TYPE_CHECKING:
     from app.models.login_audit import LoginAudit
     from app.models.user_calendar_event import UserCalendarEvent
 
-from sqlalchemy import DateTime, String, UniqueConstraint, text
+from sqlalchemy import DateTime, Index, String, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -22,7 +22,15 @@ class User(Base):
     """유저. OAuth 전용(provider, provider_user_id). 비밀번호 해시 없음."""
 
     __tablename__ = "users"
-    __table_args__ = (UniqueConstraint("provider", "provider_user_id", name="uq_users_provider_uid"),)
+    __table_args__ = (
+        Index(
+            "uq_users_provider_uid",
+            "provider",
+            "provider_user_id",
+            unique=True,
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         PG_UUID(as_uuid=True),
@@ -39,16 +47,18 @@ class User(Base):
     # 예: {"major": "컴퓨터공학", "grade": 3, "military_served": true, "gpa": 3.5}
 
     # 로그아웃/탈취 시 서버에서 Refresh 토큰 무효화. JWT refresh payload의 token_version과 일치해야 유효.
-    refresh_token_version: Mapped[int] = mapped_column(default=0, nullable=False)
+    refresh_token_version: Mapped[int] = mapped_column(default=0, server_default=text("0"), nullable=False)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(UTC),
+        server_default=text("now()"),
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(UTC),
         onupdate=lambda: datetime.now(UTC),
+        server_default=text("now()"),
     )
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 

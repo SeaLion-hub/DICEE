@@ -30,13 +30,19 @@ class CrawlRun(Base):
         server_default=text("gen_random_uuid()"),
     )
     college_id: Mapped[uuid.UUID] = mapped_column(
-        PG_UUID(as_uuid=True), ForeignKey("colleges.id"), nullable=False, index=True
+        PG_UUID(as_uuid=True),
+        ForeignKey("colleges.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
     )
-    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), primary_key=True, nullable=False, index=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), primary_key=True, nullable=False)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False)  # running | success | failed
-    notices_upserted: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    total_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    success_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    fail_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    notices_upserted: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text("0"))
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     # 진행률·체크포인트: 청크 upsert와 동일 트랜잭션 커밋에 갱신. Resume는 별도 설계.
-    processed_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    processed_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text("0"))
     checkpointed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

@@ -33,11 +33,24 @@ class NoticeSchedule(Base):
     schedule_type: Mapped[str] = mapped_column(String(32), nullable=False)
     start_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     end_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    is_all_day: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    is_tbd: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    is_always_open: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    is_all_day: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=text("false"))
+    is_tbd: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=text("false"))
+    is_always_open: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default=text("false"),
+    )
     schedule_text_fallback: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=text("now()"),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=text("now()"),
+    )
 
     notice: Mapped["Notice"] = relationship("Notice", back_populates="notice_schedules")

@@ -14,7 +14,7 @@ if TYPE_CHECKING:
     from app.models.user_calendar_event import UserCalendarEvent
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import DateTime, ForeignKey, Index, String, UniqueConstraint, text
+from sqlalchemy import DateTime, ForeignKey, Index, String, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -26,10 +26,37 @@ from app.models.base import Base
 class Notice(Base):
     __tablename__ = "notices"
     __table_args__ = (
-        UniqueConstraint("college_id", "external_id", name="uq_notices_college_external"),
+        Index(
+            "uq_notices_college_external",
+            "college_id",
+            "external_id",
+            unique=True,
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
         Index("ix_notices_hashtags_gin", "hashtags", postgresql_using="gin"),
         Index("ix_notices_eligibility_gin", "eligibility", postgresql_using="gin"),
-        Index("ix_notices_college_published", "college_id", "published_at"),
+        Index("ix_notices_ai_status_processing_started", "ai_status", "ai_processing_started_at"),
+        Index(
+            "ix_notices_list_by_college",
+            "college_id",
+            text("published_at DESC NULLS LAST"),
+            text("created_at DESC"),
+            text("id DESC"),
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+        Index(
+            "ix_notices_list_global",
+            text("published_at DESC NULLS LAST"),
+            text("created_at DESC"),
+            text("id DESC"),
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+        Index(
+            "idx_notices_title_trgm",
+            "title",
+            postgresql_using="gin",
+            postgresql_ops={"title": "gin_trgm_ops"},
+        ),
         Index(
             "ix_notices_embedding_hnsw_cosine",
             "embedding",
@@ -45,9 +72,12 @@ class Notice(Base):
         server_default=text("gen_random_uuid()"),
     )
     college_id: Mapped[uuid.UUID] = mapped_column(
-        PG_UUID(as_uuid=True), ForeignKey("colleges.id"), nullable=False, index=True
+        PG_UUID(as_uuid=True),
+        ForeignKey("colleges.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
     )
-    external_id: Mapped[str] = mapped_column(String(512), nullable=False, index=True)
+    external_id: Mapped[str] = mapped_column(String(512), nullable=False)
     title: Mapped[str] = mapped_column(String(512), nullable=False)
     url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
@@ -76,19 +106,34 @@ class Notice(Base):
 
     # 3. 운영용 필드
     # AI 처리 선점·멱등: pending → processing(선점) → done. FOR UPDATE SKIP LOCKED와 연동.
-    ai_status: Mapped[str] = mapped_column(String(20), default="pending", nullable=False, index=True)
+    ai_status: Mapped[str] = mapped_column(
+        String(20),
+        default="pending",
+        server_default=text("'pending'"),
+        nullable=False,
+        index=True,
+    )
     ai_processing_started_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         nullable=True,
     )
     content_hash: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
-    is_manual_edited: Mapped[bool] = mapped_column(default=False, nullable=False)
+    is_manual_edited: Mapped[bool] = mapped_column(
+        default=False,
+        server_default=text("false"),
+        nullable=False,
+    )
 
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC), index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        server_default=text("now()"),
+    )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(UTC),
         onupdate=lambda: datetime.now(UTC),
+        server_default=text("now()"),
     )
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 

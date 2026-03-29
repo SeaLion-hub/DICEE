@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, text
+from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -20,6 +20,14 @@ if TYPE_CHECKING:
 
 class IngestionAttempt(Base):
     __tablename__ = "ingestion_attempts"
+    __table_args__ = (
+        Index(
+            "uq_ingestion_attempts_one_running_per_source",
+            "college_source_id",
+            unique=True,
+            postgresql_where=text("status = 'running' AND finished_at IS NULL"),
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         PG_UUID(as_uuid=True),

@@ -8,7 +8,6 @@ prevents concurrent alembic upgrade head from multiple release processes.
 
 import os
 import sys
-import time
 # PostgreSQL 클라이언트 인코딩 강제 (서버 응답 UTF-8 디코딩)
 os.environ.setdefault("PGCLIENTENCODING", "UTF8")
 # 마이그레이션 전용: APP_ENTRY 미설정 시 Settings 검증 통과 (배포 파이프라인에서 alembic만 실행할 때)
@@ -21,12 +20,13 @@ import psycopg
 from pgvector.psycopg import register_vector
 
 from alembic import context
-from sqlalchemy import create_engine, pool, text
+from sqlalchemy import create_engine, pool
 from sqlalchemy.exc import OperationalError
 
 # Advisory lock ID for single migrator. Only one process can hold this lock; prevents duplicate migration runs.
 ALEMBIC_ADVISORY_LOCK_ID = int(os.environ.get("ALEMBIC_ADVISORY_LOCK_ID", "1296183890"))
 
+from app.alembic_runtime import acquire_migration_lock  # noqa: E402
 from app.core.config import settings  # noqa: E402
 from app.models import Base  # noqa: E402
 
@@ -38,6 +38,14 @@ if config.config_file_name is not None:
 
 target_metadata = Base.metadata
 
+AUTOGEN_IGNORED_TABLES = {
+    "crawl_logs",
+    "crawl_logs_default",
+    "crawl_runs_default",
+    "keyword_subscriptions",
+    "user_profiles",
+}
+
 
 def process_revision_directives(context, revision, directives):
     if getattr(config.cmd_opts, "autogenerate", False):
@@ -45,6 +53,22 @@ def process_revision_directives(context, revision, directives):
         if script.upgrade_ops.is_empty():
             directives[:] = []
             print("[alembic] No schema changes detected; empty revision skipped.")
+
+
+def include_object(object_, name, type_, reflected, compare_to):
+    if type_ == "table" and name in AUTOGEN_IGNORED_TABLES:
+        return False
+
+    table_name = None
+    if hasattr(object_, "table") and getattr(object_, "table", None) is not None:
+        table_name = object_.table.name
+    elif type_ == "column" and hasattr(object_, "table"):
+        table_name = object_.table.name
+
+    if table_name in AUTOGEN_IGNORED_TABLES:
+        return False
+
+    return True
 
 
 def _to_psycopg_url(url: str) -> str:
@@ -108,6 +132,7 @@ def run_migrations_offline() -> None:
         literal_binds=True,
         compare_type=True,
         compare_server_default=True,
+        include_object=include_object,
         process_revision_directives=process_revision_directives,
         dialect_opts={"paramstyle": "named"},
     )
@@ -138,30 +163,26 @@ def run_migrations_online() -> None:
             )
             with connectable.connect() as connection:
                 # Serialize migration: only one process may run alembic upgrade at a time.
-                lock_acquired = connection.execute(
-                    text("SELECT pg_try_advisory_lock(:lid)"), {"lid": ALEMBIC_ADVISORY_LOCK_ID}
-                ).scalar()
+                lock_wait_sec = float(os.environ.get("ALEMBIC_LOCK_WAIT_SEC", "30"))
+                lock_retries = int(os.environ.get("ALEMBIC_LOCK_RETRIES", "6"))
+                lock_acquired = acquire_migration_lock(
+                    connection,
+                    ALEMBIC_ADVISORY_LOCK_ID,
+                    lock_wait_sec=lock_wait_sec,
+                    lock_retries=lock_retries,
+                )
                 if not lock_acquired:
-                    lock_wait_sec = float(os.environ.get("ALEMBIC_LOCK_WAIT_SEC", "30"))
-                    lock_retries = int(os.environ.get("ALEMBIC_LOCK_RETRIES", "6"))
-                    for _ in range(lock_retries):
-                        time.sleep(lock_wait_sec)
-                        lock_acquired = connection.execute(
-                            text("SELECT pg_try_advisory_lock(:lid)"), {"lid": ALEMBIC_ADVISORY_LOCK_ID}
-                        ).scalar()
-                        if lock_acquired:
-                            break
-                    if not lock_acquired:
-                        sys.stderr.write(
-                            "[alembic] Could not acquire advisory lock; another migrator may be running. Exit.\n"
-                        )
-                        sys.stderr.flush()
-                        sys.exit(1)
+                    sys.stderr.write(
+                        "[alembic] Could not acquire advisory lock; another migrator may be running. Exit.\n"
+                    )
+                    sys.stderr.flush()
+                    sys.exit(1)
                 context.configure(
                     connection=connection,
                     target_metadata=target_metadata,
                     compare_type=True,
                     compare_server_default=True,
+                    include_object=include_object,
                     process_revision_directives=process_revision_directives,
                 )
                 with context.begin_transaction():
