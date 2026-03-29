@@ -63,15 +63,15 @@ def _print_hook_failure_hint() -> None:
             [
                 "",
                 "=" * 72,
-                "pre-commit: 위쪽 로그에서 실패한 훅 이름(예: black, ruff, mypy)을 확인하세요.",
+                "pre-commit: 위쪽 로그에서 실패한 훅 이름(예: black, ruff)을 확인하세요.",
                 "",
                 "자주 있는 경우:",
                 "  - check mixed stage: app/tests의 .py가 일부만 스테이징됨 → 전부 git add 하거나",
                 "    SKIP=check-mixed-stage-python git commit ... (PowerShell: $env:SKIP='check-mixed-stage-python')",
                 "  - black/ruff: 포맷/린트 수정 후 파일을 다시 스테이징 (git add) 후 커밋",
-                "  - mypy: 타입 오류 수정",
                 "",
-                "같은 검사를 로컬에서:  pre-commit run --all-files",
+                "타입 검사(mypy)는 pre-commit에 포함되지 않음 → 로컬: python -m mypy app, CI: GitHub Actions.",
+                "로컬에서 동일 검사:  pre-commit run --all-files  &&  python -m mypy app",
                 "=" * 72,
                 "",
             ]

@@ -49,7 +49,8 @@
 ---
 ## 2026-03-29
 
-- [개발 경험·Git] 커밋 실패 원인: 미스테이징이 남은 채로 pre-commit이 mypy까지 실행되면(수십 초) 그 사이 워킹 트리가 바뀌어 `git diff`가 달라지고 mypy 훅이 “files were modified by this hook”으로 실패할 수 있음. 조치: 커밋 전 `git add`로 의도한 변경을 모두 스테이징하고 훅 실행 중 파일 저장 자제, 긴급 시 PowerShell `$env:SKIP='mypy'`. 실패 후 `pre-commit-wrapper: keep-index` 스태시가 남으면 내용 확인 후 `git stash pop` 또는 `drop`.
+- [개발 경험·Git] pre-commit에서 mirrors-mypy 훅 제거: 장시간 실행 중 IDE 저장 등으로 `git diff`가 변해 “files were modified by this hook” 오탐이 나던 문제 방지. 타입 검사는 CI `mypy app` 및 로컬 `python -m mypy app` 유지. 커밋 훅은 mixed-stage·black·ruff만.
+- [개발 경험·Git·역사] 과거: 미스테이징+긴 mypy 훅 조합으로 동일 증상 가능 → 커밋 전 전체 스테이징·훅 중 저장 자제. 실패 후 `pre-commit-wrapper: keep-index` 스태시는 확인 후 `pop`/`drop`.
 - [엔지 리뷰·미세 개선] `redis._jti_log_safe` 방어적 `str`/UTF-8, `release_cache_lock`·`release_cached_lock` bool 반환; `get_verified_access`에서 `compute_user_id_hash`는 `(ValueError, TypeError)`·`set_user`는 별도 `Exception` fail-open(B안); `list_recent_notices_for_college_preview`는 `join(Notice.college)`. 테스트: `test_read_cache_soft_ttl`·`test_auth_security_hardening`. 검증: `pytest` 423 passed, 4 skipped.
 - [5단계·테스트·라우팅] `tests/test_v1_phase5_authenticated_api.py`: JWT+Blocklist 목·서비스 패치로 `GET/PATCH /v1/users/me`, `GET /v1/notices/matched`, 달력·ICS·유저 일정 CRUD·401/404 검증. `app/main.py`에서 `v1_notices_matched`를 `v1_notices`보다 먼저 등록해 `/v1/notices/matched`가 `/{notice_id}`에 잡히던 422 회귀 방지. `docs/RELEASE_GATE.md`·`tests/CRITICAL_PATHS.md` 스모크·크리티컬 경로 반영. 검증: `pytest` 418 passed, `ruff`, `mypy app`.
 - [학과 카탈로그] `app/data/department_catalog.json`을 연세 단과대·학과(전공) 구조(문과·상경·경영·공과·생명시스템·AI융합·신과·사회과학·음악·생활과학·교육과학·UIC·GLC·의·치·간호·약)로 확장; 단과대 단위 `yu_college_*` 코드 포함. 기존 테스트용 `yu_cs`→컴퓨터과학과 유지. 영향: `GET /v1/meta/department-options`·프로필 `department_codes` 허용 집합.

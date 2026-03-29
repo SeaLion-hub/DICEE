@@ -63,7 +63,7 @@ disallow_untyped_defs = false
 module = ["celery", "celery.*"]
 ignore_missing_imports = true
 
-# Instructor omitted from pre-commit mypy venv (heavy/unstable dep tree for hooks).
+# Instructor: heavy/unstable dep tree; use full dev env for `mypy app` (CI / local).
 [[tool.mypy.overrides]]
 module = [
     "instructor",

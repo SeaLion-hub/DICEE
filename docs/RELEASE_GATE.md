@@ -38,7 +38,7 @@
 
 - `pytest -q`
 - `ruff check app tests`
-- `mypy app`
+- `mypy app` (Git 훅 pre-commit에는 포함하지 않음; PR 푸시 시 CI에서 실행)
 - `alembic upgrade head` (staging DB. staging DB 설정·연결은 [DEPLOYMENT](DEPLOYMENT.md) "로컬 개발 참고"·Railway Variables 참고.)
 - **스모크 테스트**: 아래 엔드포인트 케이스로 핵심 경로가 기동 후 정상/장애 시 의도대로 동작하는지 최소 검증.
 - `POST /internal/trigger-crawl` 성공/부분실패/전체실패 케이스

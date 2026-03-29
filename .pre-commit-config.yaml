@@ -3,6 +3,10 @@
 # scripts/pre_commit_wrapper.py (git stash --keep-index before hooks). That avoids
 # "Stashed changes conflicted with hook auto-fixes" when ruff --fix runs with unstaged files.
 # 첫 훅 실패 시 나머지 생략 → 로그가 짧아져 원인 파악이 쉬움.
+#
+# Mypy는 pre-commit에 넣지 않음: 훅이 수십 초 걸리는 동안 IDE 저장 등으로 git diff가
+# 바뀌면 "files were modified by this hook" 오탐이 난다. 타입 검사는 CI(.github/workflows/ci.yml)
+# 및 로컬 `python -m mypy app`으로 수행한다.
 fail_fast: true
 
 default_language_version:
@@ -32,35 +36,3 @@ repos:
       - id: ruff
         args: [--fix]
         files: ^(app|tests)/
-
-  # Hook venv cannot use -r requirements.txt (wrong cwd). Keep pins in sync with requirements.txt.
-  - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v1.13.0
-    hooks:
-      - id: mypy
-        args: [--config-file=pyproject.toml, --no-incremental, app]
-        pass_filenames: false
-        additional_dependencies:
-          - fastapi==0.115.6
-          - uvicorn==0.32.1
-          - sqlalchemy==2.0.36
-          - psycopg[binary]==3.3.2
-          - alembic==1.14.0
-          - pgvector==0.4.2
-          - pydantic==2.11.7
-          - pydantic-settings==2.13.0
-          - python-dotenv==1.1.1
-          - celery==5.6.2
-          - redis==5.2.1
-          - beautifulsoup4==4.13.5
-          - requests==2.32.5
-          - tenacity==9.0.0
-          - httpx==0.28.1
-          - PyJWT==2.10.1
-          - google-auth==2.40.3
-          - pyjwt-key-fetcher==0.8.0
-          - sentry-sdk==2.18.0
-          - structlog==25.5.0
-          - types-requests==2.32.0.20241016
-          - types-boto3==1.35.84
-          - types-psutil>=6.1.0.20241228
