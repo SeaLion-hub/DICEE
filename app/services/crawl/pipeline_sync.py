@@ -1,4 +1,8 @@
-"""Sync crawl pipeline: adapter, finalize chunk, run pipeline, crawl_college_sync."""
+"""
+Sync crawl pipeline: adapter, finalize chunk, run pipeline, crawl_college_sync.
+
+Chunk 경계에서 commit+expunge 후 콜백(Crawlee handler 결과 배치 플러시와 동일한 역할).
+"""
 
 import logging
 import uuid

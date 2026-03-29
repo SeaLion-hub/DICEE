@@ -256,6 +256,17 @@ class Settings(BaseSettings):
     crawl_collect_async_concurrency: int = Field(10, ge=1, le=200)
     crawl_seen_max_size: int = Field(10_000, ge=1_000, le=1_000_000)
     crawl_run_stale_seconds: float = Field(3600.0, ge=300.0, le=86400.0)
+    crawler_http_proxy_url: SecretStr | None = Field(
+        None,
+        description=(
+            "Optional HTTP(S) proxy for worker outbound crawl. "
+            "When unset, CRAWLER_HTTP_PROXY env is used (see crawl_worker_proxy)."
+        ),
+    )
+    llm_browser_crawl_enabled: bool = Field(
+        False,
+        description="Reserved for LLM-driven browser PoC; default off (docs/crawl-llm-browser-poc.md).",
+    )
 
     # Content storage
     content_storage_type: str = "local"

@@ -33,6 +33,11 @@ CRAWL_DISPATCH_NET_RECV_MB = "crawl_dispatch_net_recv_mb"
 # 워커 크롤 1회 실행 동안 upsert 대기 chunk(list) 길이 피크. 라벨: college_code
 CRAWL_PIPELINE_PEAK_PENDING_DRAFTS = "crawl_pipeline_peak_pending_drafts"
 
+# POST /internal/trigger-crawl 오케스트레이션 (라벨: college_code)
+INTERNAL_TRIGGER_CRAWL_ENQUEUED_TOTAL = "internal_trigger_crawl_enqueued_total"
+INTERNAL_TRIGGER_CRAWL_SKIPPED_LOCK_TOTAL = "internal_trigger_crawl_skipped_lock_total"
+INTERNAL_TRIGGER_CRAWL_ENQUEUE_FAILED_TOTAL = "internal_trigger_crawl_enqueue_failed_total"
+
 # reason 라벨 값 (고정 enum, 카디널리티 제한)
 RETRY_REASON_TIMEOUT = "timeout"
 RETRY_REASON_429 = "429"

@@ -322,7 +322,12 @@ def crawl_college_task(
     lock_token: str | None = None,
     enqueued_at: float | None = None,
 ):
-    """Celery 워커 진입점. 동기 세션·crawl_college_sync. finally 락 해제; heartbeat로 TTL 연장."""
+    """
+    Celery 워커 진입점. 동기 세션·crawl_college_sync. finally 락 해제; heartbeat로 TTL 연장.
+
+    Crawlee식 지연 플러시: 파이프라인은 crawl_upsert_chunk_size마다 DB commit·expunge 후
+    on_chunk로 AI 큐에 notice id만 적재한다 (app.services.crawl.pipeline_sync).
+    """
     task_id = getattr(self.request, "id", None) or ""
     _set_task_context(str(task_id) if task_id else None, college_code)
     lock_hint = (lock_token[:8] + "...") if lock_token else "none"

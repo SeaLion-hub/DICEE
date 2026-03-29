@@ -134,6 +134,8 @@ alembic upgrade head
 celery -A app.core.celery_app:app worker -l info -O fair -Q critical,crawl,ai --concurrency=1
 ```
 
+- **용량·백프레셔·청크 커밋:** [CRAWL_WORKER_CAPACITY.md](CRAWL_WORKER_CAPACITY.md) (Railway RAM, `celery_dispatch_memory_soft_limit_mb`, `crawl_upsert_chunk_size` 등).
+
 - Windows 로컬 디버그 시:
 
 ```bash

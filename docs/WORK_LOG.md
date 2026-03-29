@@ -53,6 +53,7 @@
 - [개발 경험] pre-commit 패치 stash와 ruff `--fix` 충돌 완화: `scripts/pre_commit_wrapper.py`가 `git stash push --keep-index` 후 `pre-commit hook-impl` 호출, 끝에 `stash pop`. 훅 설치: `python scripts/install_pre_commit_hook.py`. `.pre-commit-config.yaml`·`pre_commit_check_mixed_stage.py` 주석 보강.
 - [pre-commit UX] `pre_commit_wrapper.py`에 누락된 `import os`로 래퍼 훅 사용 시 `NameError`가 나던 문제 수정; 훅·stash 실패 시 stderr에 한국어 안내·재현 명령(`pre-commit run --all-files`, PowerShell `SKIP` 예) 추가. `pre_commit_check_mixed_stage.py` 첫 줄에 커밋 차단 원인 표시. 검증: `pytest` 383 passed.
 - [Git] `.gitignore`에 `pytest_errors.log`·`/status.txt` 추가, 실수로 추적되던 `pytest_errors.log`는 `git rm --cached`로 인덱스에서만 제거(워킹 트리 파일 유지).
+- [Crawlee 패턴 차용] 용량 문서 `CRAWL_WORKER_CAPACITY.md`, 레지스트리·프록시·LLM PoC 범위 문서, ADR `decisions/crawlee-patterns-without-framework.md`; `crawler_http_proxy_url`·`llm_browser_crawl_enabled`·`crawl_worker_proxy` 헬퍼; 트리거 경로 메트릭·구조화 로그(`internal_crawl_service`); `DEPLOYMENT.md` 링크. 검증: `pytest` 390 passed.
 
 ## 2026-03-28
 

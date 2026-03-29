@@ -14,6 +14,13 @@ from redis.asyncio import Redis as RedisAsyncio
 from app.core.config import settings
 from app.core.crawler_config import COLLEGE_CODE_TO_MODULE
 from app.core.exceptions import CollegeNotFoundError
+from app.core.logging_context import get_request_context
+from app.core.metrics import (
+    INTERNAL_TRIGGER_CRAWL_ENQUEUE_FAILED_TOTAL,
+    INTERNAL_TRIGGER_CRAWL_ENQUEUED_TOTAL,
+    INTERNAL_TRIGGER_CRAWL_SKIPPED_LOCK_TOTAL,
+    increment,
+)
 from app.core.redis import (
     RedisLockUnavailableError,
     acquire_trigger_lock,
@@ -31,6 +38,16 @@ from app.domain.contracts.internal_contracts import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _trigger_structured_extra(college_code: str, *, idempotency_key_set: bool) -> dict[str, object]:
+    """request_id/trace_id + college_code for trigger-crawl logs (no raw idempotency value)."""
+    out: dict[str, object] = {"college_code": college_code, "idempotency_key_set": idempotency_key_set}
+    ctx = get_request_context()
+    rid = ctx.get("request_id") or ctx.get("trace_id")
+    if rid:
+        out["request_id"] = str(rid)
+    return out
 
 
 def normalize_trigger_idempotency_key(value: str | None) -> str | None:
@@ -119,6 +136,7 @@ async def _enqueue_colleges(
     task_ids: list[dict] = []
     skipped: list[str] = []
     failed: list[str] = []
+    idempotency_set = key_stripped is not None
 
     for i, code in enumerate(codes):
         lock_token: str | None = None
@@ -129,11 +147,13 @@ async def _enqueue_colleges(
                 logger.exception(
                     "Trigger lock unavailable (Redis error) for college_code=%s",
                     code,
-                    extra={"college_code": code},
+                    extra=_trigger_structured_extra(code, idempotency_key_set=idempotency_set),
                 )
+                increment(INTERNAL_TRIGGER_CRAWL_ENQUEUE_FAILED_TOTAL, 1, labels={"college_code": code})
                 failed.append(code)
                 continue
             if not acquired:
+                increment(INTERNAL_TRIGGER_CRAWL_SKIPPED_LOCK_TOTAL, 1, labels={"college_code": code})
                 skipped.append(code)
                 continue
 
@@ -148,18 +168,21 @@ async def _enqueue_colleges(
                     "countdown_sec": countdown,
                 }
             )
+            increment(INTERNAL_TRIGGER_CRAWL_ENQUEUED_TOTAL, 1, labels={"college_code": code})
             logger.info(
                 "trigger-crawl enqueued: college_code=%s task_id=%s countdown=%s",
                 code,
                 task_id,
                 countdown,
+                extra=_trigger_structured_extra(code, idempotency_key_set=idempotency_set),
             )
         except (ConnectionError, TimeoutError, OSError):
             logger.exception(
                 "trigger-crawl apply_async failed: code=%s",
                 code,
-                extra={"college_code": code},
+                extra=_trigger_structured_extra(code, idempotency_key_set=idempotency_set),
             )
+            increment(INTERNAL_TRIGGER_CRAWL_ENQUEUE_FAILED_TOTAL, 1, labels={"college_code": code})
             if redis is not None and lock_token:
                 await release_trigger_lock(redis, code, lock_token)
             failed.append(code)
