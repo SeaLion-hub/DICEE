@@ -2,12 +2,13 @@
 
 DICEE는 대학 공지 데이터를 수집·정규화해, 필요한 정보를 더 빠르게 찾을 수 있게 만드는 공지 인텔리전스 백엔드입니다.
 
-현재 상태: **M2 (Intelligence)** — 3·4단계(크롤·Celery·AI 추출·taxonomy)는 코드 기준 핵심 완료. **5단계**(프로필 매칭·달력·FTS 등 잔여 API) 진행 구간.
+현재 상태: **M2 (Intelligence)** — 3·4단계(크롤·Celery·AI 추출·taxonomy)는 코드 기준 핵심 완료. **5단계 코어**(프로필·맞춤 피드·달력·ICS·`notice_schedules` 동기화)는 API 반영됨. **PostgreSQL FTS·GIN 키워드 검색**은 후속 PR.
 
 ## Key Features
 
 - **공지 통합 수집**: 단과대/학과별로 분산된 공지를 하나의 API로 일관되게 제공합니다.
-- **공개 조회 API**: `GET /v1/notices`·`GET /v1/notices/{id}`·`POST /v1/notices/search/semantic`(임베딩 기반 검색). 인증은 `GET /v1/auth/google` 등 [docs/ROADMAP_PHASES.md](docs/ROADMAP_PHASES.md) 5단계에 프로필·매칭·달력 API가 남아 있습니다.
+- **공개 조회 API**: `GET /v1/notices`·`GET /v1/notices/{id}`·`POST /v1/notices/search/semantic`(임베딩 기반 검색).
+- **로그인 유저·맞춤·달력**: `GET`/`PATCH /v1/users/me`, `GET /v1/meta/department-options`·`grade-options`, 맞춤 목록 `GET /v1/notices/matched`, `GET /v1/calendar/events`·`GET /v1/calendar/feed.ics`, 고정 일정 `POST`/`DELETE /v1/users/me/calendar/events/...`. 학과 코드는 `app/data/department_catalog.json`. 상세는 [docs/ROADMAP_PHASES.md](docs/ROADMAP_PHASES.md) 5단계·[user-notice-matching-and-api-contracts.md](docs/decisions/user-notice-matching-and-api-contracts.md).
 - **중복·재처리 최소화**: `content_hash` 기반 변경 감지와 upsert 정책으로 불필요한 재처리를 줄입니다.
 - **운영 안정성 중심 크롤링**: 재시도, 레이트 리밋, 트리거 멱등성, 분산 락, 큐 기반 실행을 기본 설계에 포함합니다.
 - **AI 파이프라인 대응 구조**: `notice_id` 중심 전달 방식으로 구조화 추출·매칭 파이프라인을 확장 가능하게 유지합니다.
