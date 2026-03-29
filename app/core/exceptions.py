@@ -15,6 +15,12 @@ class CollegeNotFoundError(DICEEError, ValueError):
         super().__init__(college_code)
 
 
+class UserNotFoundError(DICEEError):
+    """요청한 user_id에 해당하는 사용자가 없음."""
+
+    pass
+
+
 class EmptySemanticQueryError(DICEEError):
     """시맨틱 검색 쿼리가 비어 있음. 라우터에서 고정 detail로 매핑."""
 

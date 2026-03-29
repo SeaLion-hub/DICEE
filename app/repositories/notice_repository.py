@@ -58,6 +58,15 @@ def _encode_cursor(published_at: datetime | None, created_at: datetime | None, n
     return base64.b64encode(f"{pub_s}|{created_s}|{notice_id}".encode()).decode()
 
 
+def encode_notice_list_cursor(
+    published_at: datetime | None,
+    created_at: datetime | None,
+    notice_id: uuid.UUID,
+) -> str:
+    """매칭 피드 등에서 마지막 반환 공지 기준 다음 키셋 커서."""
+    return _encode_cursor(published_at, created_at, notice_id)
+
+
 async def list_notices_paginated(
     session: AsyncSessionLike,
     *,

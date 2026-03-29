@@ -23,6 +23,8 @@
 - **마이그레이션:** Alembic `012_notice_embedding`이 `CREATE EXTENSION IF NOT EXISTS vector` 및 `embedding vector(768)` 컬럼·HNSW 인덱스를 적용합니다. 인덱스 생성은 `SET LOCAL statement_timeout = 0`으로 긴 작업을 허용합니다. **대용량 `notices` 테이블**이면 유지보수 창에서 실행하는 것을 권장합니다.
 - **실행 주체:** API 프로세스는 마이그레이션을 돌리지 않습니다. Railway **Release Command** `alembic upgrade head` 또는 Compose의 **`migrate` 서비스**만 마이그레이션을 실행합니다 ([Quick Start](#quick-start-5분) 원칙과 동일).
 
+**달력 MV(`active_notice_schedules_mv`):** v1 API는 `notice_schedules` 기준으로 조회합니다. MV를 쓰는 경로가 있다면 프로덕션에서는 주기적 `REFRESH MATERIALIZED VIEW CONCURRENTLY`(별도 beat/cron 또는 운영 잡)로 최신화하세요. 앱 요청마다 REFRESH는 권장하지 않습니다.
+
 ### Alembic 이중 base·빈 DB
 
 히스토리상 **루트 리비전이 두 개**입니다(`001`, `v7_001`). 머지(`007_merge_heads`) 이전까지는 서로 다른 줄기이며, Alembic은 head까지 올리기 위해 **양쪽 조상을 모두 적용**합니다. 적용 순서상 v7 초기 스키마가 먼저 깔린 뒤 레거시 `001`…`006`이 실행될 수 있어, 레거시 쪽은 **`app/legacy_alembic_guard`**로 “이미 v7(colleges.id가 UUID)이면 no-op” 처리합니다. 그래도 `alembic_version`만 어긋난 DB는 기존처럼 `stamp`·수동 정렬이 필요할 수 있습니다.

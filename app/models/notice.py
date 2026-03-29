@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from app.models.college import College
     from app.models.notice_content import NoticeContent
+    from app.models.notice_schedule import NoticeSchedule
     from app.models.notice_taxonomy_mapping import NoticeTaxonomyMapping
     from app.models.user_calendar_event import UserCalendarEvent
 
@@ -89,6 +90,11 @@ class Notice(Base):
     )
     taxonomy_mappings: Mapped[list["NoticeTaxonomyMapping"]] = relationship(
         "NoticeTaxonomyMapping",
+        back_populates="notice",
+        cascade="all, delete-orphan",
+    )
+    notice_schedules: Mapped[list["NoticeSchedule"]] = relationship(
+        "NoticeSchedule",
         back_populates="notice",
         cascade="all, delete-orphan",
     )

@@ -8,11 +8,22 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql import func
 
+from app.core.database import AsyncSessionLike
 from app.domain.contracts.user_contracts import UserUpsertCmd
 from app.models.user import User
 
 
-async def get_by_id(session: AsyncSession, user_id: uuid.UUID) -> User | None:
+async def update_profile_json(
+    session: AsyncSession,
+    user_id: uuid.UUID,
+    profile_json: dict[str, object] | None,
+) -> None:
+    """users.profile_json 갱신."""
+    now = datetime.now(UTC)
+    await session.execute(update(User).where(User.id == user_id).values(profile_json=profile_json, updated_at=now))
+
+
+async def get_by_id(session: AsyncSessionLike, user_id: uuid.UUID) -> User | None:
     """id로 유저 조회."""
     result = await session.execute(select(User).where(User.id == user_id))
     return result.scalars().one_or_none()

@@ -12,7 +12,11 @@ from starlette.datastructures import State
 
 from app.api import health, internal
 from app.api.v1 import auth as v1_auth
+from app.api.v1 import calendar as v1_calendar
+from app.api.v1 import meta as v1_meta
 from app.api.v1 import notices as v1_notices
+from app.api.v1 import notices_matched as v1_notices_matched
+from app.api.v1 import users as v1_users
 from app.core.config import settings
 
 if settings.app_entry != "api":
@@ -94,7 +98,12 @@ app = FastAPI(
 app.include_router(health.router)
 app.include_router(internal.router)
 app.include_router(v1_auth.router, prefix="/v1")
+app.include_router(v1_meta.router, prefix="/v1")
+app.include_router(v1_users.router, prefix="/v1")
+app.include_router(v1_calendar.feed_router, prefix="/v1")
+app.include_router(v1_calendar.user_cal_router, prefix="/v1")
 app.include_router(v1_notices.router, prefix="/v1")
+app.include_router(v1_notices_matched.router, prefix="/v1")
 
 app.add_middleware(Sanitize5xxMiddleware)
 app.add_middleware(RequestMetricsMiddleware)
@@ -103,7 +112,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.allowed_origins_list,
     allow_credentials=True,
-    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=[
         "Authorization",
         "Content-Type",

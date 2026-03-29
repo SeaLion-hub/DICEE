@@ -49,6 +49,8 @@
 ---
 ## 2026-03-29
 
+- [학과 카탈로그] `app/data/department_catalog.json`을 연세 단과대·학과(전공) 구조(문과·상경·경영·공과·생명시스템·AI융합·신과·사회과학·음악·생활과학·교육과학·UIC·GLC·의·치·간호·약)로 확장; 단과대 단위 `yu_college_*` 코드 포함. 기존 테스트용 `yu_cs`→컴퓨터과학과 유지. 영향: `GET /v1/meta/department-options`·프로필 `department_codes` 허용 집합.
+- [5단계 구현] 매칭·달력·ICS: `GET/PATCH /v1/users/me`, 메타 `department-options`·`grade-options`, `GET /v1/notices/matched`, AI 반영 후 `notice_schedules` 동기 교체, `GET /v1/calendar/events`·`feed.ics`, `POST/DELETE /v1/users/me/calendar/events`; Router→Service→Repository, domain contracts로 import-linter 정합. `user_repository.get_by_id`에 `AsyncSessionLike`, `bulk_insert_mappings`에 매퍼 전달로 mypy 정리. `DEPLOYMENT.md`에 MV REFRESH 운영 한 줄. 검증: `pytest` 407 passed, `mypy app`, import-linter.
 - [5단계·계획] 엔지 리뷰 결정 반영: `docs/ROADMAP_PHASES.md`·`docs/ROADMAP.md`에 5단계 스코프 확정 — 매칭·달력·ICS 우선, PostgreSQL FTS는 후속 PR, Google Calendar 연동은 6단계 이후, v1은 ICS만. 영향: 구현 순서·릴리스 단위 고정.
 - [문서] `/document-release`에 맞춰 `README.md`·`docs/ROADMAP.md`·`docs/ROADMAP_PHASES.md` 동기화: 3·4단계 완료·5단계 잔여(매칭·달력·FTS) 명시, 추가 검토 아이디어 중 구현된 항목 `(반영됨)` 표기, CI·rate limit·기술 부채 표 각주 보강. 영향: 온보딩·단계 판단 시 문서-코드 정합.
 - [개발 경험] pre-commit 패치 stash와 ruff `--fix` 충돌 완화: `scripts/pre_commit_wrapper.py`가 `git stash push --keep-index` 후 `pre-commit hook-impl` 호출, 끝에 `stash pop`. 훅 설치: `python scripts/install_pre_commit_hook.py`. `.pre-commit-config.yaml`·`pre_commit_check_mixed_stage.py` 주석 보강.

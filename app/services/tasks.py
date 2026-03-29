@@ -63,11 +63,21 @@ from app.repositories.notice_repository import (
     update_notice_content_url_sync,
     update_notice_embedding_sync,
 )
+from app.repositories.notice_schedule_repository import replace_notice_schedules_sync
 from app.services.ai_pipeline import extract_notice_info, project_extraction_to_notice_fields
 from app.services.crawl_service import handle_crawl_failure_composite, run_crawl_job_sync
 from app.services.gemini_text_embedding import embed_text_sync
 
 logger = logging.getLogger(__name__)
+
+
+def _sync_notice_schedules_after_ai(
+    session: Session,
+    notice_uuid: uuid_mod.UUID,
+    extraction: NoticeAIExtraction,
+) -> None:
+    replace_notice_schedules_sync(session, notice_uuid, extraction.schedules)
+
 
 _google_api_exceptions_for_retry: types.ModuleType | None = None
 try:
@@ -248,6 +258,11 @@ def _execute_notice_ai_pipeline(
             notice_uuid,
             notice.ai_extracted_json or {},
         )
+        try:
+            ex_sched = NoticeAIExtraction.model_validate(notice.ai_extracted_json or {})
+        except Exception:
+            ex_sched = NoticeAIExtraction(target_departments=[])
+        _sync_notice_schedules_after_ai(session, notice_uuid, ex_sched)
         _emit_notice_ai_extraction_completed(notice_id_str, notice)
         return False
     html_content = _get_notice_html_for_ai(notice)
@@ -277,6 +292,7 @@ def _execute_notice_ai_pipeline(
             hashtags=projected["hashtags"],
             taxonomy_rows=projected.get("taxonomy_rows"),
         )
+        _sync_notice_schedules_after_ai(session, notice_uuid, fallback)
         _emit_notice_ai_extraction_completed(notice_id_str, notice)
         return False
     envelope = extract_notice_info(
@@ -302,6 +318,7 @@ def _execute_notice_ai_pipeline(
         hashtags=projected["hashtags"],
         taxonomy_rows=projected.get("taxonomy_rows"),
     )
+    _sync_notice_schedules_after_ai(session, notice_uuid, envelope.result)
     _emit_notice_ai_extraction_completed(notice_id_str, notice)
     return True
 

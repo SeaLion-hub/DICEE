@@ -27,6 +27,15 @@ class NoticeListResponse(BaseSchema):
     limit: int
 
 
+class MatchedNoticeListResponse(BaseSchema):
+    """맞춤(매칭) 피드. 프로필 미완성 시 requires_profile=True·items 비움."""
+
+    items: list[NoticeListItem]
+    next_cursor: str | None = None
+    limit: int
+    requires_profile: bool = False
+
+
 class NoticeDetailResponse(NoticeListItem):
     """상세: 본문 URL·타임스탬프."""
 
