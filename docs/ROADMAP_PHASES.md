@@ -182,7 +182,11 @@
 
 **목표**: 정제된 DB로 **로그인한 유저**에게 맞는 공지를 골라주는 API 완성.
 
-**할 일 요약**: PostgreSQL FTS(tsvector), GIN 인덱스(ai_extracted_json, tsvector, hashtags). 수동 검색(키워드) 수요 대비. 유저 프로필과 공지 자격 요건(JSON) 비교 로직 services에 구현. API /v1/ prefix. GET /v1/users/me. 정렬·필터·페이지네이션, Swagger 문서화. user_calendar_events UniqueConstraint(user_id, notice_id). GET /v1/calendar/events?year=&month=, 응답: 매칭 공지 중 일정 배열 + user_calendar_events 배열. .ics 다운로드. Google Calendar 연동(선택).
+**스코프 확정 (2026-03-29)**: 5단계 코어는 **매칭·달력·ICS**까지 우선 완료. **PostgreSQL FTS(tsvector·GIN)** 는 **별도 후속 PR**로 분리(Q1B). **Google Calendar OAuth·웹훅 연동**은 v1 5단계 범위에서 제외하고 **6단계 이후** 문서·계획으로 둠(Q2A); 5단계는 **`.ics` 다운로드**만 제공.
+
+**할 일 요약 (5단계 코어)**: 유저 프로필과 공지 자격 요건(JSON) 비교 로직을 services에 구현. API `/v1` prefix. `GET /v1/users/me`·프로필 갱신·학과 메타 API. 정렬·필터·커서 페이지네이션, Swagger 문서화. `user_calendar_events` UniqueConstraint(`user_id`, `notice_id`). `GET /v1/calendar/events?year=&month=` 또는 `from`/`to`, 응답: 매칭 공지 일정 배열 + `user_calendar_events` 배열. **`.ics` 다운로드.**
+
+**후속 PR (FTS)**: PostgreSQL FTS(tsvector), GIN 인덱스(ai_extracted_json, tsvector, hashtags) 등 키워드 검색. 시맨틱 검색(`POST /v1/notices/search/semantic`)과 병행 시 계약·문서 정리.
 
 **Notice 목록/상세 API 구현 시 (N+1 방지)**  
 - 목록: `notice_repository.list_notices_paginated` 사용. 반드시 `NOTICE_LIST_DEFER_OPTIONS` 적용·응답에 college 필요 시 `selectinload(Notice.college)` 사용. 응답에 taxonomy(메인/서브 카테고리)를 포함하면 `load_taxonomy_mappings=True`로 `selectinload(Notice.taxonomy_mappings)`를 켠다.  
@@ -194,7 +198,8 @@
 - [x] API `/v1` 프리픽스·Swagger: `GET /v1/notices`(커서·오프셋·단과대 필터), `GET /v1/notices/{notice_id}`, `POST /v1/notices/search/semantic`(pgvector 임베딩 기반; 전통 FTS·GIN은 미구현)
 - [x] 구글 OAuth + JWT: `/v1/auth/*` (`app/api/v1/auth.py`)
 - [ ] `GET /v1/users/me` 및 프로필·매칭 탭(전체/맞춤) API — [user-notice-matching-and-api-contracts.md](decisions/user-notice-matching-and-api-contracts.md) 계약대로 구현 예정
-- [ ] `GET /v1/calendar/events`, user_calendar_events 노출, `.ics` / Google Calendar 연동
+- [ ] `GET /v1/calendar/events`, user_calendar_events 노출, `.ics` (Google Calendar 연동은 6단계 이후)
+- [ ] PostgreSQL FTS·GIN 키워드 검색 API — **후속 PR** (5단계 코어와 분리)
 
 ---
 

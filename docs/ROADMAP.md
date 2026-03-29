@@ -19,7 +19,7 @@
 
 | 항목 | 내용 |
 |------|------|
-| **현재 마일스톤** | **M2 Intelligence** — 수집·AI 파이프라인(3·4단계) 핵심 완료, **5단계**(매칭·달력 등 API) 진행 |
+| **현재 마일스톤** | **M2 Intelligence** — 수집·AI 파이프라인(3·4단계) 핵심 완료, **5단계**(매칭·달력·ICS; PostgreSQL FTS·키워드 검색은 후속 PR) 진행 |
 | **배포** | 백엔드 Railway, 프론트 Vercel. 상세 [DEPLOYMENT](DEPLOYMENT.md). |
 | **작업 기록** | [WORK_LOG](WORK_LOG.md) |
 | **단계별 할 일·확정 사항·예상 문제** | [ROADMAP_PHASES](ROADMAP_PHASES.md) |
