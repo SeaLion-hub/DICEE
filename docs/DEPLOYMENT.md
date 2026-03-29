@@ -26,6 +26,7 @@
 - **로컬·CI:** Docker 이미지 `pgvector/pgvector:pg15` 사용 ([`compose.yml`](../compose.yml)의 `db` 서비스, GitHub Actions `services.postgres`와 동일).
 - **Railway:** 사용 중인 **PostgreSQL 플랜/템플릿이 `CREATE EXTENSION vector`를 허용하는지** 대시보드·문서로 확인하세요. 확장을 켤 수 없는 템플릿이면 pgvector 지원 인스턴스로 교체하거나, 확장 설치가 가능한 관리형 Postgres로 옮겨야 합니다.
 - **마이그레이션:** Alembic `012_notice_embedding`이 `CREATE EXTENSION IF NOT EXISTS vector` 및 `embedding vector(768)` 컬럼·HNSW 인덱스를 적용합니다. 인덱스 생성은 `SET LOCAL statement_timeout = 0`으로 긴 작업을 허용합니다. **대용량 `notices` 테이블**이면 유지보수 창에서 실행하는 것을 권장합니다.
+- **`015_notice_ai_processing_started_at`:** `notices.ai_processing_started_at`(타임스탬ptz, nullable)과 `(ai_status, ai_processing_started_at)` 인덱스. AI 워커가 `processing` 선점 시각을 기록하고, Beat가 오래된 `processing`을 `pending`으로 되돌릴 때 사용합니다. Release 단계에서 `alembic upgrade head`로 함께 적용됩니다.
 - **실행 주체:** API 프로세스는 마이그레이션을 돌리지 않습니다. Railway **Release Command** `alembic upgrade head` 또는 Compose의 **`migrate` 서비스**만 마이그레이션을 실행합니다 ([Quick Start](#quick-start-5분) 원칙과 동일).
 
 **달력 MV(`active_notice_schedules_mv`):** v1 API는 `notice_schedules` 기준으로 조회합니다. MV를 쓰는 경로가 있다면 프로덕션에서는 주기적 `REFRESH MATERIALIZED VIEW CONCURRENTLY`(별도 beat/cron 또는 운영 잡)로 최신화하세요. 앱 요청마다 REFRESH는 권장하지 않습니다.
@@ -167,6 +168,30 @@ celery -A app.core.celery_app:app worker -l info -O fair -Q critical,crawl,ai --
 
 - **임베딩 백필:** `app.services.tasks.backfill_notice_embedding_task` — `ai` 큐, `GEMINI_API_KEY` 또는 `gemini_api_key` 설정 필요. `backfill_notice_embedding_task.delay("<notice_uuid>")`로 호출. 공지 **제목**만 `text-embedding-004`로 임베딩하며, `embedding`이 이미 있으면 스킵(멱등).
 
+### 2.5) Celery Beat (스케줄 태스크)
+
+주기 작업은 `app.core.celery_app`의 `beat_schedule`에 정의되어 있습니다. **Beat 프로세스가 없으면** 아래 태스크는 실행되지 않습니다.
+
+- **실행 예시 (Linux):**
+
+```bash
+celery -A app.core.celery_app:app beat -l info
+```
+
+- **Broker:** 워커와 동일한 Redis(broker) URL을 써야 합니다.
+- **큐:** 스케줄된 태스크는 `critical` 등으로 라우팅됩니다. Beat는 태스크를 **큐에 넣기만** 하므로, 해당 큐를 소비하는 **워커**가 함께 떠 있어야 합니다(예: `-Q critical,crawl,ai`).
+
+| 스케줄 키 | 대략 주기 | 태스크 |
+|-----------|-----------|--------|
+| `close-stale-crawl-runs` | 900s | `close_stale_crawl_runs_task` |
+| `drain-content-spool` | 300s | `drain_content_spool_task` |
+| `reset-stale-ai-processing` | 600s | `reset_stale_ai_processing_task` |
+| `requeue-stale-pending-ai` | 900s | `requeue_stale_pending_ai_notices_task` |
+
+**AI 복구 두 태스크**(`reset_stale_ai_processing`, `requeue_stale_pending_ai`)는 `AI_PIPELINE_ENABLED=true`일 때만 실질적인 DB 작업·재큐잉을 수행합니다. 튜닝용 선택 환경 변수는 `.env.example`의 `AI_STALE_*` / `AI_PENDING_REQUEUE_*` 주석을 참고하세요.
+
+**재큐 대상 pending:** `requeue_stale_pending_ai_notices_task`는 `notices.updated_at`이 임계보다 오래된 `pending` 행을 골라 AI 배치 큐에 다시 넣습니다. 다른 컬럼 갱신으로 `updated_at`만 최근으로 밀리면 재큐 시점이 늦어질 수 있습니다.
+
 ### 3) Cron 트리거
 
 - 권장 방식: Railway Cron 또는 외부 Cron이 `POST /internal/trigger-crawl` 호출
@@ -194,7 +219,8 @@ celery -A app.core.celery_app:app worker -l info -O fair -Q critical,crawl,ai --
 - [ ] `USER_ID_HMAC_KEY` 설정
 - [ ] `REDIS_BLOCKLIST_FAIL_CLOSED=true` (API)
 - [ ] `/health`, `/ready` 정상
-- [ ] Release 단계 `alembic upgrade head` 성공 로그 확인
+- [ ] Release 단계 `alembic upgrade head` 성공 로그 확인(최신 head에 `015` 등 AI 컬럼 포함 시 반영 확인)
+- [ ] 주기 태스크를 쓰는 경우 Celery Beat 프로세스 기동·워커가 `critical` 큐 소비
 - [ ] `LOG_FORMAT` 전환 시 staging 검증 완료
 
 ---

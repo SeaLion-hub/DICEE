@@ -21,6 +21,7 @@ SLO·큐·DLQ 기준 롤백 트리거는 [runbooks/release-rollback.md](runbooks
 배포 전에 다음을 확인한다.
 
 - [ ] API: `APP_ENTRY=api`, Worker: `APP_ENTRY=celery` (또는 문서된 worker 진입).
+- [ ] 주기 태스크(크롤 stale 정리·스풀 드레인·AI processing/pending 복구)를 쓰려면 **Celery Beat**를 별도 프로세스로 띄운다. 명령·스케줄 표는 [DEPLOYMENT.md](DEPLOYMENT.md) §2.5.
 - [ ] **Release Command**: `alembic upgrade head` (API Start Command에 넣지 않음).
 - [ ] Release 로그에서 마이그레이션 성공 확인.
 - [ ] 배포 후 `GET /health` 200, 필요 시 `GET /ready`로 DB·Redis 확인.

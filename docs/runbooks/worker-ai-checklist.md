@@ -12,6 +12,7 @@ Celery 워커와 AI 파이프라인을 수동 실행/검증할 때 매번 확인
 - [ ] DB 마이그레이션이 최신(head)이다.
   - `alembic current`
   - 필요 시 `alembic upgrade head`
+- [ ] `notices.ai_processing_started_at` 컬럼이 있다(마이그레이션 `015_notice_ai_processing_started_at` 이후).
 - [ ] 워커가 읽는 DB에 `notice_taxonomy_mappings` 테이블이 존재한다.
 - [ ] 중복 워커 방지를 위해 기존 Celery 프로세스를 정리했다.
 
@@ -37,6 +38,8 @@ celery -A app.core.celery_app:app worker -l info -O fair --pool=solo -Q critical
 
 ## 2) AI 태스크 재처리 체크
 
+- [ ] **Celery Beat**를 켜 두었다면 `requeue_stale_pending_ai_notices_task`가 오래된 `pending` 공지를 주기적으로 AI 배치 큐에 다시 넣을 수 있다(`updated_at` 기준, 설정: `AI_STALE_PENDING_REQUEUE_SECONDS` 등). Beat가 없으면 브로커 enqueue 실패 후 영구 pending이 남을 수 있으므로 운영 환경에서는 Beat+워커(`critical` 큐) 구성을 권장한다.
+- [ ] `reset_stale_ai_processing_task`는 선점 후 워커가 죽은 경우 등 오래된 `processing`을 `pending`으로 되돌린다(`AI_STALE_PROCESSING_RESET_SECONDS`).
 - [ ] `ai_status='pending'` 전환은 **이미 크롤링되어 DB에 저장된 기존 공지를 재처리할 때만** 사용한다.
   - 신규 크롤링으로 들어온 공지는 `AI_PIPELINE_ENABLED=true`일 때 파이프라인에서 자동으로 AI 큐에 들어가므로 수동 `pending` 전환이 필요 없다.
 - [ ] 대상 notice를 `ai_status='pending'`으로 되돌렸다.
