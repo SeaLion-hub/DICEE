@@ -13,6 +13,7 @@ from typing import Protocol, cast
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.constants import IngestionBatchStatus
 from app.core.crawler_config import get_crawler
 from app.core.metrics import CRAWL_PIPELINE_PEAK_PENDING_DRAFTS, set_gauge
 from app.domain.contracts.crawl_contracts import (
@@ -24,8 +25,13 @@ from app.domain.contracts.crawl_contracts import (
     LinkItem,
     NoticeDraft,
 )
-from app.repositories.college_repository import get_by_external_id_sync as get_college_by_external_id_sync
+from app.domain.contracts.notice_draft_serde import notice_draft_to_payload
+from app.models.ingestion_batch import IngestionBatch
 from app.repositories.crawl_run_repository import update_crawl_run_checkpoint_sync
+from app.repositories.ingestion_attempt_repository import (
+    add_ingestion_scheduled_docs_sync,
+    increment_attempt_total_batches_sync,
+)
 from app.repositories.notice_repository import upsert_notices_bulk_sync
 
 from .collect_sync import _collect_payloads_sync
@@ -36,7 +42,6 @@ from .runtime import (
     _init_seen_set_sync,
     _load_crawl_runtime_config,
     _RedisSeenSet,
-    _resolve_module_and_list_url,
     _SeenSet,
 )
 
@@ -85,6 +90,46 @@ class _DefaultSyncCrawlAdapter:
 
     def upsert_chunk(self, session: Session, chunk: list[NoticeDraft]) -> list[uuid.UUID]:
         return self._upsert_pipeline.process(session, chunk)
+
+
+class DeferredBatchCrawlAdapter(_DefaultSyncCrawlAdapter):
+    """수집 청크를 ingestion_batches에 저장 후 비동기 process_notice_ingestion_batch_task에서 upsert."""
+
+    def __init__(
+        self,
+        *,
+        attempt_id: uuid.UUID,
+        college_code: str,
+        sequence_counter: list[int],
+        upsert_pipeline: NoticeBulkUpsertPipeline | None = None,
+    ) -> None:
+        super().__init__(upsert_pipeline=upsert_pipeline)
+        self._attempt_id = attempt_id
+        self._college_code = college_code
+        self._sequence_counter = sequence_counter
+
+    def upsert_chunk(self, session: Session, chunk: list[NoticeDraft]) -> list[uuid.UUID]:
+        if not chunk:
+            return []
+        self._sequence_counter[0] += 1
+        seq = self._sequence_counter[0]
+        payloads = [notice_draft_to_payload(d) for d in chunk]
+        batch = IngestionBatch(
+            attempt_id=self._attempt_id,
+            sequence=seq,
+            status=IngestionBatchStatus.PENDING.value,
+            drafts_payload=payloads,
+            created_at=datetime.now(UTC),
+            processed_at=None,
+        )
+        session.add(batch)
+        session.flush()
+        increment_attempt_total_batches_sync(session, self._attempt_id)
+        add_ingestion_scheduled_docs_sync(session, self._attempt_id, len(chunk))
+        from app.services.tasks import process_notice_ingestion_batch_task
+
+        process_notice_ingestion_batch_task.delay(str(batch.id), self._college_code)
+        return []
 
 
 def _finalize_chunk_sync(
@@ -330,18 +375,29 @@ def crawl_college_sync(
     run_id: uuid.UUID | None = None,
     task_id: str | None = None,
     on_chunk_processed: Callable[[list[uuid.UUID]], None] | None = None,
+    ingestion_attempt_id: uuid.UUID | None = None,
 ) -> tuple[int, list[uuid.UUID]]:
     """
-    단과대 1개 크롤 (동기, Celery 워커 전용). 동기 DB 세션·Repository 사용.
-    get_*_links / (1초 sleep) / scrape_*_detail → upsert_notice_sync.
+    단과대 1개 크롤 (동기, Celery 워커 전용). college_sources·레지스트리로 list_url·모듈 해석.
+    crawl_split_crawl_and_process=True이고 ingestion_attempt_id가 있으면 DeferredBatchCrawlAdapter.
     """
-    college = get_college_by_external_id_sync(session, college_code)
-    if not college:
-        raise ValueError(f"College not found: {college_code}")
+    from app.services.crawl.source_resolution import resolve_crawl_module_list_url_and_source_sync
 
-    module_name, list_url = _resolve_module_and_list_url(college_code)
+    college, _src, module_name, list_url = resolve_crawl_module_list_url_and_source_sync(session, college_code)
     get_links_fn, scrape_fn = get_crawler(module_name)
     cfg = _load_crawl_runtime_config()
+    use_deferred = bool(
+        settings.crawl_split_crawl_and_process and ingestion_attempt_id is not None,
+    )
+    if use_deferred:
+        seq: list[int] = [0]
+        adapter: _SyncCrawlAdapter = DeferredBatchCrawlAdapter(
+            attempt_id=ingestion_attempt_id,
+            college_code=college_code,
+            sequence_counter=seq,
+        )
+    else:
+        adapter = _DefaultSyncCrawlAdapter()
     return _run_crawl_pipeline_sync(
         session,
         college_code=college_code,
@@ -353,5 +409,5 @@ def crawl_college_sync(
         task_id=task_id,
         on_chunk_processed=on_chunk_processed,
         cfg=cfg,
-        adapter=_DefaultSyncCrawlAdapter(),
+        adapter=adapter,
     )

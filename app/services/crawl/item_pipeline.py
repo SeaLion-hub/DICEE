@@ -10,6 +10,7 @@ from typing import Protocol
 from bs4 import BeautifulSoup
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.core.metrics import CRAWL_DROP_TOTAL, DROP_REASON_DUPLICATE, DROP_REASON_PAYLOAD_BUILD_NONE, increment
 from app.domain.contracts.crawl_contracts import CrawlLogContext, LinkItem, NoticeDraft
 from app.services.crawl_payload import _external_id_from_url, build_notice_payload
@@ -149,4 +150,9 @@ class NoticeBulkUpsertPipeline:
     def process(self, session: Session, drafts: list[NoticeDraft]) -> list[uuid.UUID]:
         if not drafts:
             return []
-        return self._upsert_fn(session, drafts)
+        ids = self._upsert_fn(session, drafts)
+        if settings.notice_preprocess_after_bulk_upsert and ids:
+            from app.services.notice_preprocess.pipeline import apply_batch_preprocess_sync
+
+            apply_batch_preprocess_sync(session, ids)
+        return ids

@@ -144,7 +144,7 @@ async def test_read_cache_wait_for_cached_then_refresh() -> None:
         client = AsyncMock()
         # 첫 호출: miss + no lock. 두 번째 호출(재조회): fresh
         payload1 = None
-        payload2 = {"data": {"runs": [], "limit": 50}, "soft_ttl": time.time() + 60}
+        payload2 = {"data": {"runs": [], "limit": 50, "source_freshness": []}, "soft_ttl": time.time() + 60}
         client.get = AsyncMock(side_effect=[payload1, json.dumps(payload2)])
         client.set = AsyncMock(return_value=False)
 
@@ -156,7 +156,7 @@ async def test_read_cache_wait_for_cached_then_refresh() -> None:
         # wait 후 재조회: 다른 코루틴이 채워둔 상태 가정 — 한 번 더 get
         client.get.return_value = json.dumps(payload2)
         data2, _, _ = await wait_for_cached(client, 5, "crawl_stats", "50")
-        assert data2 == {"runs": [], "limit": 50}
+        assert data2 == {"runs": [], "limit": 50, "source_freshness": []}
 
 
 @pytest.mark.asyncio
@@ -181,7 +181,7 @@ async def test_crawl_stats_fresh_hit_does_not_call_db(client) -> None:
             with patch.object(
                 internal_module,
                 "get_cached_with_soft_ttl",
-                AsyncMock(return_value=({"runs": [], "limit": 50}, False, None)),
+                AsyncMock(return_value=({"runs": [], "limit": 50, "source_freshness": []}, False, None)),
             ):
                 resp = client.get(
                     "/internal/crawl-stats",

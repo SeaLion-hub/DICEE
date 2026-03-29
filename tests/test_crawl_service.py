@@ -16,6 +16,7 @@ def test_run_crawl_job_sync_rollback_then_failed_on_commit_failure():
     동일 세션으로 FAILED 기록 시도 → 예외 재발생.
     PendingRollbackError 방지 및 FAILED 기록은 컴포지트 핸들러(동일 세션 우선 → Redis fallback)로 수행.
     """
+    from app.services.crawl import failure as crawl_failure
     from app.services.crawl.entrypoints import handle_crawl_failure_composite, run_crawl_job_sync
 
     run_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -36,6 +37,7 @@ def test_run_crawl_job_sync_rollback_then_failed_on_commit_failure():
     session.commit.side_effect = commit_side_effect
 
     with (
+        patch.object(crawl_failure.settings, "crawl_ingestion_attempt_enabled", False),
         patch(
             "app.services.crawl.failure.get_college_by_external_id_sync",
             return_value=college,
@@ -76,6 +78,12 @@ def test_run_crawl_job_sync_rollback_then_failed_on_commit_failure():
         assert session.commit.call_count >= 2
 
 
+def _fake_resolve_crawl_source(session, college_code):
+    college = MagicMock(id=uuid.UUID("00000000-0000-0000-0000-000000000001"))
+    src = MagicMock()
+    return college, src, "dummy_module", "https://example.com/list"
+
+
 def test_crawl_college_sync_uses_seen_set():
     """crawl_college_sync는 seen으로 _BoundedSeenSet 또는 _RedisSeenSet 사용 (멀티 워커 중복 방지)."""
     from unittest.mock import MagicMock, patch
@@ -92,8 +100,8 @@ def test_crawl_college_sync_uses_seen_set():
 
     with (
         patch(
-            "app.services.crawl.pipeline_sync.get_college_by_external_id_sync",
-            return_value=MagicMock(id=uuid.UUID("00000000-0000-0000-0000-000000000001")),
+            "app.services.crawl.source_resolution.resolve_crawl_module_list_url_and_source_sync",
+            side_effect=_fake_resolve_crawl_source,
         ),
         patch(
             "app.services.crawl.pipeline_sync.get_crawler",
@@ -131,8 +139,8 @@ def test_crawl_college_sync_uses_cap_helper(monkeypatch):
 
     with (
         patch(
-            "app.services.crawl.pipeline_sync.get_college_by_external_id_sync",
-            return_value=MagicMock(id=uuid.uuid4()),
+            "app.services.crawl.source_resolution.resolve_crawl_module_list_url_and_source_sync",
+            side_effect=_fake_resolve_crawl_source,
         ),
         patch(
             "app.services.crawl.pipeline_sync.get_crawler",
@@ -409,6 +417,7 @@ def test_record_crawl_failure_fallback_graceful_when_redis_set_fails(monkeypatch
 
 
 def test_run_crawl_job_sync_returns_upserted_and_enqueued_counts():
+    from app.services.crawl import failure as crawl_failure
     from app.services.crawl.failure import run_crawl_job_sync
 
     run_id = uuid.UUID("00000000-0000-0000-0000-000000000011")
@@ -423,6 +432,7 @@ def test_run_crawl_job_sync_returns_upserted_and_enqueued_counts():
         run_id=None,
         task_id=None,
         on_chunk_processed=None,
+        ingestion_attempt_id=None,
     ):
         if on_chunk_processed is not None:
             on_chunk_processed([uuid.uuid4(), uuid.uuid4()])
@@ -430,6 +440,7 @@ def test_run_crawl_job_sync_returns_upserted_and_enqueued_counts():
         return (5, [])
 
     with (
+        patch.object(crawl_failure.settings, "crawl_ingestion_attempt_enabled", False),
         patch("app.services.crawl.failure.get_college_by_external_id_sync", return_value=college),
         patch("app.services.crawl.failure.ensure_crawl_run_task_sync", return_value=run_id),
         patch("app.services.crawl.failure.create_or_update_crawl_run_sync"),

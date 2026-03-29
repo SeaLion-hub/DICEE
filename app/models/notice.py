@@ -70,6 +70,10 @@ class Notice(Base):
     # Gemini text-embedding-004 등 (EMBEDDING_DIM). 코사인 HNSW: ix_notices_embedding_hnsw_cosine
     embedding: Mapped[list[float] | None] = mapped_column(Vector(EMBEDDING_DIM), nullable=True)
 
+    # 전처리(정제·섹션). cleaner_version 바뀌면 재처리 기준으로 사용.
+    cleaner_version: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    structured_sections: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB, nullable=True)
+
     # 3. 운영용 필드
     # AI 처리 선점·멱등: pending → processing(선점) → done. FOR UPDATE SKIP LOCKED와 연동.
     ai_status: Mapped[str] = mapped_column(String(20), default="pending", nullable=False, index=True)

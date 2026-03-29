@@ -48,6 +48,14 @@ def test_crawl_stats_masks_error_message(client, monkeypatch):
         _fake_get_recent_crawl_runs,
     )
 
+    async def _fake_fetch_source_freshness_async(session):
+        return []
+
+    monkeypatch.setattr(
+        "app.repositories.crawl_run_repository.fetch_source_freshness_async",
+        _fake_fetch_source_freshness_async,
+    )
+
     # get_crawl_stats는 세션을 Depends가 아닌 read_only_session_cm으로 지연 획득하므로, CM을 더미로 대체
     @asynccontextmanager
     async def _fake_read_only_session_cm(maker):

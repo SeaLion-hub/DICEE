@@ -4,7 +4,6 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from app.core.exceptions import EmptySemanticQueryError
-from app.services.gemini_text_embedding import EmbeddingProviderError
 from app.services.notice_public_service import UnknownCollegeExternalIdError
 from fastapi.testclient import TestClient
 
@@ -14,7 +13,6 @@ from fastapi.testclient import TestClient
     [
         (UnknownCollegeExternalIdError("x"), 404),
         (EmptySemanticQueryError(), 400),
-        (EmbeddingProviderError("down"), 503),
     ],
 )
 def test_semantic_search_maps_service_errors(

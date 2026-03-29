@@ -1,5 +1,7 @@
 """내부 API 전용 응답 스키마. error_message 등 민감 필드는 노출하지 않음."""
 
+from pydantic import Field
+
 from app.schemas.base import BaseSchema
 
 
@@ -14,8 +16,20 @@ class CrawlRunStatsItem(BaseSchema):
     has_error: bool
 
 
+class CrawlSourceFreshnessStatsItem(BaseSchema):
+    """primary 소스별 마지막 ingestion 시도 요약 (운영 대시보드)."""
+
+    college_code: str
+    last_attempt_status: str | None
+    last_attempt_started_at: str | None
+    last_attempt_finished_at: str | None
+    total_docs: int | None
+    is_stale: bool
+
+
 class CrawlStatsResponse(BaseSchema):
     """GET /internal/crawl-stats 응답 body."""
 
     runs: list[CrawlRunStatsItem]
     limit: int
+    source_freshness: list[CrawlSourceFreshnessStatsItem] = Field(default_factory=list)

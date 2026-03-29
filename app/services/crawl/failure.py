@@ -10,13 +10,20 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.constants import CrawlRunStatus
+from app.core.database_sync import get_sync_session
 from app.core.redis import get_shared_sync_redis_client
 from app.domain.contracts.crawl_contracts import CrawlJobFailed
 from app.repositories.college_repository import get_by_external_id_sync as get_college_by_external_id_sync
+from app.repositories.college_source_repository import ensure_primary_college_source_sync
 from app.repositories.crawl_run_repository import (
     create_or_update_crawl_run_sync,
     ensure_crawl_run_task_sync,
     update_crawl_run_sync,
+)
+from app.repositories.ingestion_attempt_repository import (
+    mark_ingestion_attempt_failed_sync,
+    mark_ingestion_attempt_success_sync,
+    try_begin_ingestion_attempt_sync,
 )
 
 from .pipeline_sync import crawl_college_sync
@@ -118,6 +125,7 @@ def run_crawl_job_sync(
     on_chunk_processed: Callable[[list[uuid.UUID]], None],
     *,
     failure_publisher: Callable[[CrawlJobFailed], None] | None = None,
+    ingestion_skip_holder: list[bool] | None = None,
 ) -> tuple[int, int]:
     """
     크롤 작업 한 건 실행 (college 조회 + crawl_run 생성/갱신 + crawl_college_sync).
@@ -133,6 +141,22 @@ def run_crawl_job_sync(
     college = get_college_by_external_id_sync(session, college_code)
     if not college:
         raise ValueError(f"College not found: {college_code}")
+    ingestion_attempt_id: uuid.UUID | None = None
+    if settings.crawl_ingestion_attempt_enabled:
+        src = ensure_primary_college_source_sync(session, college)
+        session.flush()
+        att = try_begin_ingestion_attempt_sync(
+            session,
+            college_source_id=src.id,
+            celery_task_id=task_id,
+        )
+        if att is None:
+            if ingestion_skip_holder is not None:
+                ingestion_skip_holder.append(True)
+            session.commit()
+            return (0, 0)
+        ingestion_attempt_id = att.id
+        session.commit()
     run_id = ensure_crawl_run_task_sync(session, task_id)
     create_or_update_crawl_run_sync(session, run_id, college.id)
     session.commit()
@@ -153,18 +177,45 @@ def run_crawl_job_sync(
             run_id=run_id,
             task_id=task_id,
             on_chunk_processed=_counting_chunk_handler,
+            ingestion_attempt_id=ingestion_attempt_id,
         )
+        if ingestion_attempt_id is not None:
+            if settings.crawl_split_crawl_and_process:
+                from app.models.ingestion_attempt import IngestionAttempt
+
+                row = session.get(IngestionAttempt, ingestion_attempt_id)
+                if row is not None and int(row.total_batches or 0) == 0:
+                    mark_ingestion_attempt_success_sync(session, ingestion_attempt_id, total_docs=0)
+            else:
+                mark_ingestion_attempt_success_sync(session, ingestion_attempt_id, total_docs=count)
+        notices_metric = count
+        if settings.crawl_split_crawl_and_process and ingestion_attempt_id is not None:
+            from app.models.ingestion_attempt import IngestionAttempt
+
+            row = session.get(IngestionAttempt, ingestion_attempt_id)
+            notices_metric = int(row.total_docs) if row is not None else count
         update_crawl_run_sync(
             session,
             run_id,
             finished_at=datetime.now(UTC),
             status=CrawlRunStatus.SUCCESS.value,
-            notices_upserted=count,
+            notices_upserted=notices_metric,
         )
         session.commit()
         return (count, enqueued_ai_count)
     except Exception as e:
         session.rollback()
+        if ingestion_attempt_id is not None:
+            try:
+                with get_sync_session() as s2:
+                    mark_ingestion_attempt_failed_sync(s2, ingestion_attempt_id, str(e))
+                    s2.commit()
+            except Exception:
+                logger.warning(
+                    "ingestion_attempt mark failed after crawl error (attempt_id=%s)",
+                    ingestion_attempt_id,
+                    exc_info=True,
+                )
         error_msg = (str(e))[:2000]
         reason_raw = get_request_context().get("event_code")
         reason = reason_raw.strip() if isinstance(reason_raw, str) else "unknown"

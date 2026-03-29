@@ -94,6 +94,17 @@ class CrawlRunRow:
 
 
 @dataclass(frozen=True)
+class IngestionFreshnessRow:
+    """Repository가 채우는 ingestion freshness 원시 행."""
+
+    college_code: str
+    last_attempt_status: str | None
+    last_attempt_started_at: datetime | None
+    last_attempt_finished_at: datetime | None
+    total_docs: int | None
+
+
+@dataclass(frozen=True)
 class CrawlRunItem:
     """크롤 통계 1건(서비스 반환용). started_at/finished_at는 이미 문자열(isoformat)."""
 
@@ -106,17 +117,32 @@ class CrawlRunItem:
 
 
 @dataclass(frozen=True)
+class CrawlSourceFreshnessItem:
+    """primary college_source 기준 마지막 ingestion 시도 요약."""
+
+    college_code: str
+    last_attempt_status: str | None
+    last_attempt_started_at: str | None
+    last_attempt_finished_at: str | None
+    total_docs: int | None
+    is_stale: bool
+
+
+@dataclass(frozen=True)
 class CrawlStatsResult:
     """크롤 통계 조회 결과. 라우터에서 CrawlStatsResponse로 변환."""
 
     runs: list[CrawlRunItem]
     limit: int
+    source_freshness: list[CrawlSourceFreshnessItem] = field(default_factory=list)
 
 
 class CrawlStatsQueryPort(Protocol):
     """크롤 통계 조회 포트. Session은 호출자(서비스)가 전달(실용적 포트)."""
 
     async def fetch_recent(self, session: AsyncSession, limit: int) -> list[CrawlRunRow]: ...
+
+    async def fetch_source_freshness(self, session: AsyncSession) -> list[IngestionFreshnessRow]: ...
 
 
 class AsyncNoticeRepositoryPort(Protocol):

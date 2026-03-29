@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
+from app.core.constants import IngestionAttemptStatus
 from app.domain.contracts.crawl_contracts import (
     CrawlRunItem,
+    CrawlSourceFreshnessItem,
     CrawlStatsQueryPort,
     CrawlStatsResult,
 )
@@ -35,4 +40,44 @@ class CrawlStatsService:
             )
             for row in rows
         ]
-        return CrawlStatsResult(runs=items, limit=limit)
+        fresh_rows = await self._query_port.fetch_source_freshness(session)
+
+        def _utc(dt: datetime) -> datetime:
+            if dt.tzinfo is None:
+                return dt.replace(tzinfo=UTC)
+            return dt.astimezone(UTC)
+
+        now = datetime.now(UTC)
+        stale_after = timedelta(seconds=settings.crawl_freshness_stale_seconds)
+        crawl_stale_after = timedelta(seconds=settings.crawl_run_stale_seconds)
+        freshness: list[CrawlSourceFreshnessItem] = []
+        for fr in fresh_rows:
+            is_stale = True
+            if fr.last_attempt_status is None:
+                is_stale = True
+            elif fr.last_attempt_status == IngestionAttemptStatus.RUNNING.value:
+                if fr.last_attempt_started_at is not None:
+                    is_stale = now - _utc(fr.last_attempt_started_at) > crawl_stale_after
+                else:
+                    is_stale = True
+            elif fr.last_attempt_status == IngestionAttemptStatus.SUCCESS.value and fr.last_attempt_finished_at:
+                fin = _utc(fr.last_attempt_finished_at)
+                is_stale = now - fin > stale_after
+            elif fr.last_attempt_finished_at is not None:
+                fin = _utc(fr.last_attempt_finished_at)
+                is_stale = now - fin > stale_after
+            freshness.append(
+                CrawlSourceFreshnessItem(
+                    college_code=fr.college_code,
+                    last_attempt_status=fr.last_attempt_status,
+                    last_attempt_started_at=(
+                        fr.last_attempt_started_at.isoformat() if fr.last_attempt_started_at else None
+                    ),
+                    last_attempt_finished_at=(
+                        fr.last_attempt_finished_at.isoformat() if fr.last_attempt_finished_at else None
+                    ),
+                    total_docs=fr.total_docs,
+                    is_stale=is_stale,
+                )
+            )
+        return CrawlStatsResult(runs=items, limit=limit, source_freshness=freshness)

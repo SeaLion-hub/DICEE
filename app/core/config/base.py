@@ -314,12 +314,30 @@ class Settings(BaseSettings):
         description=("Comma-separated hostnames that should retry HTTP 403 to handle host-specific WAF behavior."),
     )
     crawl_upsert_chunk_size: int = Field(50, ge=1, le=1000)
+    crawl_ingestion_attempt_enabled: bool = Field(
+        True,
+        description="True면 college_source당 동시 1회 ingestion_attempt(FOR UPDATE). False면 로컬/테스트에서 비활성화.",
+    )
+    crawl_split_crawl_and_process: bool = Field(
+        False,
+        description="True면 청크를 ingestion_batches에 적재 후 process_notice_ingestion_batch_task에서 upsert+AI 큐.",
+    )
     crawl_collect_sync_max_workers: int = Field(5, ge=1, le=32)
     crawl_collect_in_flight_limit: int = Field(500, ge=10, le=50000)
     crawl_max_links_per_run: int = Field(50_000, ge=100, le=500_000)
     crawl_collect_async_concurrency: int = Field(10, ge=1, le=200)
     crawl_seen_max_size: int = Field(10_000, ge=1_000, le=1_000_000)
     crawl_run_stale_seconds: float = Field(3600.0, ge=300.0, le=86400.0)
+    crawl_freshness_stale_seconds: float = Field(
+        172_800.0,
+        ge=3600.0,
+        le=86400.0 * 30,
+        description="마지막 성공 ingestion 이후 이 초를 넘기면 대시보드 is_stale.",
+    )
+    notice_preprocess_after_bulk_upsert: bool = Field(
+        True,
+        description="벌크 upsert 직후 cleaner_version·structured_sections 최소 전처리.",
+    )
     crawler_http_proxy_url: SecretStr | None = Field(
         None,
         description=(

@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 
 from app.core.celery_app import app
 from app.core.config import settings
+from app.core.constants import IngestionBatchStatus
 from app.core.database_sync import get_sync_session
 from app.core.metrics import (
     AI_ENQUEUE_FAILED_TOTAL,
@@ -57,16 +58,24 @@ from app.core.storage import (
 )
 from app.core.url_safety import is_safe_worker_http_url
 from app.domain.contracts.ai_extraction import NoticeAIExtraction
+from app.domain.contracts.notice_draft_serde import notice_draft_from_payload
+from app.models.ingestion_batch import IngestionBatch
 from app.repositories.crawl_run_repository import close_stale_running_runs_sync
+from app.repositories.ingestion_attempt_repository import (
+    increment_attempt_completed_batches_sync,
+    maybe_finalize_attempt_after_batch_sync,
+)
 from app.repositories.notice_repository import (
     get_by_id_sync,
     get_notice_for_ai_sync,
     update_ai_result_sync,
     update_notice_content_url_sync,
     update_notice_embedding_sync,
+    upsert_notices_bulk_sync,
 )
 from app.repositories.notice_schedule_repository import replace_notice_schedules_sync
 from app.services.ai_pipeline import extract_notice_info, project_extraction_to_notice_fields
+from app.services.crawl.item_pipeline import NoticeBulkUpsertPipeline
 from app.services.crawl_service import handle_crawl_failure_composite, run_crawl_job_sync
 from app.services.gemini_text_embedding import embed_text_sync
 
@@ -428,6 +437,7 @@ def crawl_college_task(
                     exc_info=True,
                 )
 
+        skip_ingestion: list[bool] = []
         with get_sync_session() as session:
             count, _ = run_crawl_job_sync(
                 session,
@@ -435,7 +445,15 @@ def crawl_college_task(
                 task_id,
                 on_chunk,
                 failure_publisher=lambda ev: handle_crawl_failure_composite(session, ev),
+                ingestion_skip_holder=skip_ingestion,
             )
+        if skip_ingestion:
+            logger.info(
+                "crawl skipped: active ingestion attempt for college_code=%s task_id=%s",
+                college_code,
+                task_id,
+            )
+            return {"skipped": True, "reason": "active_ingestion_attempt"}
         record_last_crawl_success_sync(college_code)
         increment(CRAWL_SUCCESS_TOTAL, 1, labels=labels)
         logger.info(
@@ -474,18 +492,92 @@ def crawl_college_task(
             release_crawl_task_execution(task_id)
 
 
+@app.task(
+    bind=True,
+    name="app.services.tasks.process_notice_ingestion_batch_task",
+    autoretry_for=(RequestException, ConnectionError, TimeoutError, OSError),
+    retry_backoff=True,
+    retry_backoff_max=600,
+    retry_jitter=True,
+    max_retries=6,
+)
+def process_notice_ingestion_batch_task(self, batch_id: str, college_code: str) -> dict:
+    """
+    ingestion_batches 1건을 Notice upsert + AI 큐까지 처리.
+    crawl_split_crawl_and_process=True 경로에서 crawl_college_task가 적재한 배치 전용.
+    """
+    from datetime import UTC, datetime
+
+    task_id = getattr(self.request, "id", None) or ""
+    _set_task_context(str(task_id) if task_id else None, college_code)
+    bid = uuid_mod.UUID(str(batch_id).strip())
+    attempt_id_for_finalize: uuid_mod.UUID | None = None
+    ids: list[uuid_mod.UUID] = []
+    with get_sync_session() as session:
+        batch = session.get(IngestionBatch, bid)
+        if batch is None:
+            logger.warning("process_notice_ingestion_batch_task: batch not found id=%s", batch_id)
+            return {"skipped": True, "reason": "batch_not_found"}
+        if batch.status != IngestionBatchStatus.PENDING.value:
+            return {"skipped": True, "reason": "not_pending", "status": batch.status}
+        batch.status = IngestionBatchStatus.PROCESSING.value
+        session.flush()
+        raw_list = batch.drafts_payload
+        if not isinstance(raw_list, list):
+            raw_list = []
+        drafts = [notice_draft_from_payload(x) for x in raw_list if isinstance(x, dict)]
+        pipeline = NoticeBulkUpsertPipeline(upsert_notices_bulk_sync)
+        ids = pipeline.process(session, drafts)
+        batch.status = IngestionBatchStatus.SUCCESS.value
+        batch.processed_at = datetime.now(UTC)
+        attempt_id_for_finalize = batch.attempt_id
+        session.commit()
+        session.expunge_all()
+    if ids:
+        str_ids = [str(n) for n in ids]
+        try:
+            _delay_process_notice_ai_batch_with_backoff(str_ids)
+        except Exception as e:
+            logger.warning(
+                "process_notice_ingestion_batch_task: AI enqueue failed batch=%s: %s",
+                batch_id,
+                e,
+                exc_info=True,
+            )
+    if attempt_id_for_finalize is not None:
+        with get_sync_session() as session:
+            row = increment_attempt_completed_batches_sync(session, attempt_id_for_finalize)
+            if row is not None:
+                maybe_finalize_attempt_after_batch_sync(session, row)
+            session.commit()
+    return {"batch_id": batch_id, "upserted": len(ids)}
+
+
 @app.task(name="app.services.tasks.close_stale_crawl_runs_task")
 def close_stale_crawl_runs_task():
     """
     Stale RUNNING 정리: started_at이 crawl_run_stale_seconds보다 오래된 crawl_runs를 FAILED로 전환.
     Celery Beat에서 트리거 실행 무효(미사용 15분 등). CRAWL_RUN_STALE_SECONDS로 기준값 설정.
     """
+    from sqlalchemy import text
+
+    from app.repositories.ingestion_attempt_repository import close_stale_running_ingestion_attempts_sync
+
     older_than = settings.crawl_run_stale_seconds
     with get_sync_session() as session:
+        locked = session.execute(text("SELECT pg_try_advisory_xact_lock(984726351)")).scalar_one()
+        if not locked:
+            return {"closed": 0, "ingestion_closed": 0, "deduped": True}
         count = close_stale_running_runs_sync(session, older_than)
-    if count:
-        logger.info("close_stale_crawl_runs_task: closed %d stale RUNNING run(s)", count)
-    return {"closed": count}
+        ingest = close_stale_running_ingestion_attempts_sync(session, older_than)
+        session.commit()
+    if count or ingest:
+        logger.info(
+            "close_stale_crawl_runs_task: closed runs=%d ingestion=%d",
+            count,
+            ingest,
+        )
+    return {"closed": count, "ingestion_closed": ingest}
 
 
 @app.task(

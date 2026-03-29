@@ -15,10 +15,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from app.core.constants import CrawlRunStatus
-from app.domain.contracts.crawl_contracts import CrawlRunRow
+from app.domain.contracts.crawl_contracts import CrawlRunRow, IngestionFreshnessRow
 from app.models.college import College
+from app.models.college_source import CollegeSource
 from app.models.crawl_run import CrawlRun
 from app.models.crawl_run_task import CrawlRunTask
+from app.models.ingestion_attempt import IngestionAttempt
 
 
 def _task_id_to_uuid(task_id: str) -> uuid.UUID:
@@ -178,6 +180,48 @@ def close_stale_running_runs_sync(
     return result.rowcount if result.rowcount is not None else 0
 
 
+async def fetch_source_freshness_async(session: AsyncSession) -> list[IngestionFreshnessRow]:
+    """primary college_sources별 최근 ingestion_attempt 1건."""
+    stmt = (
+        select(CollegeSource, College.external_id)
+        .join(College, CollegeSource.college_id == College.id)
+        .where(
+            CollegeSource.is_primary.is_(True),
+            College.deleted_at.is_(None),
+        )
+    )
+    result = await session.execute(stmt)
+    out: list[IngestionFreshnessRow] = []
+    for src, ext_id in result.all():
+        att = await session.scalar(
+            select(IngestionAttempt)
+            .where(IngestionAttempt.college_source_id == src.id)
+            .order_by(IngestionAttempt.started_at.desc())
+            .limit(1)
+        )
+        if att is None:
+            out.append(
+                IngestionFreshnessRow(
+                    college_code=ext_id,
+                    last_attempt_status=None,
+                    last_attempt_started_at=None,
+                    last_attempt_finished_at=None,
+                    total_docs=None,
+                )
+            )
+            continue
+        out.append(
+            IngestionFreshnessRow(
+                college_code=ext_id,
+                last_attempt_status=att.status,
+                last_attempt_started_at=att.started_at,
+                last_attempt_finished_at=att.finished_at,
+                total_docs=int(att.total_docs) if att.total_docs is not None else None,
+            )
+        )
+    return out
+
+
 async def get_recent_crawl_runs(
     session: AsyncSession,
     limit: int = 50,
@@ -209,3 +253,6 @@ class CrawlRunRepositoryAdapter:
 
     async def fetch_recent(self, session: AsyncSession, limit: int) -> list[CrawlRunRow]:
         return await get_recent_crawl_runs(session, limit=limit)
+
+    async def fetch_source_freshness(self, session: AsyncSession) -> list[IngestionFreshnessRow]:
+        return await fetch_source_freshness_async(session)

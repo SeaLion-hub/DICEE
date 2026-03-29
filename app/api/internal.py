@@ -45,7 +45,7 @@ from app.domain.contracts.internal_contracts import (
     TriggerCrawlResult,
     TriggerCrawlResultKind,
 )
-from app.schemas.internal import CrawlRunStatsItem, CrawlStatsResponse
+from app.schemas.internal import CrawlRunStatsItem, CrawlSourceFreshnessStatsItem, CrawlStatsResponse
 from app.services.crawl_stats_service import CrawlStatsService
 from app.services.internal_crawl_service import InternalCrawlService, normalize_trigger_idempotency_key
 from app.services.notice_preview_service import NoticePreviewRow, NoticePreviewService
@@ -405,7 +405,7 @@ async def get_crawl_stats(
             headers=_rate_limit_headers(),
         )
     state = getattr(request.app.state, "operational_mode", "NORMAL")
-    key_parts = ("crawl_stats", str(limit))
+    key_parts = ("crawl_stats", str(limit), "v3")
     cached, should_refresh, lock_token = await get_cached_with_soft_ttl(redis_client, *key_parts)
 
     # Fresh hit: 즉시 반환
@@ -463,6 +463,17 @@ async def get_crawl_stats(
                 for r in result.runs
             ],
             limit=result.limit,
+            source_freshness=[
+                CrawlSourceFreshnessStatsItem(
+                    college_code=s.college_code,
+                    last_attempt_status=s.last_attempt_status,
+                    last_attempt_started_at=s.last_attempt_started_at,
+                    last_attempt_finished_at=s.last_attempt_finished_at,
+                    total_docs=s.total_docs,
+                    is_stale=s.is_stale,
+                )
+                for s in result.source_freshness
+            ],
         )
         await set_cached_with_soft_ttl(redis_client, *key_parts, value=response.model_dump())
         await release_cached_lock(redis_client, *key_parts, token=lock_token)

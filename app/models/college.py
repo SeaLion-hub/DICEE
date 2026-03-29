@@ -13,6 +13,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.models.base import Base
 
 if TYPE_CHECKING:
+    from app.models.college_source import CollegeSource
     from app.models.notice import Notice
 
 
@@ -31,3 +32,8 @@ class College(Base):
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     notices: Mapped[list["Notice"]] = relationship("Notice", back_populates="college")
+    sources: Mapped[list["CollegeSource"]] = relationship(
+        "CollegeSource",
+        back_populates="college",
+        cascade="all, delete-orphan",
+    )

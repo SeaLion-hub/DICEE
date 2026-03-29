@@ -89,21 +89,28 @@ def test_crawl_college_task_releases_execution_claim_in_finally():
 
 
 def test_close_stale_crawl_runs_task_returns_closed_count():
+    from app.repositories import ingestion_attempt_repository as ing_repo
     from app.services import tasks as tasks_module
     from app.services.tasks import close_stale_crawl_runs_task
 
     ctx = MagicMock()
     ctx.__enter__ = MagicMock(return_value=ctx)
     ctx.__exit__ = MagicMock(return_value=False)
+    exec_result = MagicMock()
+    exec_result.scalar_one = MagicMock(return_value=True)
+    ctx.execute = MagicMock(return_value=exec_result)
+    ctx.commit = MagicMock()
 
     with (
         patch.object(tasks_module, "get_sync_session", return_value=ctx),
         patch.object(tasks_module, "close_stale_running_runs_sync", return_value=4) as mock_close,
+        patch.object(ing_repo, "close_stale_running_ingestion_attempts_sync", return_value=0) as mock_ing,
     ):
         out = close_stale_crawl_runs_task()
 
-    assert out == {"closed": 4}
+    assert out == {"closed": 4, "ingestion_closed": 0}
     mock_close.assert_called_once()
+    mock_ing.assert_called_once()
     sess_arg = mock_close.call_args[0][0]
     assert sess_arg is ctx.__enter__.return_value
     older = mock_close.call_args[0][1]
@@ -111,20 +118,26 @@ def test_close_stale_crawl_runs_task_returns_closed_count():
 
 
 def test_close_stale_crawl_runs_task_zero_closed():
+    from app.repositories import ingestion_attempt_repository as ing_repo
     from app.services import tasks as tasks_module
     from app.services.tasks import close_stale_crawl_runs_task
 
     ctx = MagicMock()
     ctx.__enter__ = MagicMock(return_value=ctx)
     ctx.__exit__ = MagicMock(return_value=False)
+    exec_result = MagicMock()
+    exec_result.scalar_one = MagicMock(return_value=True)
+    ctx.execute = MagicMock(return_value=exec_result)
+    ctx.commit = MagicMock()
 
     with (
         patch.object(tasks_module, "get_sync_session", return_value=ctx),
         patch.object(tasks_module, "close_stale_running_runs_sync", return_value=0),
+        patch.object(ing_repo, "close_stale_running_ingestion_attempts_sync", return_value=0),
     ):
         out = close_stale_crawl_runs_task()
 
-    assert out == {"closed": 0}
+    assert out == {"closed": 0, "ingestion_closed": 0}
 
 
 def test_get_notice_image_urls_for_ai_empty():
@@ -727,7 +740,7 @@ def test_crawl_college_task_on_chunk_enqueue_failure_increments_ai_enqueue_faile
     nid = uuid_mod.uuid4()
     before = get_counter(AI_ENQUEUE_FAILED_TOTAL, labels={"college_code": "engineering"})
 
-    def fake_run(session, college_code, task_id, on_chunk, failure_publisher=None):
+    def fake_run(session, college_code, task_id, on_chunk, failure_publisher=None, **kwargs):
         on_chunk([nid])
         return (1, None)
 
