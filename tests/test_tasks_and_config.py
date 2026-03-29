@@ -88,6 +88,45 @@ def test_crawl_college_task_releases_execution_claim_in_finally():
     assert isinstance(task_id, str) and task_id
 
 
+def test_close_stale_crawl_runs_task_returns_closed_count():
+    from app.services import tasks as tasks_module
+    from app.services.tasks import close_stale_crawl_runs_task
+
+    ctx = MagicMock()
+    ctx.__enter__ = MagicMock(return_value=ctx)
+    ctx.__exit__ = MagicMock(return_value=False)
+
+    with (
+        patch.object(tasks_module, "get_sync_session", return_value=ctx),
+        patch.object(tasks_module, "close_stale_running_runs_sync", return_value=4) as mock_close,
+    ):
+        out = close_stale_crawl_runs_task()
+
+    assert out == {"closed": 4}
+    mock_close.assert_called_once()
+    sess_arg = mock_close.call_args[0][0]
+    assert sess_arg is ctx.__enter__.return_value
+    older = mock_close.call_args[0][1]
+    assert older == tasks_module.settings.crawl_run_stale_seconds
+
+
+def test_close_stale_crawl_runs_task_zero_closed():
+    from app.services import tasks as tasks_module
+    from app.services.tasks import close_stale_crawl_runs_task
+
+    ctx = MagicMock()
+    ctx.__enter__ = MagicMock(return_value=ctx)
+    ctx.__exit__ = MagicMock(return_value=False)
+
+    with (
+        patch.object(tasks_module, "get_sync_session", return_value=ctx),
+        patch.object(tasks_module, "close_stale_running_runs_sync", return_value=0),
+    ):
+        out = close_stale_crawl_runs_task()
+
+    assert out == {"closed": 0}
+
+
 def test_get_notice_image_urls_for_ai_empty():
     """notice.images 없거나 비어 있으면 빈 리스트."""
     from app.services.tasks import _get_notice_image_urls_for_ai

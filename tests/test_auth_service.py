@@ -1,11 +1,22 @@
 """Auth Service 단위 테스트. DB/Google 호출 없이 검증."""
 
 import uuid
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, patch
 
+import jwt
 import pytest
-from app.services.auth_service import AuthError, create_jwt_pair, decode_google_id_token
+from app.core.config import settings
+from app.services.auth_service import (
+    AuthError,
+    _jwt_encode_key_and_algorithm,
+    create_jwt_pair,
+    decode_google_id_token,
+    revoke_refresh_tokens_for_user,
+    verify_refresh_token,
+)
 from pydantic import SecretStr
+from sqlalchemy.ext.asyncio import AsyncSession
 
 
 def test_create_jwt_pair_returns_two_tokens() -> None:
@@ -117,3 +128,64 @@ def test_encode_decode_use_same_mode_in_auto(monkeypatch: pytest.MonkeyPatch) ->
     _, decode_alg = _jwt_decode_key_and_algorithm()
     assert encode_alg == "HS256"
     assert decode_alg == "HS256"
+
+
+def test_verify_refresh_token_accepts_valid_pair() -> None:
+    uid = uuid.UUID("00000000-0000-7000-8000-000000000010")
+    _, refresh = create_jwt_pair(user_id=uid, token_version=2)
+    payload = verify_refresh_token(refresh)
+    assert payload["type"] == "refresh"
+    assert payload["sub"] == str(uid)
+    assert int(payload["token_version"]) == 2
+
+
+def test_verify_refresh_token_rejects_non_refresh_type() -> None:
+    """type=access인 토큰은 디코드는 되어도 refresh 검증에서 거부된다."""
+    key, algorithm = _jwt_encode_key_and_algorithm()
+    now = datetime.now(UTC)
+    uid = uuid.UUID("00000000-0000-7000-8000-000000000011")
+    payload = {
+        "sub": str(uid),
+        "type": "access",
+        "jti": str(uuid.uuid4()),
+        "token_version": 0,
+        "iss": settings.jwt_issuer,
+        "aud": settings.jwt_audience,
+        "exp": now + timedelta(days=1),
+        "iat": now,
+        "nbf": now,
+    }
+    token = jwt.encode(payload, key, algorithm=algorithm)
+    with pytest.raises(AuthError, match="Invalid token type"):
+        verify_refresh_token(token)
+
+
+def test_verify_refresh_token_rejects_expired() -> None:
+    key, algorithm = _jwt_encode_key_and_algorithm()
+    now = datetime.now(UTC)
+    uid = uuid.UUID("00000000-0000-7000-8000-000000000012")
+    payload = {
+        "sub": str(uid),
+        "type": "refresh",
+        "token_version": 0,
+        "iss": settings.jwt_issuer,
+        "aud": settings.jwt_audience,
+        "exp": now - timedelta(hours=1),
+        "iat": now - timedelta(hours=2),
+        "nbf": now - timedelta(hours=2),
+    }
+    token = jwt.encode(payload, key, algorithm=algorithm)
+    with pytest.raises(AuthError, match="Invalid or expired refresh token"):
+        verify_refresh_token(token)
+
+
+@pytest.mark.asyncio
+async def test_revoke_refresh_tokens_for_user_awaits_increment() -> None:
+    uid = uuid.UUID("00000000-0000-7000-8000-000000000013")
+    session = AsyncMock(spec=AsyncSession)
+    with patch(
+        "app.services.auth_service.increment_refresh_token_version",
+        new_callable=AsyncMock,
+    ) as m_inc:
+        await revoke_refresh_tokens_for_user(session, uid)
+        m_inc.assert_awaited_once_with(session, uid)
