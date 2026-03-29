@@ -6,7 +6,7 @@ from typing import cast
 
 import httpx
 from fastapi import FastAPI
-from fastapi.exceptions import RequestValidationError
+from fastapi.exceptions import HTTPException, RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.datastructures import State
 
@@ -28,6 +28,7 @@ if settings.app_entry != "api":
 from app.core.exception_handlers import (
     college_not_found_handler,
     global_exception_handler,
+    http_exception_handler,
     httpx_error_handler,
     internal_crawl_error_handler,
     invalid_forwarded_header_handler,
@@ -123,6 +124,7 @@ app.add_middleware(
 )
 
 app.add_exception_handler(RequestValidationError, validation_exception_handler)
+app.add_exception_handler(HTTPException, http_exception_handler)
 app.add_exception_handler(InvalidForwardedHeaderError, invalid_forwarded_header_handler)
 app.add_exception_handler(httpx.HTTPError, httpx_error_handler)
 app.add_exception_handler(CollegeNotFoundError, college_not_found_handler)

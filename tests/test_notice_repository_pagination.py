@@ -52,6 +52,38 @@ def test_encode_cursor_with_none_datetimes() -> None:
 
 
 @pytest.mark.asyncio
+async def test_list_notices_paginated_offset_mode_sets_next_cursor_when_more_rows() -> None:
+    """cursor 없이 offset일 때 limit+1 패턴으로 next_cursor가 채워진다."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    now = datetime.now(UTC)
+    mocks = []
+    for _ in range(21):
+        row = MagicMock()
+        row.published_at = now
+        row.created_at = now
+        row.id = uuid4()
+        mocks.append(row)
+
+    mock_session = AsyncMock()
+    mock_result = MagicMock()
+    mock_result.scalars.return_value.unique.return_value.all.return_value = mocks
+    mock_session.execute = AsyncMock(return_value=mock_result)
+
+    rows, next_cursor = await list_notices_paginated(
+        mock_session,
+        limit=20,
+        offset=0,
+        cursor=None,
+    )
+    assert len(rows) == 20
+    assert next_cursor is not None
+    decoded = _decode_cursor(next_cursor)
+    assert decoded is not None
+    assert decoded[2] == rows[-1].id
+
+
+@pytest.mark.asyncio
 async def test_list_notices_paginated_returns_tuple() -> None:
     """list_notices_paginated 반환 타입이 (list[Notice], str | None) 임을 검증."""
     from unittest.mock import AsyncMock, MagicMock

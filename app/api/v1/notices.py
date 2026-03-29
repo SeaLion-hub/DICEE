@@ -70,8 +70,15 @@ def _detail_dto_to_schema(d: NoticePublicDetailDTO) -> NoticeDetailResponse:
 async def list_notices(
     session: ReadOnlySessionDep,
     limit: int = Query(20, ge=1, le=100, description="페이지 크기"),
-    offset: int = Query(0, ge=0, description="cursor 미사용 시 오프셋"),
-    cursor: str | None = Query(None, description="다음 페이지 커서(이전 응답의 next_cursor)"),
+    offset: int = Query(
+        0,
+        ge=0,
+        description="cursor 없을 때만 의미 있음. 다음 페이지는 응답의 next_cursor를 cursor로 넘기는 것을 권장.",
+    ),
+    cursor: str | None = Query(
+        None,
+        description="직전 응답의 next_cursor. 설정 시 키셋 페이지네이션(정렬 일치).",
+    ),
     college_external_id: str | None = Query(
         None,
         max_length=255,
@@ -102,7 +109,16 @@ async def list_notices(
     )
 
 
-@router.post("/search/semantic", response_model=NoticeSemanticSearchResponse)
+@router.post(
+    "/search/semantic",
+    response_model=NoticeSemanticSearchResponse,
+    summary="시맨틱 검색(단일 페이지)",
+    description=(
+        "임베딩 유사도 상위 N건을 한 번에 반환한다. "
+        "목록 API와 달리 next_cursor·페이지네이션 없음. "
+        "자세한 계약은 docs/decisions/notice-semantic-search-contract.md."
+    ),
+)
 async def semantic_search_notices(
     session: ReadOnlySessionDep,
     body: NoticeSemanticSearchRequest,

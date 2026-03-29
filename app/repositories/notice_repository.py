@@ -80,8 +80,11 @@ async def list_notices_paginated(
     """
     공지 목록 페이지네이션 조회. N+1 방지: NOTICE_LIST_DEFER_OPTIONS + selectinload(Notice.college).
     응답에 taxonomy_mappings가 필요하면 load_taxonomy_mappings=True로 selectinload(Notice.taxonomy_mappings) 적용.
-    cursor 있으면 keyset 기반 다음 페이지; 없으면 offset/limit. 반환 (rows, next_cursor).
-    5단계 목록 API. deleted_at IS NULL만 반환.
+
+    cursor가 있으면 keyset(이전 페이지 마지막 행 기준)으로 다음 페이지를 가져온다.
+    cursor가 없으면 offset으로 윈도우를 잡되, 내부적으로 limit+1로 조회해 더 있으면 next_cursor를 채운다.
+    다음 요청은 cursor를 넣는 것을 권장한다(정렬 일관성). 반환 (rows, next_cursor).
+    deleted_at IS NULL만 반환.
     """
     order = (
         Notice.published_at.desc().nulls_last(),
@@ -128,7 +131,7 @@ async def list_notices_paginated(
             .where(Notice.deleted_at.is_(None))
             .options(*NOTICE_LIST_DEFER_OPTIONS)
             .order_by(*order)
-            .limit(limit)
+            .limit(limit + 1)
             .offset(offset)
         )
 
@@ -143,7 +146,7 @@ async def list_notices_paginated(
     rows = list(result.scalars().unique().all())
 
     next_cursor: str | None = None
-    if keyset_cond is not None and len(rows) > limit:
+    if len(rows) > limit:
         rows = rows[:limit]
         last = rows[-1]
         next_cursor = _encode_cursor(last.published_at, last.created_at, last.id)

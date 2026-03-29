@@ -20,10 +20,13 @@ class NoticeListItem(BaseSchema):
 
 
 class NoticeListResponse(BaseSchema):
-    """키셋/오프셋 페이지네이션 목록."""
+    """공지 목록. 다음 페이지가 있으면 next_cursor에 키셋 문자열이 채워진다."""
 
     items: list[NoticeListItem]
-    next_cursor: str | None = None
+    next_cursor: str | None = Field(
+        default=None,
+        description="다음 페이지가 있을 때만 설정. 다음 요청의 cursor 쿼리에 그대로 전달.",
+    )
     limit: int
 
 
@@ -31,7 +34,10 @@ class MatchedNoticeListResponse(BaseSchema):
     """맞춤(매칭) 피드. 프로필 미완성 시 requires_profile=True·items 비움."""
 
     items: list[NoticeListItem]
-    next_cursor: str | None = None
+    next_cursor: str | None = Field(
+        default=None,
+        description="다음 매칭 페이지가 있을 때만 설정. 다음 요청의 cursor 쿼리에 그대로 전달.",
+    )
     limit: int
     requires_profile: bool = False
 

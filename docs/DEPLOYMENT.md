@@ -79,6 +79,20 @@
 | `REDIS_BLOCKLIST_FAIL_CLOSED` | production API는 `true` 권장 |
 | `TRUSTED_PROXY_IPS` | 신뢰할 프록시 IP 지정 |
 
+### Next.js(Vercel)와 `/v1` 인증 (권장 패턴)
+
+백엔드는 `POST /v1/auth/google`, `POST /v1/auth/refresh`가 **JSON body**로 access·refresh JWT를 돌려준다. 브라우저 **SPA만** 두고 refresh를 `localStorage` 등에 두면 XSS 시 장기 토큰 유출 면적이 커진다.
+
+**권장:** Next.js **Route Handler / 서버 액션(BFF)** 이 authorization code를 받아 백엔드와 교환하고, **refresh 토큰은 HttpOnly·Secure·SameSite=Lax(또는 엄격한 조합) 쿠키**로만 보관한다. 클라이언트 번들에는 **짧은 수명의 access**만 두거나, 요청마다 서버가 `Authorization`을 붙이게 한다.
+
+**체크리스트**
+
+- CSRF: 쿠키 기반 세션이면 동일 사이트·토큰 이중 제출 등 정책을 문서화한다.
+- `POST /v1/auth/logout` 호출 후 쿠키 삭제·refresh 폐기 흐름을 BFF에서 맞춘다.
+- `429`/`503` 시 `Retry-After` 헤더(auth 라우트)를 프록시에서 그대로 전달할지 결정한다.
+
+자세한 blocklist·fail-open/fail-closed는 [redis-blocklist-circuit-breaker.md](decisions/redis-blocklist-circuit-breaker.md)를 본다.
+
 ### 로깅/관측
 
 | 변수 | 설명 | 권장값 |

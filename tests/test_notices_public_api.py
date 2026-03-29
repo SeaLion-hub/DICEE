@@ -29,7 +29,9 @@ async def test_list_notices_unknown_college_returns_404(async_client: httpx.Asyn
         m.side_effect = UnknownCollegeExternalIdError("no-such-college")
         resp = await async_client.get("/v1/notices", params={"college_external_id": "no-such-college"})
         assert resp.status_code == 404
-        assert "College" in resp.json().get("detail", "")
+        body = resp.json()
+        assert "College" in body.get("detail", "")
+        assert body.get("code") == "NOT_FOUND"
 
 
 @pytest.mark.asyncio
@@ -60,6 +62,7 @@ async def test_get_notice_not_found_returns_404(async_client: httpx.AsyncClient)
         m.return_value = None
         resp = await async_client.get(f"/v1/notices/{nid}")
         assert resp.status_code == 404
+        assert resp.json().get("code") == "NOT_FOUND"
 
 
 @pytest.mark.asyncio
@@ -102,7 +105,9 @@ async def test_list_notices_operational_error_returns_503(async_client: httpx.As
         m.side_effect = OperationalError("SELECT 1", {}, Exception("db down"))
         resp = await async_client.get("/v1/notices")
         assert resp.status_code == 503
-        assert "unavailable" in resp.json().get("detail", "").lower()
+        data = resp.json()
+        assert "unavailable" in data.get("detail", "").lower()
+        assert data.get("code") == "SERVICE_UNAVAILABLE"
 
 
 @pytest.mark.asyncio
@@ -112,7 +117,9 @@ async def test_get_notice_operational_error_returns_503(async_client: httpx.Asyn
         m.side_effect = OperationalError("SELECT 1", {}, Exception("db down"))
         resp = await async_client.get(f"/v1/notices/{nid}")
         assert resp.status_code == 503
-        assert "unavailable" in resp.json().get("detail", "").lower()
+        data = resp.json()
+        assert "unavailable" in data.get("detail", "").lower()
+        assert data.get("code") == "SERVICE_UNAVAILABLE"
 
 
 @pytest.mark.asyncio
@@ -131,4 +138,6 @@ async def test_semantic_search_operational_error_returns_503(async_client: httpx
             },
         )
         assert resp.status_code == 503
-        assert "unavailable" in resp.json().get("detail", "").lower()
+        data = resp.json()
+        assert "unavailable" in data.get("detail", "").lower()
+        assert data.get("code") == "SERVICE_UNAVAILABLE"

@@ -22,6 +22,22 @@ logger = logging.getLogger(__name__)
 INTERNAL_CRAWL_503_DETAIL = "Service temporarily unavailable. Try again later."
 COLLEGE_NOT_FOUND_CLIENT_DETAIL = "College code is not registered."
 
+_HTTP_STATUS_DEFAULT_CODES: dict[int, str] = {
+    400: "BAD_REQUEST",
+    401: "UNAUTHORIZED",
+    403: "FORBIDDEN",
+    404: "NOT_FOUND",
+    409: "CONFLICT",
+    422: "UNPROCESSABLE_ENTITY",
+    429: "TOO_MANY_REQUESTS",
+    503: "SERVICE_UNAVAILABLE",
+}
+
+
+def _http_exception_code(status_code: int) -> str:
+    """라우터가 exc.code를 주지 않을 때 상태코드별 기본 code."""
+    return _HTTP_STATUS_DEFAULT_CODES.get(status_code, "HTTP_ERROR")
+
 
 def _normalize_detail(detail: Any) -> str:
     """HTTPException.detail을 응답 body용 문자열로 통일. 클라이언트는 항상 문자열 detail을 받음."""
@@ -110,6 +126,17 @@ async def college_not_found_handler(request: Request, exc: Exception) -> JSONRes
     )
 
 
+async def http_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    """라우터 HTTPException. Starlette 기본과 동일 status·headers, 본문은 detail+code+request_id."""
+    request_id = getattr(request.state, "request_id", None)
+    exc_http = cast(HTTPException, exc)
+    detail_str = _normalize_detail(exc_http.detail)
+    code = getattr(exc_http, "code", None) or _http_exception_code(exc_http.status_code)
+    content = _error_content(detail=detail_str, code=code, request_id=request_id)
+    headers = getattr(exc_http, "headers", None) or {}
+    return JSONResponse(status_code=exc_http.status_code, content=content, headers=dict(headers))
+
+
 async def internal_crawl_error_handler(request: Request, exc: Exception) -> JSONResponse:
     """내부 크롤 API 인프라/비즈니스 오류. 503 Service Unavailable."""
     if isinstance(exc, RedisLockUnavailableError):
@@ -136,18 +163,10 @@ async def internal_crawl_error_handler(request: Request, exc: Exception) -> JSON
 
 
 async def global_exception_handler(request: Request, exc: Exception) -> JSONResponse:
-    """미처리 예외. HTTPException은 detail 정규화 후 code/request_id 포함해 반환, 그 외 500 + INTERNAL_ERROR."""
+    """미처리 예외. HTTPException은 http_exception_handler에서 처리. 그 외 500 + INTERNAL_ERROR."""
     if isinstance(exc, asyncio.CancelledError):
         raise exc
     request_id = getattr(request.state, "request_id", None)
-    if isinstance(exc, HTTPException):
-        detail_str = _normalize_detail(exc.detail)
-        code = getattr(exc, "code", None) if hasattr(exc, "code") else None
-        if not code:
-            code = "HTTP_ERROR"
-        content = _error_content(detail=detail_str, code=code, request_id=request_id)
-        headers = getattr(exc, "headers", None) or {}
-        return JSONResponse(status_code=exc.status_code, content=content, headers=dict(headers))
     logger.exception(
         "Unhandled exception: %s (request_id=%s)",
         exc,

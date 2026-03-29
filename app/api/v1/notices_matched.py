@@ -37,7 +37,10 @@ async def list_matched(
     session: ReadOnlySessionDep,
     access: VerifiedAccessDep,
     limit: int = Query(20, ge=1, le=50, description="페이지 크기 (기본 20, 최대 50)"),
-    cursor: str | None = Query(None, description="이전 응답의 next_cursor"),
+    cursor: str | None = Query(
+        None,
+        description="직전 응답의 next_cursor. 매칭 밀도가 낮을 때 여러 배치를 이어갈 때 사용.",
+    ),
 ) -> MatchedNoticeListResponse:
     try:
         items, next_cursor, requires_profile = await list_matched_notices(

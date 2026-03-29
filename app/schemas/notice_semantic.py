@@ -24,5 +24,10 @@ class NoticeSemanticSearchRequest(BaseSchema):
 
 
 class NoticeSemanticSearchResponse(BaseSchema):
-    items: list[NoticeListItem]
-    limit: int
+    """단일 페이지 결과. 커서 페이지네이션 없음(상위 N건만)."""
+
+    items: list[NoticeListItem] = Field(
+        ...,
+        description="임베딩 유사도 상위 limit건(또는 그 미만). next_cursor 없음.",
+    )
+    limit: int = Field(..., description="요청에 echo. 최대 반환 건수 상한.")

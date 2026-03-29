@@ -17,3 +17,12 @@
 ## 적용 위치
 
 - `app/core/redis.py`: `BlocklistCircuitBreaker`, `is_access_blocked`/`add_access_to_blocklist`가 내부에서 원시 호출 후 성공/실패 기록.
+
+---
+
+## Fail-open vs fail-closed (`REDIS_BLOCKLIST_FAIL_CLOSED`)
+
+- **기본값 `false`(fail-open)**: Redis·회로가 열리면 blocklist를 건너뛰고 JWT 서명만으로 access를 통과시킨다. 로그아웃 직후 access가 만료 전까지 재사용될 수 있는 창이 생길 수 있다. 가용성 우선.
+- **`true`(fail-closed)**: blocklist 조회가 불가하면 인증 경로가 **503** 등으로 막힐 수 있다. 로그아웃·차단 의미가 더 강하게 유지된다. 프로덕션 API는 배포 가이드에 따라 `true` 권장을 검토한다.
+
+Circuit **open** 시 동작은 위 “열림(open) 시” 절과 합쳐서 읽는다.
