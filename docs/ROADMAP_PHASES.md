@@ -98,9 +98,9 @@
 | --- | -------- | ----------------- |
 | 1단계 | 완료       | —                 |
 | 2단계 | 완료       | —                 |
-| 3단계 | 1주~1.5주  | 지연 시 WORK_LOG에 사유 |
-| 4단계 | 2~3주     | —                 |
-| 5단계 | 1~2주     | —                 |
+| 3단계 | 완료       | 핵심 파이프라인·트리거·워커 DB는 코드 기준 반영됨 |
+| 4단계 | 완료       | 아래 진행 현황·마일스톤 참고 |
+| 5단계 | 1~2주     | 매칭·달력·FTS 등 잔여 API는 진행 중(아래 구현 현황) |
 | 6단계 | 3주       | —                 |
 
 
@@ -151,6 +151,12 @@
 
 **마일스톤**: 지정 시간마다 크롤러가 최신 공지를 DB에 upsert·content_hash 적용. POST /internal/trigger-crawl로 Cron 연동 가능. 검크리스트 통과 후 4단계 진입.
 
+**진행 현황 (코드·CI 기준, 2026-03-29)**:
+- [x] SeaLion-hub/crawler 기반 연세 크롤러·Celery 태스크·`content_hash`·notice_id만 AI 큐 전달
+- [x] `app/core/celery_app.py` `@worker_init` → `init_sync_db()` 선 초기화(멱등)
+- [x] Polite crawling·단과대 stagger·Redis broker `redis://`/`rediss://`·크롤 성공 시 `dicee:last_crawl_success`·`/ready` 스냅샷
+- [x] 트리거 멱등·락·enqueue 실패 시 503 + `ALL_ENQUEUES_FAILED` / `PARTIAL_ENQUEUE_FAILURE` (관련 테스트 존재)
+
 ---
 
 ### 4단계: 티어링 기반 Multimodal AI 파이프라인
@@ -165,7 +171,7 @@
 - [x] LLM 출력 직후 `validate_and_normalize_taxonomy()` 후처리 validator 추가 (`app/services/ai_pipeline.py`)
 - [x] taxonomy 영속 구조를 `notice_taxonomy_mappings` 정규화 테이블로 전환 (`alembic/versions/010_notice_taxonomy_normalization.py`)
 - [x] taxonomy 핵심 케이스 5종 테스트 추가 (`tests/test_ai_pipeline_schema.py`)
-- [x] 지정 AI 테스트 스위트 통과(최신: 51 passed, 1 skipped)
+- [x] 지정 AI 테스트 스위트 통과(CI·로컬 전체 스위트는 WORK_LOG 최신 건수 참고)
 - [x] AI 결과 DB 반영 직후 후행 파이프라인 훅: 구조화 로그 `notice_ai_extraction_completed`, 메트릭 `notice_ai_extraction_completed_total`(라벨 `college_code`), Redis 리스트 `dicee:ai_extraction_completed_queue`(RPUSH+LTRIM 상한; Redis 실패 시 fail-open) (`app/services/tasks.py`, `app/core/redis.py`, `app/core/metrics.py`)
 
 **마일스톤**: 불규칙한 포스터 공지도 AI가 JSON으로 분해해 DB에 에러 없이 저장. 429 없이 안정 동작. 매칭 시 알림 큐 이벤트 전달 설계 반영.
@@ -183,6 +189,12 @@
 - 상세: `notice_repository.get_notice_by_id_with_relations` 사용. `selectinload(Notice.college)`, `selectinload(Notice.notice_content)` 적용.
 
 **마일스톤**: Swagger에서 임의 프로필 입력 시 지원 가능한 공지만 필터링 응답. 일정 목록 API로 기간별 추출 일정 조회 가능.
+
+**구현 현황 (2026-03-29)** — 로드맵 할 일 대비:
+- [x] API `/v1` 프리픽스·Swagger: `GET /v1/notices`(커서·오프셋·단과대 필터), `GET /v1/notices/{notice_id}`, `POST /v1/notices/search/semantic`(pgvector 임베딩 기반; 전통 FTS·GIN은 미구현)
+- [x] 구글 OAuth + JWT: `/v1/auth/*` (`app/api/v1/auth.py`)
+- [ ] `GET /v1/users/me` 및 프로필·매칭 탭(전체/맞춤) API — [user-notice-matching-and-api-contracts.md](decisions/user-notice-matching-and-api-contracts.md) 계약대로 구현 예정
+- [ ] `GET /v1/calendar/events`, user_calendar_events 노출, `.ics` / Google Calendar 연동
 
 ---
 
@@ -206,7 +218,7 @@
 **3단계·크롤러 관련**
 
 - **(반영됨)** content_hash·AI 큐 대상 선별은 `Notice` bulk upsert + `content_hash.is_distinct_from` + RETURNING으로 처리. `get_by_college_external_sync`는 `notice_contents` content_url 백필 등 단건 경로에만 사용 — 별도 배치 조회 작업 불필요.
-- **3단계 마무리** — Celery `@worker_init`에서 `init_sync_db()` 명시 호출(fail-fast; `get_sync_session` lazy와 병행). trigger-crawl enqueue 실패는 `InternalCrawlService`에서 락 해제·구조화 로그·HTTP **503** + 본문 `ALL_ENQUEUES_FAILED` / `PARTIAL_ENQUEUE_FAILURE`(테스트: `test_security_features`, `test_trigger_idempotency`).
+- **(반영됨)** **3단계 마무리** — Celery `@worker_init`에서 `init_sync_db()` 명시 호출(fail-fast; `get_sync_session` lazy와 병행). trigger-crawl enqueue 실패는 `InternalCrawlService`에서 락 해제·구조화 로그·HTTP **503** + 본문 `ALL_ENQUEUES_FAILED` / `PARTIAL_ENQUEUE_FAILURE`(테스트: `test_security_features`, `test_trigger_idempotency`).
 - **크롤러 정리 시** — 공통 HTTP 래퍼(timeout·RequestException 정책).
 - **(반영됨)** 로드맵의 `crawl_lock:{college_code}` 의도는 코드의 **`dicee:trigger_lock:`** + 태스크에 전달된 `lock_token`(heartbeat·TTL) + **`dicee:crawl_task_execution:`** 중복 전달 방지로 충족. TTL은 `redis_trigger_lock_ttl_seconds` 등 설정으로 짧게 유지(장시간 단일 키 점유 금지).
 
@@ -215,14 +227,14 @@
 - **4단계 이후 또는 6단계 이후** — 비동기 큐 전환(Celery → ARQ 등).
 - **3단계 마무리 또는 크롤러 정리 시** — 크롤러 레지스트리·Base 클래스.
 - **4단계 또는 크롤러 정리 시** — httpx·병렬 크롤링·Bulk Upsert(트레이드오프: Polite crawling).
-- **3단계 마무리** — CI PostgreSQL 서비스.
-- **4단계 또는 배포 안정화 시** — Health 확장·"마지막 성공 크롤" 모니터링. (구현: Redis `dicee:last_crawl_success:{college_code}` ISO 타임스탬프, 크롤 태스크 성공 시 갱신; `/ready`에서 Redis 가용 시 요약 노출.)
+- **(반영됨)** **3단계 마무리** — CI PostgreSQL 서비스(`.github/workflows/ci.yml` `services.postgres`, pgvector 이미지).
+- **(반영됨)** Health·"마지막 성공 크롤" — Redis `dicee:last_crawl_success` HSET, 크롤 태스크 성공 시 갱신; `/ready`에서 Redis 가용 시 `last_crawl_success` 스냅샷 노출.
 
 **기술·운영**
 
 - **5·6단계 이후 또는 데이터 축적 후** — 데이터 수명 주기·파티셔닝·아카이빙.
-- **1단계** — CI/CD: Ruff → Mypy → Pytest.
-- **3단계 이후 ~ 6단계 직전** — API Rate Limit(slowapi 등).
+- **(반영됨)** **1단계** — CI/CD: Ruff → Mypy → Pytest(`.github/workflows/ci.yml`).
+- **(부분 반영)** **3단계 이후 ~ 6단계 직전** — API Rate Limit: `app/core/api_rate_limit.py`(Redis·인메모리)로 인증·내부 트리거 등에 적용. slowapi 전면 도입은 미적용.
 - **5단계** — Repository → DTO 반환 검토.
 - **6단계 이후** — Observability(Correlation ID, structlog, Sentry request_id).
 - **6단계 이후** — AI False Positive 고도화(is_manual_edited·어드민).
@@ -239,8 +251,8 @@
 테크 리드·시니어 풀스택 리뷰에서 지적된 항목을 계획표로 정리. **우선순위**: P0(즉시) → P1 → P2 → P3.  
 상세 표·코드 반영 내역은 이전 ROADMAP 이력 또는 WORK_LOG 참고. 요약만 아래에 둠.
 
-- **P0**: 비동기 크롤러 전환(A1), DRY 플로우 공통화(A2), JWT iss/aud(S1), 구글 응답 Pydantic 검증(S5·R1). **P0 머지 전에는 새 기능 코드 금지.**
-- **P1**: OOM 방어(E1) 청크+expunge_all+참조 해제, Sentry except Exception 제거(S3), compare_digest(S4), trigger-crawl async def(O2). 3단계 완료 전 Hotfix(S3) 필수.
+- **P0**: 비동기 크롤러 전환(A1), DRY 플로우 공통화(A2), JWT iss/aud(S1), 구글 응답 Pydantic 검증(S5·R1). *(2026-03-29: 본 표는 과거 테크 리뷰 스냅샷이다. 이행 여부는 WORK_LOG·코드·CI를 본다. 신규 기능은 아키텍처·릴리스 게이트에 맞춰 진행한다.)*
+- **P1**: OOM 방어(E1) 청크+expunge_all+참조 해제, Sentry except Exception 제거(S3), compare_digest(S4), trigger-crawl async def(O2). *(동일하게 스냅샷; 일부는 이미 반영되었을 수 있음.)*
 - **P2**: 인프라 원칙(S2), redirect_uri 설정화(E2), 예외 정책 문서화(R2).
 - **P3**: DB 풀 설정화(E3), health status(R3), 노이즈 파라미터(O1).
 
@@ -253,4 +265,4 @@
   - **Fuzzy Search (퍼지 검색):** 5단계 검색 API 구현 시, 단순 `ILIKE`를 넘어 초성/유사어 검색 및 카테고리 필터링이 가능한 동적 쿼리 빌더(QueryDSL 방식) 적용 검토.
   - **범용 Cache 컴포넌트:** 5단계 응답 속도 최적화 시, Redis 캐시 레이어 내부에서 Pydantic 모델의 JSON 직렬화/역직렬화를 자동 처리하는 `CacheService` 클래스 도입 검토.
 
-**결론**: 문서 계획이 코드가 되기 전까지는 의미 없다. P0 브랜치부터 작업·PR 시 코드 라인 단위 리뷰.
+**결론**: 문서 계획이 코드가 되기 전까지는 의미 없다. PR·머지는 CI·[RELEASE_GATE](RELEASE_GATE.md)·코드 리뷰로 검증한다.

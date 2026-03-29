@@ -49,6 +49,7 @@
 ---
 ## 2026-03-29
 
+- [문서] `/document-release`에 맞춰 `README.md`·`docs/ROADMAP.md`·`docs/ROADMAP_PHASES.md` 동기화: 3·4단계 완료·5단계 잔여(매칭·달력·FTS) 명시, 추가 검토 아이디어 중 구현된 항목 `(반영됨)` 표기, CI·rate limit·기술 부채 표 각주 보강. 영향: 온보딩·단계 판단 시 문서-코드 정합.
 - [개발 경험] pre-commit 패치 stash와 ruff `--fix` 충돌 완화: `scripts/pre_commit_wrapper.py`가 `git stash push --keep-index` 후 `pre-commit hook-impl` 호출, 끝에 `stash pop`. 훅 설치: `python scripts/install_pre_commit_hook.py`. `.pre-commit-config.yaml`·`pre_commit_check_mixed_stage.py` 주석 보강.
 - [pre-commit UX] `pre_commit_wrapper.py`에 누락된 `import os`로 래퍼 훅 사용 시 `NameError`가 나던 문제 수정; 훅·stash 실패 시 stderr에 한국어 안내·재현 명령(`pre-commit run --all-files`, PowerShell `SKIP` 예) 추가. `pre_commit_check_mixed_stage.py` 첫 줄에 커밋 차단 원인 표시. 검증: `pytest` 383 passed.
 - [Git] `.gitignore`에 `pytest_errors.log`·`/status.txt` 추가, 실수로 추적되던 `pytest_errors.log`는 `git rm --cached`로 인덱스에서만 제거(워킹 트리 파일 유지).

@@ -19,7 +19,7 @@
 
 | 항목 | 내용 |
 |------|------|
-| **현재 마일스톤** | **M2 Intelligence** (크롤러·작업 큐 연동 및 AI 파이프라인 구축) |
+| **현재 마일스톤** | **M2 Intelligence** — 수집·AI 파이프라인(3·4단계) 핵심 완료, **5단계**(매칭·달력 등 API) 진행 |
 | **배포** | 백엔드 Railway, 프론트 Vercel. 상세 [DEPLOYMENT](DEPLOYMENT.md). |
 | **작업 기록** | [WORK_LOG](WORK_LOG.md) |
 | **단계별 할 일·확정 사항·예상 문제** | [ROADMAP_PHASES](ROADMAP_PHASES.md) |

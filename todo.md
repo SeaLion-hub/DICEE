@@ -27,7 +27,7 @@ Composer(Cmd+I) 사용 시 **@todo.md**를 반드시 포함해 세션 컨텍스�
 - **예시(새 대학 크롤러)**: @docs/decisions/database-spec.md를 참고해 Notice 스키마·필수 필드(published_at, external_id, title, url 등)를 확인한 뒤, 베이스/기존 크롤러 패턴을 따라 단계별 계획을 적는다.
 - 한 번에 "모든 크롤러 다 만들어줘"라고 하지 말고, **"베이스 클래스 상속 확인 → 로그인/세션 로직 → 파싱 로직"**처럼 끊어서 지시하고, 그때마다 이 [Plan]과 [Checklist]를 갱신하게 하라.
 
-(최신) md 문서 uptodate 확인·최신화: README(Celery 진입점·헬스 엔드포인트·현재 M2 문구), CAUTIONS(DATABASE_URL psycopg), error-handling(청크 commit·expunge_all), WORK_LOG·PLAN_REMEDIATION_68 반영.
+(최신) `document-release`: README·ROADMAP·ROADMAP_PHASES 단계 완료 표기 동기화(2026-03-29). CAUTIONS·error-handling은 필요 시 별도 점검.
 
 - **백로그 (FastAPI eng)**: 동일 리소스 타입으로 「없으면 404」 흐름이 **3곳 이상** 반복되면, 해당 엔드포인트 그룹(예: 공개 공지)에만 `app/core/deps.py` 스타일 `valid_*` 파일럿 검토 후 효과 보면 확장.
 
@@ -52,7 +52,7 @@ Composer(Cmd+I) 사용 시 **@todo.md**를 반드시 포함해 세션 컨텍스�
 - [x] internal_contracts.py: 모듈 docstring 메타 문구 제거 ("HTTP 의미를 모름")
 - [x] internal_crawl_service.py: `except Exception` 블록을 `(ConnectionError, TimeoutError, OSError)` 로 구체화하고 `extra={"college_code": code}` 컨텍스트 로깅 추가
 - [x] pytest 실행하여 trigger 관련 회귀 여부 확인
-- [ ] Found/Fixed/Reason 형식으로 최종 보고 (진행 예정)
+- [x] Found/Fixed/Reason: 문서 최신화만 수행(코드 변경 없음). Fixed: ROADMAP_PHASES 등에 구현 반영. Reason: 5단계 진입 전 단계-코드 불일치 방지.
 
 ---
 
