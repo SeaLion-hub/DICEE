@@ -4,6 +4,8 @@
 
 **원칙**: 본 명세서는 타협 불가능한 단일 진실 공급원(SSOT)이다. 애플리케이션의 편의를 위해 DB의 무결성, 가용성, 보안 원칙을 훼손하는 것을 엄격히 금지한다.
 
+**품질 게이트(명세 수정 시)**: 변경 후 CI 및 로컬 `pytest`가 green인 상태에서 merge한다. (§6.7·마이그레이션 `016` 동기화: 2026-03-30 document-release, `pytest` 전체 통과 확인.)
+
 ---
 
 ## 1. 공통 규칙 및 식별자
@@ -216,17 +218,22 @@
 * **JSONB 쓰레기통화 방지 제약**: `CONSTRAINT chk_matching_profile_schema CHECK (jsonb_typeof(matching_profile) = 'object' AND NOT (matching_profile ? 'phone' OR matching_profile ? 'ssn'))`
 * **GIN Index**: `CREATE INDEX idx_user_profiles_matching ON user_profiles USING GIN (matching_profile);`
 
-### 6.7 user_calendar_events (사용자 캘린더)
+### 6.7 user_calendar_events (사용자 캘린더, pinned 공지)
+
+유저가 **공지(`notices`)** 를 내 달력에 고정한 행이다. 스케줄 행(`notice_schedules`)에 직접 매달지 않는다.
 
 | 컬럼 | 타입 | 제약 |
 | --- | --- | --- |
-| id | UUID | PK, DEFAULT gen_random_uuid() |
-| user_id | UUID | NOT NULL, FK(users.id), INDEX |
-| notice_schedule_id | UUID | NOT NULL, FK(notice_schedules.id), INDEX |
-| custom_title | VARCHAR(512) | NULL |
+| id | INTEGER | PK, `SERIAL`/자동 증가 (**§1.1 UUID PK 관행의 예외** — 마이그레이션 `016_user_calendar_events_cleanup`에서 레거시 UUID PK를 정수로 치환) |
+| user_id | UUID | NOT NULL, FK(users.id) ON DELETE CASCADE, INDEX |
+| notice_id | UUID | NOT NULL, FK(notices.id) ON DELETE CASCADE, INDEX |
+| title | VARCHAR(512) | NOT NULL (표시용) |
+| start_at | TIMESTAMPTZ | NOT NULL |
+| end_at | TIMESTAMPTZ | NULL |
 | created_at | TIMESTAMPTZ | NOT NULL DEFAULT now() |
 
-* **Unique Index**: `CREATE UNIQUE INDEX uq_user_calendar_user_schedule ON user_calendar_events(user_id, notice_schedule_id);`
+* **Unique Index**: `CREATE UNIQUE INDEX uq_user_calendar_user_notice ON user_calendar_events(user_id, notice_id);`
+* **마이그레이션 `016`**: 기존 `(user_id, notice_schedule_id)`·`custom_title` 형태는 백필·정리 후 제거된다. 다운그레이드 없음.
 
 ### 6.8 keyword_subscriptions (구독 키워드)
 

@@ -12,6 +12,7 @@
 
 - [작성 규칙](#작성-규칙)
 - [작성 형식](#작성-형식)
+- [2026-03-30](#2026-03-30)
 - [2026-03-29](#2026-03-29)
 - [2026-03-28](#2026-03-28)
 - [2026-03-27](#2026-03-27)
@@ -47,6 +48,10 @@
 - `- [단계 또는 영역] 무엇을 했는지 (어떤 파일/기능). 왜 또는 결과 한 줄.`
 
 ---
+## 2026-03-30
+
+- [문서 릴리스] `/document-release`: `016_user_calendar_events_cleanup`·어드바이저리 락·단일 마이그레이터 안내를 `DEPLOYMENT.md`에 반영. `database-spec.md` §6.7을 pinned-event 스키마(정수 PK, `uq_user_calendar_user_notice`)로 갱신하고 명세 수정 시 품질 게이트 한 줄 추가. 검증: `pytest` 489 passed, 5 skipped.
+
 ## 2026-03-29
 
 - [Alembic] `alembic/env.py` advisory lock 조회가 SQLAlchemy 2 autobegin 트랜잭션을 열어 `alembic upgrade head` 전체가 연결 종료 시 롤백되던 문제를 수정. `app/alembic_runtime.py`에서 lock 획득 후 명시적으로 `commit()`해 Alembic이 외부 트랜잭션으로 오인하지 않게 했고, `tests/test_alembic_runtime.py`로 회귀 테스트를 추가.

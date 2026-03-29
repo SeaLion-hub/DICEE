@@ -27,6 +27,8 @@
 - **Railway:** 사용 중인 **PostgreSQL 플랜/템플릿이 `CREATE EXTENSION vector`를 허용하는지** 대시보드·문서로 확인하세요. 확장을 켤 수 없는 템플릿이면 pgvector 지원 인스턴스로 교체하거나, 확장 설치가 가능한 관리형 Postgres로 옮겨야 합니다.
 - **마이그레이션:** Alembic `012_notice_embedding`이 `CREATE EXTENSION IF NOT EXISTS vector` 및 `embedding vector(768)` 컬럼·HNSW 인덱스를 적용합니다. 인덱스 생성은 `SET LOCAL statement_timeout = 0`으로 긴 작업을 허용합니다. **대용량 `notices` 테이블**이면 유지보수 창에서 실행하는 것을 권장합니다.
 - **`015_notice_ai_processing_started_at`:** `notices.ai_processing_started_at`(타임스탬ptz, nullable)과 `(ai_status, ai_processing_started_at)` 인덱스. AI 워커가 `processing` 선점 시각을 기록하고, Beat가 오래된 `processing`을 `pending`으로 되돌릴 때 사용합니다. Release 단계에서 `alembic upgrade head`로 함께 적용됩니다.
+- **`016_user_calendar_events_cleanup`:** `user_calendar_events`를 pinned-event 계약(`notice_id`, `title`, `start_at`/`end_at`)으로 맞춥니다. 레거시 `notice_schedule_id`·`custom_title` 행은 `notice_schedules`/`notices`로 백필한 뒤, 필수 필드가 채워지지 않은 행은 삭제됩니다. PK는 정수(`SERIAL`). **다운그레이드는 지원하지 않습니다.**
+- **단일 마이그레이터:** `alembic/env.py`가 PostgreSQL **어드바이저리 락**으로 동시 `upgrade head`를 막습니다. 락 ID는 환경 변수 `ALEMBIC_ADVISORY_LOCK_ID`(미설정 시 코드 기본값)로 바꿀 수 있습니다. 같은 DB에 Release/migrate 잡을 중복 실행하지 마세요.
 - **실행 주체:** API 프로세스는 마이그레이션을 돌리지 않습니다. Railway **Release Command** `alembic upgrade head` 또는 Compose의 **`migrate` 서비스**만 마이그레이션을 실행합니다 ([Quick Start](#quick-start-5분) 원칙과 동일).
 
 **달력 MV(`active_notice_schedules_mv`):** v1 API는 `notice_schedules` 기준으로 조회합니다. MV를 쓰는 경로가 있다면 프로덕션에서는 주기적 `REFRESH MATERIALIZED VIEW CONCURRENTLY`(별도 beat/cron 또는 운영 잡)로 최신화하세요. 앱 요청마다 REFRESH는 권장하지 않습니다.
@@ -219,7 +221,7 @@ celery -A app.core.celery_app:app beat -l info
 - [ ] `USER_ID_HMAC_KEY` 설정
 - [ ] `REDIS_BLOCKLIST_FAIL_CLOSED=true` (API)
 - [ ] `/health`, `/ready` 정상
-- [ ] Release 단계 `alembic upgrade head` 성공 로그 확인(최신 head에 `015` 등 AI 컬럼 포함 시 반영 확인)
+- [ ] Release 단계 `alembic upgrade head` 성공 로그 확인(최신 head에 `015`·`016` 등 스키마 변경이 포함되면 반영 여부 확인)
 - [ ] 주기 태스크를 쓰는 경우 Celery Beat 프로세스 기동·워커가 `critical` 큐 소비
 - [ ] `LOG_FORMAT` 전환 시 staging 검증 완료
 
