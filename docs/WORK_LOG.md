@@ -49,6 +49,7 @@
 ---
 ## 2026-03-29
 
+- [프로덕션 준비·HTTP] `app/core/config/base.py`: 공유 httpx용 `HTTP_CLIENT_*` 타임아웃·풀 상한 필드 및 keepalive≤max 검증. `app/core/lifespan.py`: `build_app_httpx_client()`로 `AsyncClient(timeout, limits)` 명시. `.env.example`·`DEPLOYMENT.md`(연결·S3/CDN 요약)·`RUNBOOK_DEPLOY.md`(lint-test에 pip-audit 포함 명시). `tests/test_lifespan_httpx_client.py`. 영향: Google OAuth 등 아웃바운드 HTTP 의도 고정, 느린 토큰 응답에 기본 read 30s.
 - [개발 경험·Git] pre-commit에서 mirrors-mypy 훅 제거: 장시간 실행 중 IDE 저장 등으로 `git diff`가 변해 “files were modified by this hook” 오탐이 나던 문제 방지. 타입 검사는 CI `mypy app` 및 로컬 `python -m mypy app` 유지. 커밋 훅은 mixed-stage·black·ruff만.
 - [개발 경험·Git·역사] 과거: 미스테이징+긴 mypy 훅 조합으로 동일 증상 가능 → 커밋 전 전체 스테이징·훅 중 저장 자제. 실패 후 `pre-commit-wrapper: keep-index` 스태시는 확인 후 `pop`/`drop`.
 - [엔지 리뷰·미세 개선] `redis._jti_log_safe` 방어적 `str`/UTF-8, `release_cache_lock`·`release_cached_lock` bool 반환; `get_verified_access`에서 `compute_user_id_hash`는 `(ValueError, TypeError)`·`set_user`는 별도 `Exception` fail-open(B안); `list_recent_notices_for_college_preview`는 `join(Notice.college)`. 테스트: `test_read_cache_soft_ttl`·`test_auth_security_hardening`. 검증: `pytest` 423 passed, 4 skipped.

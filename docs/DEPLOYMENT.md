@@ -12,6 +12,11 @@
 
 **브랜치 보호·SCA·Sentry·로그 전환 체크리스트:** [RUNBOOK_DEPLOY.md](RUNBOOK_DEPLOY.md)
 
+### 프로덕션·연결·정적 자산 (요약)
+
+- API는 기본적으로 **Railway** 같은 장기 프로세스에 맞게 DB 풀 예산과 **공유 httpx 클라이언트의 명시 타임아웃**(`HTTP_CLIENT_*`)을 둔다. 백엔드를 **서버리스 함수**로 옮기면 PostgreSQL 커넥션 폭주를 막기 위해 **RDS Proxy, PgBouncer, 관리형 풀러**를 우선 검토한다.
+- 본문·이미지를 **S3**에 두고 브라우저에 직접 서빙할 때는 **CloudFront 등 CDN**을 앞에 두면 egress 비용과 지연을 줄일 수 있다. 비공개 객체는 서명 URL·OAC 등과 함께 설계한다.
+
 ---
 
 ## PostgreSQL / pgvector

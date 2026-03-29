@@ -11,7 +11,7 @@ SLO·큐·DLQ 기준 롤백 트리거는 [runbooks/release-rollback.md](runbooks
 1. **Require a pull request before merging** 켜기.
 2. **Require status checks to pass before merging** 켜기.
 3. Required checks에 다음을 추가한다 (이름은 Actions 탭의 job 이름과 일치해야 한다).
-   - `lint-test` (`.github/workflows/ci.yml`의 메인 job)
+   - `lint-test` (`.github/workflows/ci.yml`의 메인 job; 동일 job 안에 Ruff·Mypy·pytest·**`pip-audit (SCA)`**까지 포함되며, 마지막 단계 실패 시 머지 불가)
    - (권장) `compose-smoke` — Docker 스모크까지 머지 조건에 넣을지 팀에서 결정.
 
 직접 `main` 푸시는 막는다. 긴급 패치도 PR을 통해 CI green 후 머지한다.

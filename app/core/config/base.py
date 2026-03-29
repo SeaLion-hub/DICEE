@@ -114,6 +114,43 @@ class Settings(BaseSettings):
     auth_refresh_rate_limit_per_minute: int = Field(60, ge=1, le=5000)
     auth_refresh_token_fingerprint_rate_limit_per_minute: int = Field(15, ge=1, le=5000)
 
+    http_client_connect_timeout_seconds: float = Field(
+        10.0,
+        ge=1.0,
+        le=120.0,
+        description="Shared httpx.AsyncClient connect timeout (OAuth and outbound HTTP).",
+    )
+    http_client_read_timeout_seconds: float = Field(
+        30.0,
+        ge=1.0,
+        le=300.0,
+        description="Shared httpx.AsyncClient read timeout.",
+    )
+    http_client_write_timeout_seconds: float = Field(
+        30.0,
+        ge=1.0,
+        le=300.0,
+        description="Shared httpx.AsyncClient write timeout.",
+    )
+    http_client_pool_timeout_seconds: float = Field(
+        10.0,
+        ge=1.0,
+        le=120.0,
+        description="Max seconds to wait for a connection from the httpx pool.",
+    )
+    http_client_max_connections: int = Field(
+        100,
+        ge=1,
+        le=500,
+        description="httpx connection pool max total connections.",
+    )
+    http_client_max_keepalive_connections: int = Field(
+        20,
+        ge=0,
+        le=200,
+        description="httpx max idle keep-alive connections.",
+    )
+
     # Crawler & Worker
     redis_url: str | None = None
     redis_celery_url: str | None = None
@@ -551,6 +588,16 @@ class Settings(BaseSettings):
             raise ValueError(
                 "Production environment requires USER_ID_HMAC_KEY to be set. "
                 "Set USER_ID_HMAC_KEY in .env or Railway Variables."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def http_client_keepalive_lte_pool_max(self) -> "Settings":
+        if self.http_client_max_keepalive_connections > self.http_client_max_connections:
+            raise ValueError(
+                "http_client_max_keepalive_connections must be <= http_client_max_connections "
+                f"(got keepalive={self.http_client_max_keepalive_connections}, "
+                f"max={self.http_client_max_connections})."
             )
         return self
 

@@ -93,10 +93,25 @@ def preload_crawl_runtime_config() -> None:
     _load_crawl_runtime_config()
 
 
+def build_app_httpx_client() -> httpx.AsyncClient:
+    """공유 AsyncClient: Google OAuth 등 아웃바운드 HTTP. 타임아웃·연결 상한은 settings."""
+    timeout = httpx.Timeout(
+        connect=settings.http_client_connect_timeout_seconds,
+        read=settings.http_client_read_timeout_seconds,
+        write=settings.http_client_write_timeout_seconds,
+        pool=settings.http_client_pool_timeout_seconds,
+    )
+    limits = httpx.Limits(
+        max_connections=settings.http_client_max_connections,
+        max_keepalive_connections=settings.http_client_max_keepalive_connections,
+    )
+    return httpx.AsyncClient(timeout=timeout, limits=limits)
+
+
 def create_app_state() -> AppState:
     """AppState 인스턴스 생성 (httpx, KeyFetcher, Redis, engine, session_maker)."""
     return AppState(
-        httpx_client=httpx.AsyncClient(),
+        httpx_client=build_app_httpx_client(),
         google_key_fetcher=AsyncKeyFetcher(
             valid_issuers=["https://accounts.google.com"],
         ),
