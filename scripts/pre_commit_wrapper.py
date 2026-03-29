@@ -133,16 +133,35 @@ def main() -> int:
             _print_hook_failure_hint()
     finally:
         if auto_stashed:
-            pop = subprocess.run(["git", "stash", "pop"], cwd=repo)
-            if pop.returncode != 0:
+            if ret != 0:
                 print(
-                    "pre-commit wrapper: `git stash pop` failed (conflicts?). "
-                    "Resolve files, then `git add` as needed. "
-                    "If the stash is unwanted: `git stash list` then `git stash drop`.\n"
-                    f"Stash message should contain: {_STASH_MSG!r}",
+                    "\n".join(
+                        [
+                            "",
+                            "pre-commit wrapper: 훅이 실패했습니다. "
+                            "`git stash pop`은 실행하지 않았습니다 "
+                            "(black/ruff가 작업 트리를 바꾼 뒤 pop하면 충돌하기 쉽습니다).",
+                            "",
+                            "조치: 실패 원인을 고친 뒤, 포맷으로 수정된 파일이 있으면 "
+                            "`git add` 한 다음 다시 커밋하세요. "
+                            "그다음 미스테이징 변경을 되살리려면:",
+                            f"  git stash list   # 메시지에 {_STASH_MSG!r} 인 항목 확인",
+                            "  git stash pop",
+                            "",
+                        ]
+                    ),
                     file=sys.stderr,
                 )
-                if ret == 0:
+            else:
+                pop = subprocess.run(["git", "stash", "pop"], cwd=repo)
+                if pop.returncode != 0:
+                    print(
+                        "pre-commit wrapper: `git stash pop` failed (conflicts?). "
+                        "Resolve files, then `git add` as needed. "
+                        "If the stash is unwanted: `git stash list` then `git stash drop`.\n"
+                        f"Stash message should contain: {_STASH_MSG!r}",
+                        file=sys.stderr,
+                    )
                     ret = 1
 
     return ret
