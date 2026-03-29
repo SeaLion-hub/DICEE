@@ -72,6 +72,10 @@ dispatch_repo
 .cursor/debug.log
 .cursor/*.log
 
+# Local scratch / redirected test output (do not commit)
+/status.txt
+pytest_errors.log
+
 # 벤치마크 인사이트 (참고용, 커밋 제외)
 docs/reports/BENCHMARK_INSIGHTS.md
 tmp_*/
