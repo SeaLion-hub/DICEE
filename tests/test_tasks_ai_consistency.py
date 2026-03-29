@@ -1,6 +1,7 @@
 """process_notice_ai_task: manual/fallback/provider-error/정상 경로별 DB 상태 일관성 검증."""
 
 import uuid
+from contextlib import contextmanager
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -9,30 +10,52 @@ from app.services.tasks import process_notice_ai_task
 from requests.exceptions import RequestException
 
 
+def _multi_get_sync_session(*sessions: MagicMock):
+    """get_sync_session이 호출될 때마다 다음 세션을 yield하는 컨텍스트 매니저를 반환."""
+
+    it = iter(sessions)
+
+    def factory():
+        sess = next(it)
+
+        @contextmanager
+        def cm():
+            yield sess
+
+        return cm()
+
+    return factory
+
+
 def test_process_notice_ai_task_manual_edited_calls_update_with_existing_json_only() -> None:
     """manual-edited notice: AI 호출 없이 기존 ai_extracted_json만으로 update_ai_result_sync 호출."""
     notice_id = str(uuid.uuid4())
+    nid = uuid.UUID(notice_id)
     existing_json = {"category": "scholarship", "metadata": {}}
     mock_notice = MagicMock()
     mock_notice.is_manual_edited = True
     mock_notice.ai_extracted_json = existing_json
+    mock_notice.id = nid
+    mock_notice.title = "t"
+    mock_notice.notice_content = None
+    mock_notice.images = None
+    mock_notice.college = MagicMock(external_id="c1", name="Col")
 
+    session = MagicMock()
     with (
         patch("app.core.config.settings.ai_pipeline_enabled", True),
-        patch("app.services.tasks.get_sync_session") as mock_session_ctx,
+        patch("app.services.tasks.get_sync_session", side_effect=_multi_get_sync_session(session)),
         patch("app.services.tasks.get_notice_for_ai_sync", return_value=mock_notice) as mock_get,
-        patch("app.services.tasks.update_ai_result_sync") as mock_update,
+        patch("app.services.tasks.update_ai_result_sync", return_value=1) as mock_update,
         patch("app.services.tasks.extract_notice_info") as mock_extract,
     ):
-        session = MagicMock()
-        mock_session_ctx.return_value.__enter__.return_value = session
         process_notice_ai_task.apply(args=(notice_id,), throw=True)
 
     mock_get.assert_called_once()
     mock_extract.assert_not_called()
     mock_update.assert_called_once()
     call_kw = mock_update.call_args
-    assert call_kw[0][1] == uuid.UUID(notice_id)
+    assert call_kw[0][1] == nid
     assert call_kw[0][2] == existing_json
     assert call_kw[1].get("dates") is None
     assert call_kw[1].get("eligibility") is None
@@ -41,10 +64,17 @@ def test_process_notice_ai_task_manual_edited_calls_update_with_existing_json_on
 def test_process_notice_ai_task_normal_notice_calls_update_with_projected_fields() -> None:
     """정상 notice: extract_notice_info ok → update_ai_result_sync에 ai_extracted_json·dates·eligibility 등 전달."""
     notice_id = str(uuid.uuid4())
+    nid = uuid.UUID(notice_id)
     mock_notice = MagicMock()
     mock_notice.is_manual_edited = False
     mock_notice.title = "공지"
     mock_notice.notice_content = None
+    mock_notice.images = None
+    mock_notice.id = nid
+    mock_college = MagicMock()
+    mock_college.name = "단과대"
+    mock_college.external_id = "eng"
+    mock_notice.college = mock_college
 
     stub = NoticeAIExtraction(category=NoticeCategory.SCHOLARSHIP, target_departments=[])
     envelope = MagicMock()
@@ -52,17 +82,15 @@ def test_process_notice_ai_task_normal_notice_calls_update_with_projected_fields
     envelope.meta = {"provider": "google/gemini-1.5-flash", "model": "gemini-1.5-flash", "fallback_reason": None}
     envelope.usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
 
+    s1, s2 = MagicMock(), MagicMock()
     with (
         patch("app.core.config.settings.ai_pipeline_enabled", True),
-        patch("app.services.tasks.get_sync_session") as mock_session_ctx,
+        patch("app.services.tasks.get_sync_session", side_effect=_multi_get_sync_session(s1, s2)),
         patch("app.services.tasks.get_notice_for_ai_sync", return_value=mock_notice),
-        patch("app.services.tasks.update_ai_result_sync") as mock_update,
+        patch("app.services.tasks.update_ai_result_sync", return_value=1) as mock_update,
         patch("app.services.tasks.extract_notice_info", return_value=envelope),
-        patch("app.services.tasks._get_notice_html_for_ai", return_value="<p>body</p>"),
-        patch("app.services.tasks._get_notice_image_urls_for_ai", return_value=[]),
+        patch("app.services.tasks._get_notice_html_for_content_url", return_value="<p>body</p>"),
     ):
-        session = MagicMock()
-        mock_session_ctx.return_value.__enter__.return_value = session
         process_notice_ai_task.apply(args=(notice_id,), throw=True)
 
     mock_update.assert_called_once()
@@ -73,14 +101,21 @@ def test_process_notice_ai_task_normal_notice_calls_update_with_projected_fields
     assert call[1]["eligibility"] is not None
     assert "taxonomy_rows" in call[1]
     assert call[1]["taxonomy_rows"] == []
+    assert call[1].get("only_if_processing") is True
 
 
 def test_process_notice_ai_task_fallback_notice_updates_with_fallback_envelope_meta() -> None:
     """fallback notice: envelope.status=fallback여도 update_ai_result_sync에 _envelope_meta 포함된 JSON 저장."""
     notice_id = str(uuid.uuid4())
+    nid = uuid.UUID(notice_id)
     mock_notice = MagicMock()
     mock_notice.is_manual_edited = False
+    mock_notice.title = "공지"
     mock_notice.notice_content = None
+    mock_notice.images = None
+    mock_notice.id = nid
+    mock_college = MagicMock(name="단과대", external_id="x")
+    mock_notice.college = mock_college
 
     fallback_result = NoticeAIExtraction(target_departments=[])
     envelope = MagicMock()
@@ -96,17 +131,15 @@ def test_process_notice_ai_task_fallback_notice_updates_with_fallback_envelope_m
     }
     envelope.usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
 
+    s1, s2 = MagicMock(), MagicMock()
     with (
         patch("app.core.config.settings.ai_pipeline_enabled", True),
-        patch("app.services.tasks.get_sync_session") as mock_session_ctx,
+        patch("app.services.tasks.get_sync_session", side_effect=_multi_get_sync_session(s1, s2)),
         patch("app.services.tasks.get_notice_for_ai_sync", return_value=mock_notice),
-        patch("app.services.tasks.update_ai_result_sync") as mock_update,
+        patch("app.services.tasks.update_ai_result_sync", return_value=1) as mock_update,
         patch("app.services.tasks.extract_notice_info", return_value=envelope),
-        patch("app.services.tasks._get_notice_html_for_ai", return_value="<p>body</p>"),
-        patch("app.services.tasks._get_notice_image_urls_for_ai", return_value=[]),
+        patch("app.services.tasks._get_notice_html_for_content_url", return_value="<p>body</p>"),
     ):
-        session = MagicMock()
-        mock_session_ctx.return_value.__enter__.return_value = session
         process_notice_ai_task.apply(args=(notice_id,), throw=True)
 
     mock_update.assert_called_once()
@@ -114,36 +147,45 @@ def test_process_notice_ai_task_fallback_notice_updates_with_fallback_envelope_m
     assert ai_json.get("metadata", {}).get("_envelope_meta", {}).get("fallback_reason") == "validation_error"
 
 
-def test_process_notice_ai_task_provider_error_does_not_call_update_and_raises() -> None:
-    """provider error: extract_notice_info가 예외를 던지면 update_ai_result_sync 미호출, 예외 전파."""
+def test_process_notice_ai_task_provider_error_resets_pending_and_raises() -> None:
+    """provider error: extract_notice_info 예외 시 pending 복구 후 예외 전파, 최종 update 없음."""
     notice_id = str(uuid.uuid4())
+    nid = uuid.UUID(notice_id)
     mock_notice = MagicMock()
     mock_notice.is_manual_edited = False
+    mock_notice.title = "공지"
     mock_notice.notice_content = None
+    mock_notice.images = None
+    mock_notice.id = nid
+    mock_college = MagicMock(name="단과대", external_id="y")
+    mock_notice.college = mock_college
 
+    s1, s2 = MagicMock(), MagicMock()
     with (
         patch("app.core.config.settings.ai_pipeline_enabled", True),
-        patch("app.services.tasks.get_sync_session") as mock_session_ctx,
+        patch("app.services.tasks.get_sync_session", side_effect=_multi_get_sync_session(s1, s2)),
         patch("app.services.tasks.get_notice_for_ai_sync", return_value=mock_notice),
         patch("app.services.tasks.update_ai_result_sync") as mock_update,
         patch("app.services.tasks.extract_notice_info", side_effect=RequestException("network")),
-        patch("app.services.tasks._get_notice_html_for_ai", return_value="<p>body</p>"),
-        patch("app.services.tasks._get_notice_image_urls_for_ai", return_value=[]),
+        patch("app.services.tasks._get_notice_html_for_content_url", return_value="<p>body</p>"),
+        patch(
+            "app.services.tasks.reset_ai_notice_to_pending_after_failed_extraction_sync",
+            return_value=1,
+        ) as mock_reset,
         patch.object(process_notice_ai_task, "retry") as mock_retry,
     ):
 
         def _raise_original(exc=None, *args, **kwargs):
-            # Celery autoretry는 기본적으로 Retry 예외를 던지지만,
-            # 이 테스트에서는 원래 provider 예외(RequestException)를 그대로 전파하도록 강제한다.
             raise exc or RequestException("network")
 
         mock_retry.side_effect = lambda *args, **kwargs: _raise_original(kwargs.get("exc"))
-        session = MagicMock()
-        mock_session_ctx.return_value.__enter__.return_value = session
         with pytest.raises(RequestException):
             process_notice_ai_task.apply(args=(notice_id,), throw=True)
 
     mock_update.assert_not_called()
+    mock_reset.assert_called_once()
+    assert mock_reset.call_args[0][0] is s2
+    assert mock_reset.call_args[0][1] == nid
 
 
 def test_process_notice_ai_task_invalid_notice_id_returns_without_db() -> None:
@@ -161,25 +203,27 @@ def test_process_notice_ai_task_invalid_notice_id_returns_without_db() -> None:
 def test_process_notice_ai_task_missing_college_name_stores_fallback() -> None:
     """college.name 비어 있으면 LLM 호출 없이 폴백 투영으로 done 처리."""
     notice_id = str(uuid.uuid4())
+    nid = uuid.UUID(notice_id)
     mock_notice = MagicMock()
     mock_notice.is_manual_edited = False
     mock_notice.title = "공지"
     mock_notice.notice_content = None
+    mock_notice.images = None
+    mock_notice.id = nid
     mock_college = MagicMock()
     mock_college.name = ""
+    mock_college.external_id = "z"
     mock_notice.college = mock_college
 
+    session = MagicMock()
     with (
         patch("app.core.config.settings.ai_pipeline_enabled", True),
-        patch("app.services.tasks.get_sync_session") as mock_session_ctx,
+        patch("app.services.tasks.get_sync_session", side_effect=_multi_get_sync_session(session)),
         patch("app.services.tasks.get_notice_for_ai_sync", return_value=mock_notice),
-        patch("app.services.tasks.update_ai_result_sync") as mock_update,
+        patch("app.services.tasks.update_ai_result_sync", return_value=1) as mock_update,
         patch("app.services.tasks.extract_notice_info") as mock_extract,
-        patch("app.services.tasks._get_notice_html_for_ai", return_value="<p>x</p>"),
-        patch("app.services.tasks._get_notice_image_urls_for_ai", return_value=[]),
+        patch("app.services.tasks._get_notice_html_for_content_url", return_value="<p>x</p>"),
     ):
-        session = MagicMock()
-        mock_session_ctx.return_value.__enter__.return_value = session
         process_notice_ai_task.apply(args=(notice_id,), throw=True)
 
     mock_extract.assert_not_called()

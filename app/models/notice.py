@@ -77,6 +77,10 @@ class Notice(Base):
     # 3. 운영용 필드
     # AI 처리 선점·멱등: pending → processing(선점) → done. FOR UPDATE SKIP LOCKED와 연동.
     ai_status: Mapped[str] = mapped_column(String(20), default="pending", nullable=False, index=True)
+    ai_processing_started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
     content_hash: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     is_manual_edited: Mapped[bool] = mapped_column(default=False, nullable=False)
 

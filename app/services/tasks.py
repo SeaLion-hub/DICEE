@@ -8,7 +8,7 @@ import threading
 import time
 import types
 import uuid as uuid_mod
-from dataclasses import asdict, is_dataclass
+from dataclasses import asdict, dataclass, is_dataclass
 from pathlib import Path
 from typing import Any, cast
 
@@ -23,6 +23,8 @@ from app.core.constants import IngestionBatchStatus
 from app.core.database_sync import get_sync_session
 from app.core.metrics import (
     AI_ENQUEUE_FAILED_TOTAL,
+    AI_PENDING_REQUEUE_TOTAL,
+    AI_STALE_PROCESSING_RESET_TOTAL,
     CRAWL_DURATION_SECONDS,
     CRAWL_FAILURE_TOTAL,
     CRAWL_SUCCESS_TOTAL,
@@ -68,6 +70,9 @@ from app.repositories.ingestion_attempt_repository import (
 from app.repositories.notice_repository import (
     get_by_id_sync,
     get_notice_for_ai_sync,
+    list_pending_notice_ids_for_ai_requeue_sync,
+    reset_ai_notice_to_pending_after_failed_extraction_sync,
+    reset_stale_ai_processing_notices_sync,
     update_ai_result_sync,
     update_notice_content_url_sync,
     update_notice_embedding_sync,
@@ -146,6 +151,12 @@ def _get_notice_html_for_ai(notice) -> str:
     url = None
     if getattr(notice, "notice_content", None) and getattr(notice.notice_content, "content_url", None):
         url = (notice.notice_content.content_url or "").strip()
+    return _get_notice_html_for_content_url(url, getattr(notice, "title", None) or "")
+
+
+def _get_notice_html_for_content_url(content_url: str | None, title: str) -> str:
+    """content_url·title로 본문 HTML 로드(HTTP 또는 최소 HTML). DB 세션 없이 사용."""
+    url = (content_url or "").strip()
     if url and (url.startswith("http://") or url.startswith("https://")):
         if not is_safe_worker_http_url(url):
             logger.warning(
@@ -158,7 +169,6 @@ def _get_notice_html_for_ai(notice) -> str:
                 return resp.text or ""
             except RequestException:
                 raise
-    title = getattr(notice, "title", None) or ""
     return f"<title>{title}</title>" if title else ""
 
 
@@ -168,6 +178,10 @@ MAX_IMAGES_FOR_AI = 5
 def _get_notice_image_urls_for_ai(notice, max_count: int = MAX_IMAGES_FOR_AI) -> list[str]:
     """공지 이미지 URL 목록 반환. AI 추출 시 Image.from_url 입력용. 최대 max_count개."""
     images = getattr(notice, "images", None)
+    return _image_urls_from_json_list(images, max_count=max_count)
+
+
+def _image_urls_from_json_list(images: object, *, max_count: int = MAX_IMAGES_FOR_AI) -> list[str]:
     if not images or not isinstance(images, list):
         return []
     urls: list[str] = []
@@ -180,11 +194,56 @@ def _get_notice_image_urls_for_ai(notice, max_count: int = MAX_IMAGES_FOR_AI) ->
     return urls
 
 
+@dataclass(frozen=True)
+class _NoticeAIWorkSnapshot:
+    notice_id: uuid_mod.UUID
+    title: str
+    content_url: str | None
+    images: list[dict[str, Any]] | None
+    college_name: str
+    college_external_id: str | None
+
+
+def _snapshot_notice_for_ai_work(notice: object) -> _NoticeAIWorkSnapshot:
+    nc = getattr(notice, "notice_content", None)
+    url: str | None = None
+    if nc is not None:
+        raw = getattr(nc, "content_url", None)
+        if raw:
+            u = str(raw).strip()
+            url = u or None
+    college = getattr(notice, "college", None)
+    ext = getattr(college, "external_id", None) if college is not None else None
+    ext_s = str(ext).strip() if ext is not None else None
+    cname = ""
+    if college is not None:
+        cname = str(getattr(college, "name", "") or "").strip()
+    imgs = getattr(notice, "images", None)
+    img_list: list[dict[str, Any]] | None = imgs if isinstance(imgs, list) else None
+    nid = getattr(notice, "id", None)
+    if not isinstance(nid, uuid_mod.UUID):
+        msg = "notice.id must be UUID"
+        raise TypeError(msg)
+    return _NoticeAIWorkSnapshot(
+        notice_id=nid,
+        title=str(getattr(notice, "title", "") or ""),
+        content_url=url,
+        images=img_list,
+        college_name=cname,
+        college_external_id=ext_s,
+    )
+
+
 def _emit_notice_ai_extraction_completed(notice_id_str: str, notice: object) -> None:
     """DB에 AI 결과 반영 후 호출. 메트릭·로그·Redis 스텁 큐(실패 fail-open)."""
     college = getattr(notice, "college", None)
     ext = getattr(college, "external_id", None) if college is not None else None
-    code = (str(ext).strip() if ext is not None else "") or "unknown"
+    code = (str(ext).strip() if ext is not None else "") or None
+    _emit_notice_ai_extraction_completed_by_code(notice_id_str, code)
+
+
+def _emit_notice_ai_extraction_completed_by_code(notice_id_str: str, college_external_id: str | None) -> None:
+    code = (college_external_id or "").strip() or "unknown"
     increment(NOTICE_AI_EXTRACTION_COMPLETED_TOTAL, 1, labels={"college_code": code})
     logger.info(
         "notice_ai_extraction_completed",
@@ -265,72 +324,90 @@ def _delay_process_notice_ai_batch_with_backoff(notice_ids: list[str]) -> None:
 
 
 def _execute_notice_ai_pipeline(
-    session: Session,
     notice_uuid: uuid_mod.UUID,
     notice_id_str: str,
     task_id: str,
 ) -> bool:
     """
-    단일 공지 AI 처리(세션 내). Gemini를 호출한 경우 True, 그 외(스킵·수동·폴백) False.
-    배치 태스크가 호출 간 스로틀에 사용한다.
+    선점·processing 커밋 후 HTTP·Gemini는 DB 연결 없이 수행, 완료만 짧은 세션으로 반영.
+    Gemini를 호출한 경우 True, 그 외(스킵·수동·폴백) False.
     """
-    notice = get_notice_for_ai_sync(session, notice_uuid)
-    if not notice:
-        logger.debug(
-            "process_notice_ai_task: notice_id=%s not available (already processing/done or not found), skipping",
-            notice_id_str,
-        )
+    snap_work: _NoticeAIWorkSnapshot | None = None
+    snap_done: _NoticeAIWorkSnapshot | None = None
+    with get_sync_session() as session:
+        notice = get_notice_for_ai_sync(session, notice_uuid)
+        if not notice:
+            logger.debug(
+                "process_notice_ai_task: notice_id=%s not available (already processing/done or not found), skipping",
+                notice_id_str,
+            )
+            return False
+        logger.info("process_notice_ai_task: task_id=%s notice_id=%s", task_id, notice_id_str)
+        if notice.is_manual_edited:
+            update_ai_result_sync(
+                session,
+                notice_uuid,
+                notice.ai_extracted_json or {},
+            )
+            try:
+                ex_sched = NoticeAIExtraction.model_validate(notice.ai_extracted_json or {})
+            except Exception:
+                ex_sched = NoticeAIExtraction(target_departments=[])
+            _sync_notice_schedules_after_ai(session, notice_uuid, ex_sched)
+            snap_done = _snapshot_notice_for_ai_work(notice)
+        else:
+            college_name = getattr(getattr(notice, "college", None), "name", None)
+            if not college_name or not str(college_name).strip():
+                logger.warning(
+                    "process_notice_ai_task: missing college.name; storing fallback extraction notice_id=%s",
+                    notice_id_str,
+                )
+                fallback = NoticeAIExtraction(target_departments=[])
+                envelope_meta = {
+                    "provider": "none",
+                    "model": "none",
+                    "fallback_reason": "missing_college_name",
+                }
+                projected = project_extraction_to_notice_fields(
+                    fallback,
+                    envelope_meta=envelope_meta,
+                )
+                update_ai_result_sync(
+                    session,
+                    notice_uuid,
+                    projected["ai_extracted_json"],
+                    dates=projected["dates"],
+                    eligibility=projected["eligibility"],
+                    hashtags=projected["hashtags"],
+                    taxonomy_rows=projected.get("taxonomy_rows"),
+                )
+                _sync_notice_schedules_after_ai(session, notice_uuid, fallback)
+                snap_done = _snapshot_notice_for_ai_work(notice)
+            else:
+                snap_work = _snapshot_notice_for_ai_work(notice)
+
+    if snap_done is not None:
+        _emit_notice_ai_extraction_completed_by_code(notice_id_str, snap_done.college_external_id)
         return False
-    logger.info("process_notice_ai_task: task_id=%s notice_id=%s", task_id, notice_id_str)
-    if notice.is_manual_edited:
-        update_ai_result_sync(
-            session,
-            notice_uuid,
-            notice.ai_extracted_json or {},
-        )
-        try:
-            ex_sched = NoticeAIExtraction.model_validate(notice.ai_extracted_json or {})
-        except Exception:
-            ex_sched = NoticeAIExtraction(target_departments=[])
-        _sync_notice_schedules_after_ai(session, notice_uuid, ex_sched)
-        _emit_notice_ai_extraction_completed(notice_id_str, notice)
+
+    if snap_work is None:
         return False
-    html_content = _get_notice_html_for_ai(notice)
-    image_urls = _get_notice_image_urls_for_ai(notice)
-    college_name = getattr(getattr(notice, "college", None), "name", None)
-    if not college_name or not str(college_name).strip():
-        logger.warning(
-            "process_notice_ai_task: missing college.name; storing fallback extraction notice_id=%s",
-            notice_id_str,
+    snap = snap_work
+
+    try:
+        html_content = _get_notice_html_for_content_url(snap.content_url, snap.title)
+        image_urls = _image_urls_from_json_list(snap.images, max_count=MAX_IMAGES_FOR_AI)
+        envelope = extract_notice_info(
+            html_content,
+            image_urls=image_urls,
+            title=snap.title,
+            college_name=snap.college_name,
         )
-        fallback = NoticeAIExtraction(target_departments=[])
-        envelope_meta = {
-            "provider": "none",
-            "model": "none",
-            "fallback_reason": "missing_college_name",
-        }
-        projected = project_extraction_to_notice_fields(
-            fallback,
-            envelope_meta=envelope_meta,
-        )
-        update_ai_result_sync(
-            session,
-            notice_uuid,
-            projected["ai_extracted_json"],
-            dates=projected["dates"],
-            eligibility=projected["eligibility"],
-            hashtags=projected["hashtags"],
-            taxonomy_rows=projected.get("taxonomy_rows"),
-        )
-        _sync_notice_schedules_after_ai(session, notice_uuid, fallback)
-        _emit_notice_ai_extraction_completed(notice_id_str, notice)
-        return False
-    envelope = extract_notice_info(
-        html_content,
-        image_urls=image_urls,
-        title=notice.title,
-        college_name=str(college_name),
-    )
+    except Exception:
+        with get_sync_session() as session:
+            reset_ai_notice_to_pending_after_failed_extraction_sync(session, notice_uuid)
+        raise
+
     merged_envelope_meta: dict[str, Any] = {
         **_coerce_dataclass_or_dict_to_plain_dict(envelope.meta),
         "usage": _coerce_dataclass_or_dict_to_plain_dict(envelope.usage),
@@ -339,17 +416,25 @@ def _execute_notice_ai_pipeline(
         envelope.result,
         envelope_meta=merged_envelope_meta,
     )
-    update_ai_result_sync(
-        session,
-        notice_uuid,
-        projected["ai_extracted_json"],
-        dates=projected["dates"],
-        eligibility=projected["eligibility"],
-        hashtags=projected["hashtags"],
-        taxonomy_rows=projected.get("taxonomy_rows"),
-    )
-    _sync_notice_schedules_after_ai(session, notice_uuid, envelope.result)
-    _emit_notice_ai_extraction_completed(notice_id_str, notice)
+    with get_sync_session() as session:
+        rows = update_ai_result_sync(
+            session,
+            notice_uuid,
+            projected["ai_extracted_json"],
+            dates=projected["dates"],
+            eligibility=projected["eligibility"],
+            hashtags=projected["hashtags"],
+            taxonomy_rows=projected.get("taxonomy_rows"),
+            only_if_processing=True,
+        )
+        if rows == 0:
+            logger.warning(
+                "process_notice_ai_task: notice_id=%s update skipped (not in processing state)",
+                notice_id_str,
+            )
+            return False
+        _sync_notice_schedules_after_ai(session, notice_uuid, envelope.result)
+    _emit_notice_ai_extraction_completed_by_code(notice_id_str, snap.college_external_id)
     return True
 
 
@@ -580,6 +665,54 @@ def close_stale_crawl_runs_task():
     return {"closed": count, "ingestion_closed": ingest}
 
 
+@app.task(name="app.services.tasks.reset_stale_ai_processing_task")
+def reset_stale_ai_processing_task() -> dict[str, Any]:
+    """
+    오래된 ai_status=processing 행을 pending으로 되돌려 재처리 가능하게 함.
+    트랜잭션 분리 후 워커 크래시 시 잠긴 processing 복구.
+    """
+    if not settings.ai_pipeline_enabled:
+        return {"skipped": True, "reason": "ai_pipeline_disabled"}
+    with get_sync_session() as session:
+        n = reset_stale_ai_processing_notices_sync(
+            session,
+            older_than_seconds=settings.ai_stale_processing_reset_seconds,
+        )
+    if n:
+        increment(AI_STALE_PROCESSING_RESET_TOTAL, n)
+        logger.info("reset_stale_ai_processing_task: reset %s row(s) to pending", n)
+    return {"reset": n}
+
+
+@app.task(name="app.services.tasks.requeue_stale_pending_ai_notices_task")
+def requeue_stale_pending_ai_notices_task() -> dict[str, Any]:
+    """updated_at이 오래된 pending 공지를 AI 배치 큐에 다시 넣는다 (enqueue 실패 복구)."""
+    if not settings.ai_pipeline_enabled:
+        return {"skipped": True, "reason": "ai_pipeline_disabled"}
+    with get_sync_session() as session:
+        ids = list_pending_notice_ids_for_ai_requeue_sync(
+            session,
+            older_than_seconds=settings.ai_stale_pending_requeue_seconds,
+            limit=settings.ai_pending_requeue_batch_limit,
+        )
+    if not ids:
+        return {"requeued": 0}
+    str_ids = [str(x) for x in ids]
+    try:
+        _delay_process_notice_ai_batch_with_backoff(str_ids)
+    except Exception as e:
+        logger.warning(
+            "requeue_stale_pending_ai_notices_task: enqueue failed count=%s: %s",
+            len(str_ids),
+            e,
+            exc_info=True,
+        )
+        return {"requeued": 0, "error": type(e).__name__}
+    increment(AI_PENDING_REQUEUE_TOTAL, len(ids))
+    logger.info("requeue_stale_pending_ai_notices_task: enqueued %s notice id(s)", len(ids))
+    return {"requeued": len(ids)}
+
+
 @app.task(
     name="app.services.tasks.process_notice_ai_task",
     bind=True,
@@ -617,8 +750,7 @@ def process_notice_ai_task(self, notice_id: str):
         return
     task_id = getattr(self.request, "id", None) or ""
     _set_task_context(str(task_id) if task_id else None)
-    with get_sync_session() as session:
-        _execute_notice_ai_pipeline(session, notice_uuid, notice_id, task_id)
+    _execute_notice_ai_pipeline(notice_uuid, notice_id, task_id)
 
 
 @app.task(
@@ -664,8 +796,7 @@ def process_notice_ai_batch_task(self, notice_ids: list[str]) -> None:
             )
             prev_gemini = False
             continue
-        with get_sync_session() as session:
-            prev_gemini = _execute_notice_ai_pipeline(session, notice_uuid, nid_str, task_id)
+        prev_gemini = _execute_notice_ai_pipeline(notice_uuid, nid_str, task_id)
 
 
 @app.task(

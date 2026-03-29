@@ -398,10 +398,13 @@ def crawl_college_sync(
         )
     else:
         adapter = _DefaultSyncCrawlAdapter()
+    college_id = college.id
+    session.commit()
+    session.expunge_all()
     return _run_crawl_pipeline_sync(
         session,
         college_code=college_code,
-        college_id=college.id,
+        college_id=college_id,
         list_url=list_url,
         get_links_fn=get_links_fn,
         scrape_fn=scrape_fn,

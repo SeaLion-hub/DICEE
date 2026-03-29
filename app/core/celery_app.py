@@ -71,6 +71,8 @@ app.conf.update(
         "app.services.tasks.process_notice_ai_batch_task": {"queue": "ai"},
         "app.services.tasks.backfill_notice_embedding_task": {"queue": "ai"},
         "app.services.tasks.drain_content_spool_task": {"queue": "critical"},
+        "app.services.tasks.reset_stale_ai_processing_task": {"queue": "critical"},
+        "app.services.tasks.requeue_stale_pending_ai_notices_task": {"queue": "critical"},
     },
     beat_schedule={
         "close-stale-crawl-runs": {
@@ -80,6 +82,14 @@ app.conf.update(
         "drain-content-spool": {
             "task": "app.services.tasks.drain_content_spool_task",
             "schedule": 300.0,
+        },
+        "reset-stale-ai-processing": {
+            "task": "app.services.tasks.reset_stale_ai_processing_task",
+            "schedule": 600.0,
+        },
+        "requeue-stale-pending-ai": {
+            "task": "app.services.tasks.requeue_stale_pending_ai_notices_task",
+            "schedule": 900.0,
         },
     },
 )

@@ -7,7 +7,7 @@
 import base64
 import uuid
 from collections.abc import Iterator, Sequence
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import and_, delete, or_, select, tuple_, update
@@ -275,6 +275,7 @@ def get_notice_for_ai_sync(session: Session, notice_id: uuid.UUID) -> Notice | N
     if notice is None:
         return None
     notice.ai_status = "processing"
+    notice.ai_processing_started_at = datetime.now(UTC)
     session.flush()
     return notice
 
@@ -288,27 +289,95 @@ def update_ai_result_sync(
     eligibility: list[str] | None = None,
     hashtags: list[str] | None = None,
     taxonomy_rows: list[dict[str, str]] | None = None,
-) -> None:
+    only_if_processing: bool = False,
+) -> int:
     """
     AI 처리 완료 시 ai_status='done', ai_extracted_json 및 투영 필드 저장 (동기, 워커용).
     taxonomy_rows가 전달되면 notice_taxonomy_mappings를 notice_id 기준으로 교체한다.
+    only_if_processing=True면 현재 행이 processing일 때만 갱신. 반환: 매칭 행 수.
     """
-    values: dict[str, Any] = {"ai_status": "done", "ai_extracted_json": ai_extracted_json}
+    values: dict[str, Any] = {
+        "ai_status": "done",
+        "ai_extracted_json": ai_extracted_json,
+        "ai_processing_started_at": None,
+    }
     if dates is not None:
         values["dates"] = dates
     if eligibility is not None:
         values["eligibility"] = eligibility
     if hashtags is not None:
         values["hashtags"] = hashtags
-    stmt = update(Notice).where(Notice.id == notice_id).values(**values)
-    session.execute(stmt)
-    if taxonomy_rows is not None:
+    cond = Notice.id == notice_id
+    if only_if_processing:
+        cond = and_(cond, Notice.ai_status == "processing")
+    result = session.execute(update(Notice).where(cond).values(**values))
+    rowcount = int(result.rowcount or 0)
+    if rowcount > 0 and taxonomy_rows is not None:
         _replace_notice_taxonomy_rows_sync(
             session=session,
             notice_id=notice_id,
             taxonomy_rows=taxonomy_rows,
         )
     session.flush()
+    return rowcount
+
+
+def reset_ai_notice_to_pending_after_failed_extraction_sync(session: Session, notice_id: uuid.UUID) -> int:
+    """HTTP/LLM 실패 후 재시도 가능하도록 processing → pending. 반환: 매칭 행 수."""
+    result = session.execute(
+        update(Notice)
+        .where(Notice.id == notice_id, Notice.ai_status == "processing")
+        .values(ai_status="pending", ai_processing_started_at=None)
+    )
+    session.flush()
+    return int(result.rowcount or 0)
+
+
+def reset_stale_ai_processing_notices_sync(session: Session, *, older_than_seconds: int) -> int:
+    """
+    ai_status=processing 이고 선점 시각이 임계보다 오래된 행을 pending으로 되돌린다.
+    ai_processing_started_at IS NULL 인 processing(레거시)도 임계 경과 시 복구 대상에 포함.
+    """
+    if older_than_seconds <= 0:
+        return 0
+    cutoff = datetime.now(UTC) - timedelta(seconds=older_than_seconds)
+    result = session.execute(
+        update(Notice)
+        .where(
+            Notice.ai_status == "processing",
+            or_(Notice.ai_processing_started_at.is_(None), Notice.ai_processing_started_at < cutoff),
+        )
+        .values(ai_status="pending", ai_processing_started_at=None)
+    )
+    session.flush()
+    return int(result.rowcount or 0)
+
+
+def list_pending_notice_ids_for_ai_requeue_sync(
+    session: Session,
+    *,
+    older_than_seconds: int,
+    limit: int = 200,
+) -> list[uuid.UUID]:
+    """
+    AI가 오래 pending인 공지 id 목록. 크롤 후 enqueue 실패 등 복구용.
+    updated_at 기준으로 최소 대기 시간을 두어 방금 적재된 행과 구분한다.
+    """
+    if older_than_seconds <= 0 or limit <= 0:
+        return []
+    threshold = datetime.now(UTC) - timedelta(seconds=older_than_seconds)
+    stmt = (
+        select(Notice.id)
+        .where(
+            Notice.ai_status == "pending",
+            Notice.deleted_at.is_(None),
+            Notice.updated_at < threshold,
+        )
+        .order_by(Notice.updated_at.asc())
+        .limit(limit)
+    )
+    rows = session.execute(stmt).scalars().all()
+    return list(rows)
 
 
 def _replace_notice_taxonomy_rows_sync(

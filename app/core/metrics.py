@@ -85,6 +85,10 @@ CELERY_TASK_FAILURE_TOTAL = "celery_task_failure_total"
 AI_ENQUEUE_FAILED_TOTAL = "ai_enqueue_failed_total"
 # AI 결과 DB 반영 완료(매칭·알림 파이프라인 훅). 라벨: college_code (= colleges.external_id)
 NOTICE_AI_EXTRACTION_COMPLETED_TOTAL = "notice_ai_extraction_completed_total"
+# Beat: 오래된 processing → pending 복구 행 수
+AI_STALE_PROCESSING_RESET_TOTAL = "ai_stale_processing_reset_total"
+# Beat: 오래된 pending → AI 배치 재적재 시도한 공지 수
+AI_PENDING_REQUEUE_TOTAL = "ai_pending_requeue_total"
 
 ALLOWED_REQUEST_LABELS = frozenset({"endpoint_template", "status_class", "method"})
 

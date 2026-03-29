@@ -197,6 +197,30 @@ class Settings(BaseSettings):
             "0 disables. Default ~6s approximates 10 external calls/min per worker."
         ),
     )
+    ai_stale_processing_reset_seconds: int = Field(
+        3600,
+        ge=60,
+        le=86400 * 7,
+        description=(
+            "Beat: ai_status=processing 이 선점 시각 기준 이 값(초)보다 오래되면 pending으로 복구. "
+            "soft_time_limit보다 길게 두는 것을 권장."
+        ),
+    )
+    ai_stale_pending_requeue_seconds: int = Field(
+        1800,
+        ge=60,
+        le=86400 * 7,
+        description=(
+            "Beat: pending 공지가 updated_at 기준 이 값(초) 이상 지났으면 AI 배치 큐에 재적재. "
+            "enqueue 실패·큐 적체 복구용."
+        ),
+    )
+    ai_pending_requeue_batch_limit: int = Field(
+        200,
+        ge=1,
+        le=2000,
+        description="requeue_stale_pending_ai_notices_task 한 번에 조회·적재할 최대 공지 수.",
+    )
     gemini_api_key: SecretStr | None = Field(
         None,
         description="Gemini API key. When unset, google-generativeai uses GOOGLE_API_KEY from env.",
