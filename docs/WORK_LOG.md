@@ -12,6 +12,7 @@
 
 - [작성 규칙](#작성-규칙)
 - [작성 형식](#작성-형식)
+- [2026-03-29](#2026-03-29)
 - [2026-03-28](#2026-03-28)
 - [2026-03-27](#2026-03-27)
 - [2026-03-23](#2026-03-23)
@@ -46,6 +47,11 @@
 - `- [단계 또는 영역] 무엇을 했는지 (어떤 파일/기능). 왜 또는 결과 한 줄.`
 
 ---
+## 2026-03-29
+
+- [개발 경험] pre-commit 패치 stash와 ruff `--fix` 충돌 완화: `scripts/pre_commit_wrapper.py`가 `git stash push --keep-index` 후 `pre-commit hook-impl` 호출, 끝에 `stash pop`. 훅 설치: `python scripts/install_pre_commit_hook.py`. `.pre-commit-config.yaml`·`pre_commit_check_mixed_stage.py` 주석 보강.
+- [pre-commit UX] `pre_commit_wrapper.py`에 누락된 `import os`로 래퍼 훅 사용 시 `NameError`가 나던 문제 수정; 훅·stash 실패 시 stderr에 한국어 안내·재현 명령(`pre-commit run --all-files`, PowerShell `SKIP` 예) 추가. `pre_commit_check_mixed_stage.py` 첫 줄에 커밋 차단 원인 표시. 검증: `pytest` 383 passed.
+
 ## 2026-03-28
 
 - [Celery·배포] `.gitignore`의 `storage/`·`.dockerignore`의 `storage`가 `app/core/storage` 패키지까지 제외해 Railway에서 `ModuleNotFoundError: app.core.storage`가 났음. 루트 전용 `/storage/`·`/storage`로 좁히고 패키지 파일을 Git에 추가. 검증: `pytest` 전체 통과.

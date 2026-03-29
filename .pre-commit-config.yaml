@@ -1,4 +1,7 @@
 # See https://pre-commit.com for usage.
+# Git hook: run `python scripts/install_pre_commit_hook.py` so commits use
+# scripts/pre_commit_wrapper.py (git stash --keep-index before hooks). That avoids
+# "Stashed changes conflicted with hook auto-fixes" when ruff --fix runs with unstaged files.
 # 첫 훅 실패 시 나머지 생략 → 로그가 짧아져 원인 파악이 쉬움.
 fail_fast: true
 

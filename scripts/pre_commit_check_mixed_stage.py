@@ -1,8 +1,11 @@
 """Fail pre-commit early when app/tests *.py have both staged and unstaged changes.
 
-Black/ruff --fix with partial staging makes pre-commit stash unstaged hunks; auto-fixes
-can conflict and produce 'Stashed changes conflicted with hook auto-fixes'. Full-stage
-those files or use SKIP=check-mixed-stage-python for intentional partial commits.
+Partial staging of the same file is still risky after ruff --fix (stash pop can conflict).
+Prefer full-file staging or SKIP=check-mixed-stage-python for intentional partial commits.
+
+Install `python scripts/install_pre_commit_hook.py` so the git hook uses
+`pre_commit_wrapper.py` and unstaged changes in *other* files no longer trip pre-commit's
+patch stash.
 """
 
 from __future__ import annotations
@@ -40,7 +43,8 @@ def main() -> int:
     lines = [
         "",
         "=" * 72,
-        "pre-commit: 같은 파일에 스테이징 + 미스테이징 변경이 같이 있습니다.",
+        "[pre-commit] 커밋이 여기서 막혔습니다 (원인: 부분 스테이징).",
+        "같은 파일에 스테이징 + 미스테이징 변경이 같이 있습니다.",
         "black/ruff가 고치면 stash 충돌로 커밋이 실패할 수 있습니다.",
         "",
         "해결: 해당 파일 전체를 스테이징 (git add <파일>)",
