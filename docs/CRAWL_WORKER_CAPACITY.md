@@ -7,9 +7,11 @@ Crawlee의 `AutoscaledPool`(CPU·메모리 피드백)에 해당하는 개념을 
 
 | 구성 요소 | 권장·기본값 | 비고 |
 |-----------|-------------|------|
-| Celery worker CLI | `-Q critical,crawl,ai` | [Dockerfile.worker](../Dockerfile.worker) |
+| Celery worker CLI | `-Q critical,crawl,ai` | [Dockerfile.worker](../Dockerfile.worker). 크롤만 분리하려면 별도 프로세스로 `-Q crawl`만, beat·스풀용은 `-Q critical,ai` 등 ([DEPLOYMENT.md](DEPLOYMENT.md)). |
 | Worker concurrency | `--concurrency=1` | Playwright·대용량 HTML 시 OOM 완화. 동시에 여러 Chromium 금지(프로젝트 규칙). |
 | `celery_worker_prefetch_multiplier` | `1` ([app/core/config/base.py](../app/core/config/base.py)) | prefetch=1은 공정성(`-O fair`)과 맞물려 큐 백로그가 쌓이면 자연스러운 백프레셔. |
+| Broker visibility | `celery_broker_visibility_timeout_seconds` (기본 3600) | [app/core/celery_app.py](../app/core/celery_app.py). 장시간 크롤은 [CAUTIONS.md](CAUTIONS.md) 다중 워커·visibility 행 참고. |
+| Crawl 실행 클레임 TTL | `crawl_task_execution_claim_ttl_seconds` (기본 120) | Redis SET/EXPIRE; 트리거 락 하트비트 주기에 맞춰 갱신. 재전달 서사는 [decisions/redis-celery-separation.md](decisions/redis-celery-separation.md). |
 | DB 워커 동시성 가정 | `db_celery_concurrency` | [app/core/database.py](../app/core/database.py) 풀 크기 계산에 사용. |
 
 ## 메모리·디스패치 백프레셔

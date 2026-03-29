@@ -49,6 +49,7 @@
 ---
 ## 2026-03-29
 
+- [문서 릴리스] `/document-release`: `CAUTIONS.md`(Windows Celery 엔트리포인트·visibility·실행 클레임), `CRAWL_WORKER_CAPACITY.md`(멀티 워커·visibility·클레임 TTL 행). 루트 `CHANGELOG`/`VERSION` 없음 — 스킵.
 - [Celery·크롤 안정성] `celery_broker_visibility_timeout_seconds`·`crawl_task_execution_claim_ttl_seconds` 설정, `celery_app` broker/result visibility 연동; 실행 클레임 짧은 TTL+`renew_crawl_task_execution_claim`·`crawl_college_task` 하트비트(락 없이도 task_id면 갱신); `task_failure` 로그+`celery_task_failure_total`. `DEPLOYMENT.md`·`redis-celery-separation.md`·`Dockerfile.worker`·`.env.example`. 테스트: `test_crawl_task_execution_claim.py`·`test_celery_task_failure_signal.py`. 검증: `pytest` 438 passed, 4 skipped.
 - [4단계·AI 파이프라인 운영] Gemini `http_options.timeout`(`ai_llm_request_timeout_seconds`), Celery 단건 `soft_time_limit`/`time_limit`·`retry_jitter`·`GoogleAPIError` autoretry, taxonomy 실패 시 taxonomy만 비우고 일정·자격 등 유지(`metadata.taxonomy_degraded`·`ai_extraction_taxonomy_degraded_total`), HTML 슬림(URL 축약·레이아웃 태그 제거·img 제거·키워드 우선 절단·중복 p/tr), 학과 매칭 공백 제거·퍼지. `tests/test_extractor_instructor_config.py` 등. 검증: `pytest` 434 passed, 4 skipped.
 - [프로덕션 준비·HTTP] `app/core/config/base.py`: 공유 httpx용 `HTTP_CLIENT_*` 타임아웃·풀 상한 필드 및 keepalive≤max 검증. `app/core/lifespan.py`: `build_app_httpx_client()`로 `AsyncClient(timeout, limits)` 명시. `.env.example`·`DEPLOYMENT.md`(연결·S3/CDN 요약)·`RUNBOOK_DEPLOY.md`(lint-test에 pip-audit 포함 명시). `tests/test_lifespan_httpx_client.py`. 영향: Google OAuth 등 아웃바운드 HTTP 의도 고정, 느린 토큰 응답에 기본 read 30s.
