@@ -148,12 +148,21 @@ async def get_verified_access(
             fail_closed=settings.redis.redis_blocklist_fail_closed,
         )
         user_id = uuid_mod.UUID(payload["sub"])
+        user_id_hash: str | None = None
         try:
             user_id_hash = compute_user_id_hash(user_id)
+        except (ValueError, TypeError):
+            logger.debug(
+                "compute_user_id_hash failed; continuing without user_id_hash.",
+                exc_info=True,
+            )
+        if user_id_hash is not None:
             set_request_context(user_id_hash=user_id_hash)
-            sentry_sdk.set_user({"id": user_id_hash})
+        try:
+            if user_id_hash is not None:
+                sentry_sdk.set_user({"id": user_id_hash})
         except Exception:
-            logger.debug("user_id_hash/Sentry set_user failed; continuing.", exc_info=True)
+            logger.debug("Sentry set_user failed; continuing.", exc_info=True)
         return VerifiedAccess(user_id=user_id, jti=payload.get("jti"))
     except (AuthError, ValueError):
         raise HTTPException(status_code=401, detail="Invalid or expired token") from None

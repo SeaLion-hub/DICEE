@@ -44,6 +44,7 @@
 - `POST /internal/trigger-crawl` 성공/부분실패/전체실패 케이스
 - `POST /v1/auth/google`, `/v1/auth/refresh`, `/v1/auth/logout` 정상/장애 케이스
 - `/ready`, `/health`, `/internal/metrics` 접근 제어 케이스
+- **5단계(인증)**: `GET`/`PATCH /v1/users/me`, `GET /v1/notices/matched`(Bearer), `GET /v1/calendar/events`(year/month 또는 from/to), `GET /v1/calendar/feed.ics`, `POST`/`DELETE /v1/users/me/calendar/events/...` 정상·401·404 등 의도 상태 코드 (회귀: `tests/test_v1_phase5_authenticated_api.py`)
 
 ## 5) Go/No-Go 판정 템플릿
 

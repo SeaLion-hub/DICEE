@@ -67,6 +67,11 @@ xenon_*.txt
 
 # Misc
 .DS_Store
+Thumbs.db
+Desktop.ini
+# Local PR / diff exports (e.g. git diff > pr_diff.patch)
+*.patch
+*.diff
 tmp/
 dispatch_repo
 .cursor/debug.log

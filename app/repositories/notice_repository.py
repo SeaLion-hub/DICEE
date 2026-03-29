@@ -6,7 +6,7 @@
 
 import base64
 import uuid
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from datetime import UTC, datetime
 from typing import Any
 
@@ -183,7 +183,7 @@ async def list_recent_notices_for_college_preview(
     """
     stmt = (
         select(Notice)
-        .join(College, College.id == Notice.college_id)
+        .join(Notice.college)
         .where(
             College.external_id == college_external_id,
             Notice.deleted_at.is_(None),
@@ -388,8 +388,16 @@ def update_notice_content_url_sync(
 
 
 def _sorted_notice_drafts(notices: Sequence[NoticeDraft]) -> list[NoticeDraft]:
-    """데드락 방지용 (college_id, external_id) 오름차순 정렬. 입력 시퀀스를 복사해 정렬한다."""
-    return sorted(notices, key=lambda d: (str(d.college_id), d.external_id))
+    """
+    벌크 upsert 전 저장소 경계에서 다시 정규화한다.
+
+    - 동일 (college_id, external_id)가 한 배치에 여러 번 오면 마지막 draft만 유지
+    - 이후 (college_id, external_id) 오름차순 정렬로 row lock 순서를 통일
+    """
+    deduped: dict[tuple[uuid.UUID, str], NoticeDraft] = {}
+    for draft in notices:
+        deduped[(draft.college_id, draft.external_id)] = draft
+    return sorted(deduped.values(), key=lambda d: (str(d.college_id), d.external_id))
 
 
 def _draft_to_notice_dict(draft: NoticeDraft) -> dict[str, Any]:
@@ -433,12 +441,15 @@ def _keys_with_content_but_missing(
 ) -> list[tuple[uuid.UUID, str]]:
     """content_url이 있는 draft 중 key_to_id에 없는 (college_id, external_id) 목록."""
     missing: list[tuple[uuid.UUID, str]] = []
+    seen: set[tuple[uuid.UUID, str]] = set()
     for d in drafts:
         if not d.content_url:
             continue
         k = (d.college_id, d.external_id)
-        if k not in key_to_id:
-            missing.append(k)
+        if k in key_to_id or k in seen:
+            continue
+        seen.add(k)
+        missing.append(k)
     return missing
 
 
@@ -489,15 +500,25 @@ def _build_notice_contents_upsert_payloads(
     key_to_id: dict[tuple[uuid.UUID, str], uuid.UUID],
 ) -> list[dict[str, Any]]:
     """drafts와 key_to_id로 notice_contents upsert용 to_insert 리스트 구성(DB insert용 dict만). sync/async 공통."""
-    to_insert: list[dict[str, Any]] = []
+    deduped: dict[uuid.UUID, dict[str, Any]] = {}
     for d in drafts:
         if not d.content_url:
             continue
         nid = key_to_id.get((d.college_id, d.external_id))
         if nid is None:
             continue
-        to_insert.append({"notice_id": nid, "content_url": d.content_url})
-    return to_insert
+        deduped[nid] = {"notice_id": nid, "content_url": d.content_url}
+    return [deduped[nid] for nid in sorted(deduped)]
+
+
+def _iter_batches(
+    rows: Sequence[dict[str, Any]],
+    batch_size: int | None = None,
+) -> Iterator[Sequence[dict[str, Any]]]:
+    """큰 VALUES 절을 잘라 row lock 점유 시간과 WAL burst를 줄인다."""
+    size = batch_size or BULK_UPSERT_BATCH_SIZE
+    for i in range(0, len(rows), size):
+        yield rows[i : i + size]
 
 
 async def _fill_key_to_id_from_notices(
@@ -599,13 +620,13 @@ def _upsert_notice_contents_bulk_from_drafts_sync(
     to_insert = _build_notice_contents_upsert_payloads(drafts, key_to_id)
     if not to_insert:
         return
-    to_insert = sorted(to_insert, key=lambda x: x["notice_id"])
-    ins = insert(NoticeContent).values(to_insert)
-    stmt = ins.on_conflict_do_update(
-        index_elements=["notice_id"],
-        set_={"content_url": ins.excluded.content_url, "updated_at": datetime.now(UTC)},
-    )
-    session.execute(stmt)
+    for batch in _iter_batches(to_insert):
+        ins = insert(NoticeContent).values(batch)
+        stmt = ins.on_conflict_do_update(
+            index_elements=["notice_id"],
+            set_={"content_url": ins.excluded.content_url, "updated_at": datetime.now(UTC)},
+        )
+        session.execute(stmt)
     session.flush()
 
 
@@ -618,11 +639,11 @@ async def _upsert_notice_contents_bulk_from_drafts(
     to_insert = _build_notice_contents_upsert_payloads(drafts, key_to_id)
     if not to_insert:
         return
-    to_insert = sorted(to_insert, key=lambda x: x["notice_id"])
-    ins = insert(NoticeContent).values(to_insert)
-    stmt = ins.on_conflict_do_update(
-        index_elements=["notice_id"],
-        set_={"content_url": ins.excluded.content_url, "updated_at": datetime.now(UTC)},
-    )
-    await session.execute(stmt)
+    for batch in _iter_batches(to_insert):
+        ins = insert(NoticeContent).values(batch)
+        stmt = ins.on_conflict_do_update(
+            index_elements=["notice_id"],
+            set_={"content_url": ins.excluded.content_url, "updated_at": datetime.now(UTC)},
+        )
+        await session.execute(stmt)
     await session.flush()

@@ -23,11 +23,12 @@ from app.core.metrics import (
 logger = logging.getLogger(__name__)
 
 
-def _jti_log_safe(jti: str) -> str:
+def _jti_log_safe(jti: object) -> str:
     """jti를 로그에 남기지 않기 위해 해시 앞 8자만 반환. 추적용으로만 사용."""
-    if not (jti or "").strip():
+    raw = str(jti).strip() if jti is not None else ""
+    if not raw:
         return "n/a"
-    return hashlib.sha256(jti.strip().encode()).hexdigest()[:8]
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:8]
 
 
 BLOCKLIST_KEY_PREFIX = "dicee:blocklist:access:"
@@ -608,7 +609,7 @@ async def set_cache_with_soft_ttl(
     Soft TTL이 포함된 캐시를 저장합니다.
     실제 데이터와 논리적 만료 시간(soft_ttl)을 함께 JSON으로 묶어 저장합니다.
     hard_ttl_seconds는 메모리 누수를 막기 위한 최후의 물리적 만료 시간입니다 (soft_ttl보다 넉넉해야 함).
-    갱신에 성공한 호출자는 release_cache_lock(client, key)를 호출해 락을 조기 해제할 수 있습니다.
+    갱신에 성공한 호출자는 release_cache_lock(client, key, token)를 호출해 락을 조기 해제할 수 있습니다.
     """
     if client is None:
         return
@@ -619,20 +620,22 @@ async def set_cache_with_soft_ttl(
         logger.warning("Cache set_with_soft_ttl failed (key=%s): %s", key, e)
 
 
-async def release_cache_lock(client: RedisAsyncio | None, key: str, token: str) -> None:
+async def release_cache_lock(client: RedisAsyncio | None, key: str, token: str) -> bool:
     """
     Soft TTL 캐시 갱신 후 보유 중인 락을 조기 삭제합니다.
     lock value가 token과 일치할 때만 삭제(compare-and-del, Lua). 타인 락 삭제 방지.
     get_cache_with_soft_ttl로 획득한 lock_token을 전달해야 합니다.
-    client가 None이면 no-op.
+    반환: True=삭제됨, False=소유자 아님·키 없음·client/token 없음·Redis 예외.
     """
     if client is None or not token:
-        return
+        return False
     lock_key = f"{CACHE_LOCK_KEY_PREFIX}{key}"
     try:
-        await cast(Awaitable[Any], client.eval(LUA_RELEASE_IF_OWNER, 1, lock_key, token))
+        raw = await cast(Awaitable[Any], client.eval(LUA_RELEASE_IF_OWNER, 1, lock_key, token))
+        return bool(raw == 1)
     except Exception as e:
         logger.warning("Cache lock release failed (key=%s): %s", key, e)
+        return False
 
 
 async def get_cache_with_soft_ttl(

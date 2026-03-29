@@ -104,12 +104,12 @@ async def set_cached_with_soft_ttl(
     await _redis_set_soft(client, key, value, soft, hard)
 
 
-async def release_cached_lock(client: RedisAsyncio | None, *key_parts: str, token: str) -> None:
-    """캐시 락 조기 해제. token은 get_cached_with_soft_ttl 반환값."""
+async def release_cached_lock(client: RedisAsyncio | None, *key_parts: str, token: str) -> bool:
+    """캐시 락 조기 해제. token은 get_cached_with_soft_ttl 반환값. True=삭제됨."""
     if client is None or not token:
-        return
+        return False
     key = _cache_key(*key_parts)
-    await _redis_release_lock(client, key, token)
+    return await _redis_release_lock(client, key, token)
 
 
 async def wait_for_cached(

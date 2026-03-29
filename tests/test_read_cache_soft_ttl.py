@@ -2,11 +2,13 @@
 
 import json
 import time
+import uuid
 from unittest.mock import AsyncMock, patch
 
 import pytest
 from app.core.redis import (
     CACHE_LOCK_KEY_PREFIX,
+    _jti_log_safe,
     get_cache_with_soft_ttl,
     release_cache_lock,
 )
@@ -77,13 +79,26 @@ async def test_get_cache_with_soft_ttl_stale_lock_not_acquired_returns_stale_no_
     assert token is None
 
 
+def test_jti_log_safe_accepts_uuid_and_matches_str_form() -> None:
+    """비-str jti(UUID)도 AttributeError 없이 str과 동일 해시 앞 8자."""
+    u = uuid.UUID("00000000-0000-7000-8000-000000000001")
+    assert _jti_log_safe(u) == _jti_log_safe(str(u))
+
+
+def test_jti_log_safe_none_and_blank_returns_na() -> None:
+    assert _jti_log_safe(None) == "n/a"
+    assert _jti_log_safe("") == "n/a"
+    assert _jti_log_safe("   ") == "n/a"
+
+
 @pytest.mark.asyncio
 async def test_release_cache_lock_compare_and_del_eval() -> None:
-    """release_cache_lock은 token으로 Lua compare-and-del 호출."""
+    """release_cache_lock은 token으로 Lua compare-and-del 호출. True=삭제됨."""
     client = AsyncMock()
     client.eval = AsyncMock(return_value=1)
 
-    await release_cache_lock(client, "mykey", "my-token-123")
+    ok = await release_cache_lock(client, "mykey", "my-token-123")
+    assert ok is True
 
     client.eval.assert_called_once()
     args = client.eval.call_args[0]
@@ -97,8 +112,25 @@ async def test_release_cache_lock_no_op_when_token_empty() -> None:
     """token이 비어 있으면 eval 호출하지 않음."""
     client = AsyncMock()
 
-    await release_cache_lock(client, "k", "")
+    ok = await release_cache_lock(client, "k", "")
+    assert ok is False
     client.eval.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_release_cache_lock_returns_false_when_not_owner() -> None:
+    """Lua가 0이면 락 미삭제."""
+    client = AsyncMock()
+    client.eval = AsyncMock(return_value=0)
+
+    ok = await release_cache_lock(client, "k", "tok")
+    assert ok is False
+
+
+@pytest.mark.asyncio
+async def test_release_cache_lock_returns_false_when_client_none() -> None:
+    ok = await release_cache_lock(None, "k", "tok")
+    assert ok is False
 
 
 @pytest.mark.asyncio

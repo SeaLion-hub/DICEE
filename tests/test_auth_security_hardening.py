@@ -375,3 +375,26 @@ def test_compute_user_id_hash_production_migrate_allows_sha256_fallback() -> Non
         out = compute_user_id_hash(uid)
     assert len(out) == 64
     assert out.islower()
+
+
+@pytest.mark.asyncio
+async def test_get_verified_access_sentry_set_user_failure_still_returns_verified_access() -> None:
+    """Sentry set_user 실패 시에도 Access 검증 결과는 반환(B안: 관측만 fail-open)."""
+    from unittest.mock import MagicMock
+
+    from app.api.v1.auth import VerifiedAccess, get_verified_access
+    from fastapi.security import HTTPAuthorizationCredentials
+
+    uid = uuid.UUID("00000000-0000-7000-8000-0000000000aa")
+    creds = HTTPAuthorizationCredentials(scheme="Bearer", credentials="fake-access")
+
+    with (
+        patch("app.api.v1.auth.verify_access_token", new_callable=AsyncMock) as mock_verify,
+        patch("app.api.v1.auth.sentry_sdk.set_user", side_effect=RuntimeError("sentry down")),
+    ):
+        mock_verify.return_value = {"sub": str(uid), "jti": "jti-xyz"}
+        out = await get_verified_access(creds, MagicMock())
+
+    assert isinstance(out, VerifiedAccess)
+    assert out.user_id == uid
+    assert out.jti == "jti-xyz"
