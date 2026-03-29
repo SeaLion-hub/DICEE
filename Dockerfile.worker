@@ -33,4 +33,6 @@ COPY --chown=app:app . .
 
 USER app
 
+# Default: one process consumes critical,crawl,ai. Scale hotspots by adding replicas, e.g. crawl-only:
+# celery -A app.core.celery_app:app worker -l info -O fair -Q crawl --concurrency=1
 CMD ["celery", "-A", "app.core.celery_app:app", "worker", "-l", "info", "-O", "fair", "-Q", "critical,crawl,ai", "--concurrency=1"]

@@ -35,7 +35,6 @@ BLOCKLIST_KEY_PREFIX = "dicee:blocklist:access:"
 TRIGGER_IDEMPOTENCY_KEY_PREFIX = "dicee:trigger_idempotency:"
 TRIGGER_IDEMPOTENCY_TTL_SECONDS = 86400  # 24h
 CRAWL_TASK_EXECUTION_CLAIM_KEY_PREFIX = "dicee:crawl_task_execution:"
-CRAWL_TASK_EXECUTION_CLAIM_TTL_SECONDS = 7200
 
 # --- Cache Stampede 방어용 Lock Prefix 추가 ---
 CACHE_LOCK_KEY_PREFIX = "dicee:cache_lock:"
@@ -515,7 +514,8 @@ def push_ai_extraction_completed_stub_sync(notice_id: str, college_code: str) ->
 
 def claim_crawl_task_execution(task_id: str) -> bool:
     """
-    Celery task delivery 중복 실행 방지를 위한 실행 클레임.
+    Celery task delivery 중복 실행 방지를 위한 실행 클레임(SET NX, 짧은 TTL).
+    워커 생존 중에는 renew_crawl_task_execution_claim으로 TTL 연장.
     Redis 미구성/일시 장애 시 fail-open으로 True를 반환한다.
     """
     if not task_id:
@@ -528,17 +528,47 @@ def claim_crawl_task_execution(task_id: str) -> bool:
     if client is None:
         return True
     key = f"{CRAWL_TASK_EXECUTION_CLAIM_KEY_PREFIX}{task_id}"
+    ttl = int(settings.crawl_task_execution_claim_ttl_seconds)
     try:
         ok = client.set(
             key,
             "1",
             nx=True,
-            ex=CRAWL_TASK_EXECUTION_CLAIM_TTL_SECONDS,
+            ex=ttl,
         )
         return bool(ok)
     except Exception as e:
         logger.warning("Task execution claim failed (task_id=%s): %s", task_id, e, exc_info=True)
         return True
+
+
+def renew_crawl_task_execution_claim(task_id: str) -> bool:
+    """
+    실행 클레임 키 TTL 연장(EXPIRE). 워커 하트비트에서만 호출.
+    프로세스가 죽으면 갱신이 멈춰 키가 만료되고, 브로커 재전달 시 SET NX가 성공할 수 있다.
+    반환: True=키 존재하며 TTL 갱신됨, False=키 없음 또는 Redis 오류.
+    """
+    if not task_id:
+        return False
+    from app.core.config import settings
+
+    if not (settings.redis.redis_url or "").strip():
+        return True
+    client = _get_sync_redis_client()
+    if client is None:
+        return False
+    key = f"{CRAWL_TASK_EXECUTION_CLAIM_KEY_PREFIX}{task_id}"
+    ttl = int(settings.crawl_task_execution_claim_ttl_seconds)
+    try:
+        return bool(client.expire(key, ttl))
+    except Exception as e:
+        logger.warning(
+            "Task execution claim renew failed (task_id=%s): %s",
+            task_id,
+            e,
+            exc_info=True,
+        )
+        return False
 
 
 def release_crawl_task_execution(task_id: str) -> None:

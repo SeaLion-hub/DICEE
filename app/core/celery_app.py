@@ -12,7 +12,7 @@ from typing import Any, cast
 os.environ.setdefault("APP_ENTRY", "celery")
 
 from celery import Celery
-from celery.signals import worker_init
+from celery.signals import task_failure, worker_init
 from kombu import Queue  # type: ignore[import-untyped]
 
 from app.core.config import settings
@@ -50,12 +50,12 @@ app.conf.update(
     broker_connection_retry=True,
     broker_connection_retry_on_startup=True,
     broker_connection_max_retries=settings.celery_broker_connection_max_retries,
-    broker_transport_options={"visibility_timeout": 3600},
+    broker_transport_options={"visibility_timeout": settings.celery_broker_visibility_timeout_seconds},
     result_expires=settings.celery_result_expires_seconds,
     result_backend_always_retry=settings.celery_result_backend_always_retry,
     result_backend_max_retries=settings.celery_result_backend_max_retries,
     result_backend_transport_options={
-        "visibility_timeout": 3600,
+        "visibility_timeout": settings.celery_broker_visibility_timeout_seconds,
         "retry_policy": {"timeout": settings.redis.redis_socket_timeout},
     },
     task_acks_late=True,
@@ -90,6 +90,27 @@ if broker_url.startswith("rediss://"):
         ssl_options["ssl_ca_certs"] = ca
     app.conf.broker_use_ssl = ssl_options
     app.conf.redis_backend_use_ssl = ssl_options
+
+
+@task_failure.connect(weak=False)
+def _on_celery_task_failure(
+    sender=None,
+    task_id: str | None = None,
+    exception: BaseException | None = None,
+    **kwargs: Any,
+) -> None:
+    """구조화 로그 + 인메모리 카운터. 범용 DLQ 대신 관측성 최소층."""
+    from app.core.metrics import CELERY_TASK_FAILURE_TOTAL, increment
+
+    task_name = getattr(sender, "name", None) or "unknown"
+    exc_name = type(exception).__name__ if exception is not None else "None"
+    logger.warning(
+        "celery_task_failure task=%s task_id=%s exc_type=%s",
+        task_name,
+        task_id or "",
+        exc_name,
+    )
+    increment(CELERY_TASK_FAILURE_TOTAL, 1, labels={"task": task_name})
 
 
 @worker_init.connect

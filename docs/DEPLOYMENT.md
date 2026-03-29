@@ -141,6 +141,8 @@ alembic upgrade head
 celery -A app.core.celery_app:app worker -l info -O fair -Q critical,crawl,ai --concurrency=1
 ```
 
+- **멀티 워커(선택):** 크롤 부하만 분리하려면 별도 서비스로 `celery ... worker -Q crawl --concurrency=1`을 두고, beat·스풀·stale 정리용으로 다른 인스턴스는 `celery ... worker -Q critical,ai --concurrency=1`처럼 나눌 수 있다. 큐 라우팅은 [app/core/celery_app.py](../app/core/celery_app.py)의 `task_routes`를 따른다.
+- **Broker visibility / 실행 클레임:** `CELERY_BROKER_VISIBILITY_TIMEOUT_SECONDS`(기본 3600)는 Redis broker·result backend visibility와 맞춘다. `CRAWL_TASK_EXECUTION_CLAIM_TTL_SECONDS`(기본 120)는 크롤 태스크 Redis 실행 클레임의 초기·갱신 TTL이며, 브로커 visibility보다 훨씬 짧게 두는 것이 재전달 시나리오에 유리하다. 상세는 [docs/decisions/redis-celery-separation.md](decisions/redis-celery-separation.md) 참고.
 - **용량·백프레셔·청크 커밋:** [CRAWL_WORKER_CAPACITY.md](CRAWL_WORKER_CAPACITY.md) (Railway RAM, `celery_dispatch_memory_soft_limit_mb`, `crawl_upsert_chunk_size` 등).
 
 - Windows 로컬 디버그 시:

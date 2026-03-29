@@ -276,6 +276,24 @@ class Settings(BaseSettings):
         ),
     )
     celery_worker_prefetch_multiplier: int = Field(1, ge=1, le=16)
+    celery_broker_visibility_timeout_seconds: int = Field(
+        3600,
+        ge=60,
+        le=86400,
+        description=(
+            "Redis broker visibility_timeout for Celery (seconds). Must align with long-running tasks; "
+            "see docs/CAUTIONS.md. crawl_task_execution_claim_ttl_seconds should stay well below this."
+        ),
+    )
+    crawl_task_execution_claim_ttl_seconds: int = Field(
+        120,
+        ge=30,
+        le=3600,
+        description=(
+            "Redis SET/EXPIRE TTL for crawl_college_task execution claim; renewed on trigger-lock heartbeat. "
+            "Worker death stops renewal so the key expires before typical broker redelivery."
+        ),
+    )
     celery_broker_connection_max_retries: int = Field(100, ge=1, le=10000)
     celery_result_expires_seconds: int = Field(3600, ge=60, le=604800)
     celery_result_backend_always_retry: bool = True

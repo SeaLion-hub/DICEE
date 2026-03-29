@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import requests
+from celery import Task
 from requests.exceptions import RequestException
 from sqlalchemy.orm import Session
 
@@ -35,6 +36,7 @@ from app.core.redis import (
     record_last_crawl_success_sync,
     release_crawl_task_execution,
     release_trigger_lock_sync,
+    renew_crawl_task_execution_claim,
     renew_trigger_lock_sync,
 )
 from app.core.storage import (
@@ -199,11 +201,18 @@ def _heartbeat_loop(
     college_code: str,
     lock_token: str | None,
     stop_event: threading.Event,
+    *,
+    crawl_task_id: str | None = None,
 ) -> None:
-    """트리거 락 유지로 TTL 연장. stop_event가 set될 때까지 TRIGGER_LOCK_HEARTBEAT_INTERVAL_SECONDS마다 실행."""
+    """
+    트리거 락 TTL 연장 및 crawl_college_task 실행 클레임 EXPIRE.
+    stop_event가 set될 때까지 TRIGGER_LOCK_HEARTBEAT_INTERVAL_SECONDS마다 실행.
+    """
     while not stop_event.wait(TRIGGER_LOCK_HEARTBEAT_INTERVAL_SECONDS):
-        if renew_trigger_lock_sync(college_code, lock_token):
+        if lock_token and renew_trigger_lock_sync(college_code, lock_token):
             logger.debug("Trigger lock heartbeat renewed: college=%s", college_code)
+        if crawl_task_id:
+            renew_crawl_task_execution_claim(crawl_task_id)
 
 
 def _delay_process_notice_ai_with_backoff(notice_id: str) -> None:
@@ -212,7 +221,7 @@ def _delay_process_notice_ai_with_backoff(notice_id: str) -> None:
     delay_sec = _AI_ENQUEUE_BASE_DELAY_SEC
     for attempt in range(_AI_ENQUEUE_MAX_ATTEMPTS):
         try:
-            process_notice_ai_task.delay(notice_id)
+            cast(Task, process_notice_ai_task).delay(notice_id)
             return
         except Exception as e:
             last_exc = e
@@ -233,7 +242,7 @@ def _delay_process_notice_ai_batch_with_backoff(notice_ids: list[str]) -> None:
     delay_sec = _AI_ENQUEUE_BASE_DELAY_SEC
     for attempt in range(_AI_ENQUEUE_MAX_ATTEMPTS):
         try:
-            process_notice_ai_batch_task.delay(notice_ids)
+            cast(Task, process_notice_ai_batch_task).delay(notice_ids)
             return
         except Exception as e:
             last_exc = e
@@ -352,7 +361,8 @@ def crawl_college_task(
     enqueued_at: float | None = None,
 ):
     """
-    Celery 워커 진입점. 동기 세션·crawl_college_sync. finally 락 해제; heartbeat로 TTL 연장.
+    Celery 워커 진입점. 동기 세션·crawl_college_sync. finally 락·실행 클레임 해제;
+    heartbeat로 트리거 락·실행 클레임 TTL 연장.
 
     Crawlee식 지연 플러시: 파이프라인은 crawl_upsert_chunk_size마다 DB commit·expunge 후
     on_chunk로 AI 큐에 notice id만 적재한다 (app.services.crawl.pipeline_sync).
@@ -386,10 +396,12 @@ def crawl_college_task(
     started_at = time.monotonic()
     stop_heartbeat = threading.Event()
     heartbeat_thread: threading.Thread | None = None
-    if lock_token:
+    need_heartbeat = bool(lock_token) or (bool(task_id) and execution_claimed)
+    if need_heartbeat:
         heartbeat_thread = threading.Thread(
             target=_heartbeat_loop,
             args=(college_code, lock_token, stop_heartbeat),
+            kwargs={"crawl_task_id": task_id if execution_claimed else None},
             daemon=True,
         )
         heartbeat_thread.start()
@@ -657,7 +669,13 @@ def drain_content_spool_task():
         *,
         reason: str,
     ) -> bool:
-        moved = bool(move_to_dlq_fn(item, entry, reason))
+        moved = bool(
+            move_to_dlq_fn(
+                cast(Path, item) if backend == "local" else cast(str, item),
+                entry,
+                reason=reason,
+            )
+        )
         if moved:
             return True
 
@@ -667,11 +685,14 @@ def drain_content_spool_task():
             stage="dlq_move",
             retry_count=int(entry.get(SPOOL_RETRY_COUNT_KEY, 0) or 0),
         )
-        overwrite_fn(item, marked)
+        if backend == "local":
+            overwrite_fn(cast(Path, item), marked)
+        else:
+            overwrite_fn(cast(str, item), marked)
         return False
 
     for item in list_fn():
-        entry = read_fn(item)
+        entry = read_fn(cast(Path, item) if backend == "local" else cast(str, item))
         if not entry:
             _move_to_dlq_or_mark(item, {}, reason="invalid_spool_entry")
             failed += 1
@@ -707,7 +728,10 @@ def drain_content_spool_task():
                     dlq_count += 1
                 failed += 1
             else:
-                overwrite_fn(item, marked)
+                if backend == "local":
+                    overwrite_fn(cast(Path, item), marked)
+                else:
+                    overwrite_fn(cast(str, item), marked)
             continue
 
         if not content_url:
@@ -723,14 +747,20 @@ def drain_content_spool_task():
                     dlq_count += 1
                 failed += 1
             else:
-                overwrite_fn(item, marked)
+                if backend == "local":
+                    overwrite_fn(cast(Path, item), marked)
+                else:
+                    overwrite_fn(cast(str, item), marked)
             continue
 
         with get_sync_session() as session:
             if update_notice_content_url_sync(session, cid, eid, content_url):
                 drained += 1
                 try:
-                    delete_fn(item)
+                    if backend == "local":
+                        delete_fn(cast(Path, item))
+                    else:
+                        delete_fn(cast(str, item))
                 except Exception:
                     logger.warning("drain_content_spool_task: delete after success failed item=%s", item)
             else:

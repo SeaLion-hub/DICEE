@@ -78,6 +78,9 @@ AI_EXTRACTION_PROVIDER_ERROR_TOTAL = "ai_extraction_provider_error_total"
 AI_EXTRACTION_TOKENS_TOTAL = "ai_extraction_tokens_total"
 AI_EXTRACTION_TAXONOMY_DEGRADED_TOTAL = "ai_extraction_taxonomy_degraded_total"
 
+# Celery task_failure 시그널(라벨: task=태스크 전체 이름)
+CELERY_TASK_FAILURE_TOTAL = "celery_task_failure_total"
+
 # 크롤 완료 후 process_notice_ai_batch_task.delay() 브로커 적재 실패 (라벨: college_code)
 AI_ENQUEUE_FAILED_TOTAL = "ai_enqueue_failed_total"
 # AI 결과 DB 반영 완료(매칭·알림 파이프라인 훅). 라벨: college_code (= colleges.external_id)
