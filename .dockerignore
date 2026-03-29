@@ -11,6 +11,7 @@ _tmp*
 dispatch_repo
 docs
 tests
-storage
+# 루트 runtime storage만 제외 (app/core/storage 패키지는 이미지에 포함)
+/storage
 *.md
 .env

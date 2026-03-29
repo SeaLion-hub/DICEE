@@ -48,6 +48,7 @@
 ---
 ## 2026-03-28
 
+- [Celery·배포] `.gitignore`의 `storage/`·`.dockerignore`의 `storage`가 `app/core/storage` 패키지까지 제외해 Railway에서 `ModuleNotFoundError: app.core.storage`가 났음. 루트 전용 `/storage/`·`/storage`로 좁히고 패키지 파일을 Git에 추가. 검증: `pytest` 전체 통과.
 - [pre-commit] `tests/**/*.py`에 Ruff E402 per-file ignore(`importorskip` 등), `fail_fast: true`, 선행 훅 `scripts/pre_commit_check_mixed_stage.py`(app/tests `*.py` 동일 파일 스테이징·미스테이징 동시 존재 시 한국어 안내 후 실패). 검증: `pre-commit run --all-files`·`pytest tests/test_gemini_text_embedding.py`.
 - [보안·응답] `CollegeNotFoundError(college_code)`·고정 `detail`(`College code is not registered.`)·경고 로그만; `EmptySemanticQueryError`·시맨틱 검색에서 `ValueError`/`str(e)` 제거; `embed_text_sync`가 `GoogleAPIError`를 `EmbeddingProviderError`로 래핑. `tests/test_security_features.py`·`test_notices_semantic_api.py`·`test_gemini_text_embedding.py`, `docs/decisions/exception-masking-5xx-logs.md` 보강. 검증: `pytest` 전체 통과.
 - [FastAPI·오류 응답] `app/api/v1/auth.py`: `POST /refresh`·`POST /logout`에서 `OperationalError`·SQLAlchemy `TimeoutError`·`TimeoutError`를 `POST /google`과 동일하게 503+`Retry-After`로 매핑. `app/api/v1/notices.py`: 목록·상세·시맨틱 검색의 동일 DB 일시 오류를 503(`Notice service temporarily unavailable…`)로 매핑, 시맨틱 경로의 예기치 않은 `ValueError`는 본문 노출 없이 500으로 마스킹. `tests/test_auth_security_hardening.py`·`tests/test_notices_public_api.py` 보강, `test_trigger_idempotency`를 `COLLEGE_NOT_FOUND_CLIENT_DETAIL` 문구에 맞춤. 검증: `pytest` 전체 통과.
