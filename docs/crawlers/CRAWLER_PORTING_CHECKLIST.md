@@ -1,5 +1,7 @@
 # 크롤러 이식 검증 체크리스트 (함수형)
 
+**프로덕션 기본 경로:** `CRAWLER_SPEC` + 모듈 레벨 `get_links` / `scrape_detail` (클래스형 `BaseCrawler`는 템플릿·테스트용). 날짜·링크 dedupe·이미지 추출·사이트별 fetch 옵션은 `app/services/crawlers/`의 `notice_dates`, `link_dedupe`, `html_image_extract`, `fetch_config`, `cms_board_view` 등을 우선 재사용한다.
+
 새 크롤러 추가·이식 후 **기존 크롤러(yonsei_ai, yonsei_business 등)와 동일한 방식**인지 확인할 때 사용한다.
 
 ---

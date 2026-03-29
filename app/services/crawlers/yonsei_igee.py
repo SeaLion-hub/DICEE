@@ -18,6 +18,8 @@ from app.core.crawl_http import (
 )
 from app.core.crawler_config import CrawlerModuleSpec
 from app.services.crawlers.base import ScrapeResult
+from app.services.crawlers.cms_board_view import board_view_title_from_soup
+from app.services.crawlers.notice_dates import normalize_notice_date
 from app.services.crawlers.typing_helpers import ensure_str_attr
 
 logger = logging.getLogger(__name__)
@@ -29,18 +31,6 @@ CRAWLER_SPEC = CrawlerModuleSpec(
     get_links="get_igee_links",
     scrape_detail="scrape_igee_detail",
 )
-
-
-def normalize_date(date_str: str) -> str:
-    try:
-        match = re.search(r"(\d{4})[-./년]\s*(\d{1,2})[-./월]\s*(\d{1,2})", date_str)
-        if match:
-            y, m, d = match.groups()
-            return f"{y}.{m.zfill(2)}.{d.zfill(2)}"
-        return date_str
-    except Exception:
-        logger.warning("normalize_date failed: date_str=%r", date_str[:100] if date_str else None)
-        return date_str
 
 
 def get_igee_links(list_url: str) -> list[dict[str, Any]]:
@@ -95,10 +85,7 @@ def scrape_igee_detail(url: str) -> ScrapeResult:
             raise
         soup = BeautifulSoup(text, "html.parser")
 
-        title = "제목 없음"
-        title_div = soup.find("div", id="BoardViewTitle")
-        if title_div and isinstance(title_div, Tag):
-            title = title_div.get_text(strip=True)
+        title = board_view_title_from_soup(soup) or "제목 없음"
 
         date = "날짜 없음"
         attachments: list[str] = []
@@ -107,7 +94,7 @@ def scrape_igee_detail(url: str) -> ScrapeResult:
                 continue
             text_content = b_add.get_text(separator=" ", strip=True)
             if "등록일" in text_content or re.search(r"\d{4}[-./]\d{1,2}[-./]\d{1,2}", text_content):
-                date = normalize_date(text_content)
+                date = normalize_notice_date(text_content)
             for raw_a in b_add.find_all("a"):
                 a = as_tag(raw_a)
                 if a is None:

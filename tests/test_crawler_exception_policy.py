@@ -42,8 +42,9 @@ async def test_yonsei_business_async_propagates_html_too_large(monkeypatch):
 
     monkeypatch.setattr(crawler, "fetch_html_async", _raise_html_too_large)
 
-    with pytest.raises(HtmlTooLargeError):
+    with pytest.raises(RequestException) as exc_info:
         await crawler.scrape_business_detail_async(
             MagicMock(),
             "https://example.com/detail",
         )
+    assert isinstance(exc_info.value.__cause__, HtmlTooLargeError)

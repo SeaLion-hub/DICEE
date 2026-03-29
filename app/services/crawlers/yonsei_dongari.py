@@ -18,6 +18,7 @@ from app.core.crawl_http import (
 )
 from app.core.crawler_config import CrawlerModuleSpec
 from app.services.crawlers.base import ScrapeResult
+from app.services.crawlers.notice_dates import normalize_notice_date
 from app.services.crawlers.typing_helpers import class_list_from_tag, ensure_str_attr
 
 logger = logging.getLogger(__name__)
@@ -29,18 +30,6 @@ CRAWLER_SPEC = CrawlerModuleSpec(
     get_links="get_dongari_links",
     scrape_detail="scrape_dongari_detail",
 )
-
-
-def normalize_date(date_str: str) -> str:
-    try:
-        match = re.search(r"(\d{4})[-./년]\s*(\d{1,2})[-./월]\s*(\d{1,2})", date_str)
-        if match:
-            y, m, d = match.groups()
-            return f"{y}.{m.zfill(2)}.{d.zfill(2)}"
-        return date_str
-    except Exception:
-        logger.warning("normalize_date failed: date_str=%r", date_str[:100] if date_str else None)
-        return date_str
 
 
 def get_dongari_links(list_url: str) -> list[dict[str, Any]]:
@@ -115,11 +104,11 @@ def scrape_dongari_detail(url: str) -> ScrapeResult:
                 date_part = info_text.split("등록일")[1]
                 date_match = re.search(r"\d{4}[-./]\d{1,2}[-./]\d{1,2}", date_part)
                 if date_match:
-                    date = normalize_date(date_match.group())
+                    date = normalize_notice_date(date_match.group())
             if date == "날짜 없음":
                 date_match = re.search(r"\d{4}[-./]\d{1,2}[-./]\d{1,2}", info_text)
                 if date_match:
-                    date = normalize_date(date_match.group())
+                    date = normalize_notice_date(date_match.group())
 
         content_html = ""
         images: list[dict[str, Any]] = []

@@ -16,6 +16,7 @@ from app.core.crawl_http import (
 )
 from app.core.crawler_config import CrawlerModuleSpec
 from app.services.crawlers.base import ScrapeResult
+from app.services.crawlers.link_dedupe import dedupe_link_dicts_by_url
 from app.services.crawlers.typing_helpers import ensure_str_attr
 
 logger = logging.getLogger(__name__)
@@ -267,7 +268,6 @@ async def get_notice_links_async(client: httpx.AsyncClient, list_url: str):
         text = await fetch_html_async(client, list_url, timeout=10.0)
         soup = BeautifulSoup(text, "html.parser")
         links = []
-        seen_urls: set[str] = set()
         rows = soup.select("tbody tr")
         for row in rows:
             if not isinstance(row, Tag):
@@ -283,10 +283,8 @@ async def get_notice_links_async(client: httpx.AsyncClient, list_url: str):
                     href_str = ensure_str_attr(link_tag.get("href"))
                     if href_str:
                         full_url = urljoin(list_url, href_str)
-                        if full_url not in seen_urls:
-                            seen_urls.add(full_url)
-                            links.append({"no": num_text, "url": full_url})
-        return links
+                        links.append({"no": num_text, "url": full_url})
+        return dedupe_link_dicts_by_url(links)
     except HtmlTooLargeError as e:
         logger.warning("get_notice_links_async body too large list_url=%s: %s", list_url, e)
         raise

@@ -39,10 +39,11 @@ class CrawlJobFailed:
 
 
 class LinkItem(TypedDict):
-    """크롤 링크 1건. 리스트 목록/스크랩 입력. url 필수, no는 선택."""
+    """크롤 링크 1건. 리스트 목록/스크랩 입력. url 필수, no·title_hint는 선택."""
 
     url: str
     no: NotRequired[str]
+    title_hint: NotRequired[str]
 
 
 @dataclass(frozen=True)

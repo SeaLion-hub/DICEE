@@ -3,7 +3,6 @@
 import base64
 import logging
 import os
-import re
 from typing import Any
 from urllib.parse import quote, unquote, urljoin, urlparse, urlunparse
 
@@ -18,6 +17,7 @@ from app.core.crawl_http import (
 )
 from app.core.crawler_config import CrawlerModuleSpec
 from app.services.crawlers.base import ScrapeResult
+from app.services.crawlers.notice_dates import normalize_notice_date
 from app.services.crawlers.typing_helpers import class_list_from_tag, ensure_str_attr
 
 logger = logging.getLogger(__name__)
@@ -29,18 +29,6 @@ CRAWLER_SPEC = CrawlerModuleSpec(
     get_links="get_yonsei_main_links",
     scrape_detail="scrape_yonsei_main_detail",
 )
-
-
-def normalize_date(date_str: str) -> str:
-    try:
-        match = re.search(r"(\d{4})[-./년]\s*(\d{1,2})[-./월]\s*(\d{1,2})", date_str)
-        if match:
-            y, m, d = match.groups()
-            return f"{y}.{m.zfill(2)}.{d.zfill(2)}"
-        return date_str
-    except Exception:
-        logger.warning("normalize_date failed: date_str=%r", date_str[:100] if date_str else None)
-        return date_str
 
 
 def get_yonsei_main_links(list_url: str) -> list[dict[str, Any]]:
@@ -145,7 +133,7 @@ def scrape_yonsei_main_detail(url: str) -> ScrapeResult:
         date_span_tag = as_tag(date_span)
         if date_span_tag is not None and date_span_tag.parent and isinstance(date_span_tag.parent, Tag):
             raw_date_text = date_span_tag.parent.get_text(separator=" ", strip=True).replace("작성일", "").strip()
-            date = normalize_date(raw_date_text)
+            date = normalize_notice_date(raw_date_text)
 
         content_html = ""
         images: list[dict[str, Any]] = []

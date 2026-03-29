@@ -16,6 +16,10 @@ from app.core.crawl_http import (
 )
 from app.core.crawler_config import CrawlerModuleSpec
 from app.services.crawlers.base import ScrapeResult
+from app.services.crawlers.cms_board_view import board_view_title_from_soup
+from app.services.crawlers.fetch_config import BUSINESS_SITE_FETCH
+from app.services.crawlers.link_dedupe import dedupe_link_dicts_by_url
+from app.services.crawlers.notice_dates import normalize_notice_date
 from app.services.crawlers.typing_helpers import ensure_str_attr
 
 logger = logging.getLogger(__name__)
@@ -31,21 +35,6 @@ CRAWLER_SPEC = CrawlerModuleSpec(
 # ==============================================================================
 # [1] 유틸리티 함수
 # ==============================================================================
-
-
-def normalize_date(date_str):
-    """날짜 문자열을 YYYY.MM.DD로 표준화"""
-    try:
-        numbers = re.findall(r"\d+", date_str)
-        if len(numbers) >= 3:
-            y, m, d = numbers[:3]
-            if len(y) == 2:
-                y = "20" + y
-            return f"{y}.{m.zfill(2)}.{d.zfill(2)}"
-        return date_str
-    except Exception:
-        logger.warning("normalize_date failed (format change?): date_str=%r", date_str[:100] if date_str else None)
-        return date_str
 
 
 def clean_html_content(element: Tag) -> str:
@@ -81,7 +70,12 @@ def get_business_notice_links(list_url):
     """
     try:
         try:
-            text = fetch_html(list_url, timeout=10, encoding="cp949")
+            text = fetch_html(
+                list_url,
+                timeout=BUSINESS_SITE_FETCH.list_timeout_seconds,
+                encoding=BUSINESS_SITE_FETCH.list_encoding,
+                request_meta=BUSINESS_SITE_FETCH.list_request_meta,
+            )
         except HtmlTooLargeError as e:
             logger.warning("get_business_notice_links body too large list_url=%s: %s", list_url, e)
             raise RequestException from e
@@ -149,100 +143,90 @@ def get_business_notice_links(list_url):
 # ==============================================================================
 
 
+def parse_business_detail_from_html(html: str, url: str) -> ScrapeResult:
+    """상세 HTML만 파싱. I/O 없음."""
+    soup = BeautifulSoup(html, "html.parser")
+    title = board_view_title_from_soup(soup) or "제목 없음"
+
+    date = "날짜 없음"
+    info = soup.find(id="BoardViewAdd")
+    if isinstance(info, Tag):
+        txt = info.get_text()
+        match = re.search(r"등록일\s*:\s*([\d.-]+)", txt)
+        if match:
+            date = normalize_notice_date(match.group(1), loose_digit_fallback=True)
+        else:
+            m2 = re.search(r"\d{4}[.-]\d{2}[.-]\d{2}", txt)
+            if m2:
+                date = normalize_notice_date(m2.group(), loose_digit_fallback=True)
+
+    content_html = ""
+    container = soup.find("div", id="BoardContent")
+    if container and isinstance(container, Tag):
+        content_html = clean_html_content(container)
+    else:
+        content_html = "(본문 BoardContent를 찾을 수 없습니다)"
+
+    images: list[dict[str, Any]] = []
+    image_urls: set[str] = set()
+    raw_cont = soup.find("div", id="BoardContent")
+    if raw_cont and isinstance(raw_cont, Tag):
+        for img in raw_cont.find_all("img"):
+            if not isinstance(img, Tag):
+                continue
+            img_src = ensure_str_attr(img.get("src", ""))
+            if not img_src:
+                continue
+            if img_src.startswith("data:image"):
+                try:
+                    _header, enc = img_src.split(",", 1)
+                    images.append({"type": "base64", "data": enc, "name": "img.png"})
+                except Exception:
+                    continue
+            else:
+                if any(x in img_src for x in ["icon", "btn", "blank"]):
+                    continue
+                full_url_str = urljoin(url, img_src)
+                fname = os.path.basename(full_url_str.split("?")[0])
+                if not fname or "." not in fname:
+                    fname = "image.jpg"
+                if full_url_str not in image_urls:
+                    image_urls.add(full_url_str)
+                    images.append({"type": "url", "data": full_url_str, "name": fname})
+
+    attachments: list[str] = []
+    attachment_names_set: set[str] = set()
+    area = soup.find(id="BoardViewFile")
+    file_container = area if (area is not None and isinstance(area, Tag)) else soup
+    for a in file_container.find_all("a"):
+        if not isinstance(a, Tag):
+            continue
+        raw_href = a.get("href", "")
+        href = raw_href if isinstance(raw_href, str) else ""
+        if "downloadfile.asp" in href:
+            fname = a.get_text(strip=True)
+            if fname and fname not in attachment_names_set:
+                attachment_names_set.add(fname)
+                attachments.append(fname)
+
+    return ScrapeResult(title, date, content_html, images, attachments)
+
+
 def scrape_business_detail(url):
     try:
         try:
-            text = fetch_html_detail_cached(url, timeout=10, encoding="cp949")
+            text = fetch_html_detail_cached(
+                url,
+                timeout=BUSINESS_SITE_FETCH.detail_timeout_seconds,
+                encoding=BUSINESS_SITE_FETCH.detail_encoding,
+                request_meta=BUSINESS_SITE_FETCH.detail_request_meta,
+            )
         except HtmlTooLargeError as e:
             logger.warning("scrape_business_detail body too large url=%s: %s", url, e)
             raise RequestException from e
         except RequestException:
             raise
-        soup = BeautifulSoup(text, "html.parser")
-
-        # 1. 제목
-        title = "제목 없음"
-        # BoardViewTitle ID 사용
-        t_elem = soup.find(id="BoardViewTitle")
-        if t_elem and isinstance(t_elem, Tag):
-            title = t_elem.get_text(strip=True)
-        else:
-            h = soup.find(["h2", "h3"])
-            if isinstance(h, Tag):
-                title = h.get_text(strip=True)
-
-        # 2. 게시일
-        date = "날짜 없음"
-        info = soup.find(id="BoardViewAdd")
-        if isinstance(info, Tag):
-            txt = info.get_text()
-            match = re.search(r"등록일\s*:\s*([\d.-]+)", txt)
-            if match:
-                date = normalize_date(match.group(1))
-            else:
-                m2 = re.search(r"\d{4}[.-]\d{2}[.-]\d{2}", txt)
-                if m2:
-                    date = normalize_date(m2.group())
-
-        # 3. 본문 (HTML 보존)
-        content_html = ""
-        container = soup.find("div", id="BoardContent")
-        if container and isinstance(container, Tag):
-            content_html = clean_html_content(container)
-        else:
-            content_html = "(본문 BoardContent를 찾을 수 없습니다)"
-
-        # 4. 이미지
-        images = []
-        image_urls: set[str] = set()
-        if isinstance(container, Tag):
-            # 원본 soup 재사용 (clean_html_content는 복사본 사용했으므로)
-            raw_cont = soup.find("div", id="BoardContent")
-            if raw_cont and isinstance(raw_cont, Tag):
-                for img in raw_cont.find_all("img"):
-                    if not isinstance(img, Tag):
-                        continue
-                    img_src = ensure_str_attr(img.get("src", ""))
-                    if not img_src:
-                        continue
-
-                    if img_src.startswith("data:image"):
-                        try:
-                            _header, enc = img_src.split(",", 1)
-                            images.append({"type": "base64", "data": enc, "name": "img.png"})
-                        except Exception:
-                            continue
-                    else:
-                        if any(x in img_src for x in ["icon", "btn", "blank"]):
-                            continue
-                        full_url_str = urljoin(url, img_src)
-                        fname = os.path.basename(full_url_str.split("?")[0])
-                        if not fname or "." not in fname:
-                            fname = "image.jpg"
-
-                        if full_url_str not in image_urls:
-                            image_urls.add(full_url_str)
-                            images.append({"type": "url", "data": full_url_str, "name": fname})
-
-        # 5. 첨부파일 (downloadfile.asp)
-        attachments: list[str] = []
-        attachment_names_set: set[str] = set()
-        # 파일 영역이 따로 있거나(BoardViewFile) 본문 근처
-        area = soup.find(id="BoardViewFile")
-        container = area if (area is not None and isinstance(area, Tag)) else soup
-        for a in container.find_all("a"):
-            if not isinstance(a, Tag):
-                continue
-            raw_href = a.get("href", "")
-            href = raw_href if isinstance(raw_href, str) else ""
-            if "downloadfile.asp" in href:
-                fname = a.get_text(strip=True)
-                if fname and fname not in attachment_names_set:
-                    attachment_names_set.add(fname)
-                    attachments.append(fname)
-
-        return ScrapeResult(title, date, content_html, images, attachments)
-
+        return parse_business_detail_from_html(text, url)
     except RequestException:
         raise
     except Exception as e:
@@ -252,10 +236,14 @@ def scrape_business_detail(url):
 
 async def get_business_notice_links_async(client: httpx.AsyncClient, list_url: str):
     try:
-        text = await fetch_html_async(client, list_url, timeout=10.0, encoding="cp949")
+        text = await fetch_html_async(
+            client,
+            list_url,
+            timeout=BUSINESS_SITE_FETCH.list_timeout_seconds,
+            encoding=BUSINESS_SITE_FETCH.list_encoding,
+        )
         soup = BeautifulSoup(text, "html.parser")
         links: list[dict[str, Any]] = []
-        seen_urls: set[str] = set()
         for td in soup.find_all("td", class_="Subject") or soup.find_all("td", class_="subject"):
             if not isinstance(td, Tag):
                 continue
@@ -266,14 +254,12 @@ async def get_business_notice_links_async(client: httpx.AsyncClient, list_url: s
             title_text = a_tag.get_text(strip=True)
             if href:
                 full_url = urljoin(list_url, href)
-                if full_url not in seen_urls:
-                    seen_urls.add(full_url)
-                    prev_td = td.find_previous_sibling("td")
-                    no_text = prev_td.get_text(strip=True) if isinstance(prev_td, Tag) else ""
-                    if not no_text.isdigit():
-                        no_text = ""
-                    links.append({"no": no_text, "url": full_url, "title_hint": title_text})
-        return links
+                prev_td = td.find_previous_sibling("td")
+                no_text = prev_td.get_text(strip=True) if isinstance(prev_td, Tag) else ""
+                if not no_text.isdigit():
+                    no_text = ""
+                links.append({"no": no_text, "url": full_url, "title_hint": title_text})
+        return dedupe_link_dicts_by_url(links)
     except HtmlTooLargeError as e:
         logger.warning("get_business_notice_links_async body too large list_url=%s: %s", list_url, e)
         raise
@@ -284,70 +270,16 @@ async def get_business_notice_links_async(client: httpx.AsyncClient, list_url: s
 
 async def scrape_business_detail_async(client: httpx.AsyncClient, url: str):
     try:
-        text = await fetch_html_async(client, url, timeout=10.0, encoding="cp949")
-        soup = BeautifulSoup(text, "html.parser")
-        title = "제목 없음"
-        t_elem = soup.find(id="BoardViewTitle")
-        if t_elem and isinstance(t_elem, Tag):
-            title = t_elem.get_text(strip=True)
-        else:
-            h = soup.find(["h2", "h3"])
-            if isinstance(h, Tag):
-                title = h.get_text(strip=True)
-        date = "날짜 없음"
-        info = soup.find(id="BoardViewAdd")
-        if isinstance(info, Tag):
-            txt = info.get_text()
-            m = re.search(r"등록일\s*:\s*([\d.-]+)", txt) or re.search(r"\d{4}[.-]\d{2}[.-]\d{2}", txt)
-            if m:
-                date = normalize_date(m.group(1) if m.lastindex else m.group())
-        content_html = ""
-        container = soup.find("div", id="BoardContent")
-        if container and isinstance(container, Tag):
-            content_html = clean_html_content(container)
-        else:
-            content_html = "(본문 BoardContent를 찾을 수 없습니다)"
-        images = []
-        image_urls_async: set[str] = set()
-        raw_cont = soup.find("div", id="BoardContent")
-        if raw_cont and isinstance(raw_cont, Tag):
-            for img in raw_cont.find_all("img"):
-                if not isinstance(img, Tag):
-                    continue
-                img_src = ensure_str_attr(img.get("src", ""))
-                if not img_src:
-                    continue
-                if img_src.startswith("data:image"):
-                    try:
-                        _, enc = img_src.split(",", 1)
-                        images.append({"type": "base64", "data": enc, "name": "img.png"})
-                    except Exception:
-                        continue
-                else:
-                    if any(x in img_src for x in ["icon", "btn", "blank"]):
-                        continue
-                    full_url_str = urljoin(url, img_src)
-                    if full_url_str not in image_urls_async:
-                        image_urls_async.add(full_url_str)
-                        fname = os.path.basename(full_url_str.split("?")[0]) or "image.jpg"
-                        images.append({"type": "url", "data": full_url_str, "name": fname})
-        attachments = []
-        attachment_names_async: set[str] = set()
-        area = soup.find(id="BoardViewFile")
-        cont = area if isinstance(area, Tag) else soup
-        for a in cont.find_all("a"):
-            if not isinstance(a, Tag):
-                continue
-            href = ensure_str_attr(a.get("href", ""))
-            if "downloadfile.asp" in href:
-                fname = a.get_text(strip=True)
-                if fname and fname not in attachment_names_async:
-                    attachment_names_async.add(fname)
-                    attachments.append(fname)
-        return ScrapeResult(title, date, content_html, images, attachments)
+        text = await fetch_html_async(
+            client,
+            url,
+            timeout=BUSINESS_SITE_FETCH.detail_timeout_seconds,
+            encoding=BUSINESS_SITE_FETCH.detail_encoding,
+        )
+        return parse_business_detail_from_html(text, url)
     except HtmlTooLargeError as e:
         logger.warning("scrape_business_detail_async body too large url=%s: %s", url, e)
-        raise
+        raise RequestException from e
     except Exception:
         logger.exception("scrape_business_detail_async error url=%s", url, exc_info=True)
         raise

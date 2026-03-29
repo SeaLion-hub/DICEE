@@ -5,18 +5,10 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Protocol, TypedDict
+from typing import Any, Protocol
 
 from app.core.crawl_http import fetch_html, fetch_html_detail_cached
-
-
-class _LinkItemOptional(TypedDict, total=False):
-    no: str
-    title_hint: str
-
-
-class LinkItem(_LinkItemOptional):
-    url: str
+from app.domain.contracts.crawl_contracts import LinkItem
 
 
 @dataclass(slots=True)
