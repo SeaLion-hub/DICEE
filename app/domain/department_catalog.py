@@ -44,3 +44,9 @@ def official_labels_for_department_codes(codes: list[str]) -> frozenset[str]:
     """매칭용 공식 라벨 집합(공백 정규화 전 원문 라벨)."""
     m = code_to_label_map()
     return frozenset(m[c] for c in codes if c in m)
+
+
+@lru_cache
+def all_department_labels() -> tuple[str, ...]:
+    """카탈로그의 모든 공식 라벨(학과·단과대 등). 매칭 퍼지용."""
+    return tuple(r["label"] for r in _raw_catalog())

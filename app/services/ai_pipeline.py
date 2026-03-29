@@ -24,6 +24,7 @@ from app.core.metrics import (
     AI_EXTRACTION_FALLBACK_TOTAL,
     AI_EXTRACTION_PROVIDER_ERROR_TOTAL,
     AI_EXTRACTION_SUCCESS_TOTAL,
+    AI_EXTRACTION_TAXONOMY_DEGRADED_TOTAL,
     AI_EXTRACTION_TOKENS_TOTAL,
     AI_EXTRACTION_VALIDATION_ERROR_TOTAL,
     increment,
@@ -81,13 +82,129 @@ _DROP_HTML_TAGS = {
     "nav",
     "footer",
     "noscript",
+    "header",
+    "aside",
+    "form",
+    "button",
+    "svg",
+    "iframe",
+    "template",
 }
 _ALLOWED_HTML_ATTRS: dict[str, set[str]] = {
     "a": {"href", "title"},
-    "img": {"src", "alt", "title"},
     "th": {"colspan", "rowspan", "scope"},
     "td": {"colspan", "rowspan"},
 }
+
+_MAX_SLIM_URL_ATTR_LEN = 72
+_TRUNC_PRIORITY_KEYWORDS: tuple[str, ...] = (
+    "일정",
+    "마감",
+    "지원",
+    "자격",
+    "면접",
+    "서류",
+    "대상",
+    "공고",
+    "신청",
+    "추가모집",
+    "선발",
+    "안내",
+)
+
+
+def _abbreviate_url_attr(url: str, max_len: int = _MAX_SLIM_URL_ATTR_LEN) -> str:
+    u = (url or "").strip()
+    if len(u) <= max_len:
+        return u
+    if u.startswith("http://") or u.startswith("https://"):
+        from urllib.parse import urlparse
+
+        p = urlparse(u)
+        base = f"{p.scheme}://{p.netloc}"
+        if len(base) + 6 <= max_len:
+            return f"{base}/…"
+    return "[링크]"
+
+
+def _merge_intervals(spans: list[tuple[int, int]], gap: int) -> list[tuple[int, int]]:
+    if not spans:
+        return []
+    spans.sort(key=lambda x: x[0])
+    out: list[tuple[int, int]] = [spans[0]]
+    for a, b in spans[1:]:
+        la, lb = out[-1]
+        if a <= lb + gap:
+            out[-1] = (la, max(lb, b))
+        else:
+            out.append((a, b))
+    return out
+
+
+def _smart_truncate_slim_html(html: str, limit: int) -> str:
+    if len(html) <= limit:
+        return html
+    lower = html.casefold()
+    spans: list[tuple[int, int]] = []
+    win = 380
+    for kw in _TRUNC_PRIORITY_KEYWORDS:
+        kf = kw.casefold()
+        pos = 0
+        while True:
+            idx = lower.find(kf, pos)
+            if idx < 0:
+                break
+            spans.append((max(0, idx - 140), min(len(html), idx + len(kw) + win)))
+            pos = idx + max(1, len(kw))
+    merged = _merge_intervals(spans, gap=48)
+    if not merged:
+        return html[:limit]
+    keyword_blob = "\n…\n".join(html[a:b] for a, b in merged)
+    head_take = min(2400, max(400, limit // 3))
+    head = html[:head_take]
+    if len(head) + len(keyword_blob) + 8 <= limit:
+        combined = f"{head}\n…\n{keyword_blob}"
+        return combined[:limit]
+    if len(keyword_blob) <= limit:
+        return keyword_blob[:limit]
+    return keyword_blob[:limit]
+
+
+def _dedupe_consecutive_paragraphs(root: Tag | BeautifulSoup) -> None:
+    prev_norm: str | None = None
+    for raw in list(root.find_all("p")):
+        el = as_tag(raw)
+        if el is None:
+            continue
+        text = el.get_text(strip=True)
+        norm = " ".join(text.split())
+        if not norm:
+            el.decompose()
+            prev_norm = None
+            continue
+        if norm == prev_norm:
+            el.decompose()
+            continue
+        prev_norm = norm
+
+
+def _dedupe_duplicate_table_rows(root: Tag | BeautifulSoup) -> None:
+    for table in list(root.find_all("table")):
+        tb = as_tag(table)
+        if tb is None:
+            continue
+        prev_tr: str | None = None
+        for raw_tr in list(tb.find_all("tr")):
+            tr = as_tag(raw_tr)
+            if tr is None:
+                continue
+            row_text = " ".join(tr.get_text(separator=" ", strip=True).split())
+            if not row_text:
+                continue
+            if row_text == prev_tr:
+                tr.decompose()
+                continue
+            prev_tr = row_text
 
 
 @dataclass
@@ -106,6 +223,7 @@ class ExtractionRunMeta:
     vision_images_sent: int = 0
     llm_call_count: int = 0
     model_escalated: bool = False
+    taxonomy_degraded: bool = False
 
 
 class NoticeAIProjection(TypedDict):
@@ -138,11 +256,11 @@ def _clean_notice_html(html_content: str) -> str:
     """
     공지 HTML을 slim_html(구조 보존 + 노이즈 제거)로 정제한다.
 
-    - script/style/nav/footer/noscript 제거
+    - script/style/nav/footer/noscript 및 레이아웃·폼 계열 태그 제거
     - 허용 태그 집합만 남기고, 나머지 태그는 unwrap
-    - 태그별 허용 속성만 유지하여 노이즈(class/style/on*) 제거
-    - img alt 텍스트를 본문에 주입해 이미지 기반 정보 손실 방지
-    - 최종 slim_html 문자열 길이를 상한으로 제한
+    - 태그별 허용 속성만 유지; 긴 href는 축약
+    - img는 alt를 본문에 주입한 뒤 태그 제거(비전 URL과 중복 최소화)
+    - 길이 상한은 키워드 구간 우선 보존 후 자름
     """
     if not html_content or not html_content.strip():
         return ""
@@ -154,7 +272,7 @@ def _clean_notice_html(html_content: str) -> str:
     for node in soup.find_all(string=lambda t: isinstance(t, Comment)):
         node.extract()
 
-    for raw_img in soup.find_all("img"):
+    for raw_img in list(soup.find_all("img")):
         img = as_tag(raw_img)
         if img is None:
             continue
@@ -162,6 +280,7 @@ def _clean_notice_html(html_content: str) -> str:
         alt = (str(alt_raw) if alt_raw is not None else "").strip()
         if alt:
             img.insert_before(f"[이미지: {alt}]")
+        img.decompose()
 
     root: Tag | BeautifulSoup = soup.body if soup.body is not None else soup
     for raw_el in list(root.find_all(True)):
@@ -181,29 +300,19 @@ def _clean_notice_html(html_content: str) -> str:
             href_raw = html_tag.get("href")
             href = (str(href_raw) if href_raw is not None else "").strip()
             if href:
-                html_tag["href"] = href
+                html_tag["href"] = _abbreviate_url_attr(href)
             elif "href" in html_tag.attrs:
                 del html_tag.attrs["href"]
-        elif html_tag.name == "img":
-            src_raw = html_tag.get("src")
-            alt_raw = html_tag.get("alt")
-            src = (str(src_raw) if src_raw is not None else "").strip()
-            alt = (str(alt_raw) if alt_raw is not None else "").strip()
-            if src:
-                html_tag["src"] = src
-            elif "src" in html_tag.attrs:
-                del html_tag.attrs["src"]
-            if alt:
-                html_tag["alt"] = alt
-            elif "alt" in html_tag.attrs:
-                del html_tag.attrs["alt"]
+
+    _dedupe_consecutive_paragraphs(root)
+    _dedupe_duplicate_table_rows(root)
 
     if getattr(root, "name", None) == "body":
         slim_html = str(root.decode_contents(formatter="html")).strip()
     else:
         slim_html = str(root).strip()
     limit = int(getattr(settings, "ai_input_html_char_limit", 12_000) or 12_000)
-    return slim_html[:limit]
+    return _smart_truncate_slim_html(slim_html, limit)
 
 
 def _select_extraction_model(*, title: str, prompt_html: str) -> str:
@@ -331,6 +440,26 @@ def validate_and_normalize_taxonomy(
     return extraction.model_copy(update={"taxonomy_mappings": normalized_mappings})
 
 
+def _apply_taxonomy_degradation(
+    extraction: NoticeAIExtraction,
+    *,
+    reason: str = "validate_and_normalize_taxonomy_failed",
+) -> NoticeAIExtraction:
+    """taxonomy 후처리 실패 시 대분류·매핑만 비우고 나머지 추출 필드는 유지한다."""
+    md: dict[str, Any] = {}
+    if isinstance(extraction.metadata, dict):
+        md.update(extraction.metadata)
+    md["taxonomy_degraded"] = True
+    md["taxonomy_degraded_reason"] = reason
+    return extraction.model_copy(
+        update={
+            "main_categories": [],
+            "taxonomy_mappings": [],
+            "metadata": md,
+        }
+    )
+
+
 def extract_notice_info(
     html_content: str,
     image_urls: list[str] | None = None,
@@ -369,30 +498,6 @@ def extract_notice_info(
             model=chosen_model,
         )
 
-        def _taxonomy_failed_envelope() -> ExtractionEnvelope:
-            elapsed_ms = int((time.monotonic() - started_at) * 1000)
-            fallback_result = NoticeAIExtraction(target_departments=[])
-            increment(AI_EXTRACTION_FALLBACK_TOTAL)
-            increment(AI_EXTRACTION_VALIDATION_ERROR_TOTAL)
-            return ExtractionEnvelope(
-                status="fallback",
-                result=fallback_result,
-                meta=ExtractionRunMeta(
-                    pipeline_version=fallback_result.pipeline_version,
-                    provider=f"google/{stats.model_id}",
-                    model=stats.model_id,
-                    fallback_reason="taxonomy_validation_failed",
-                    html_raw_len=html_raw_len,
-                    html_clean_len=html_clean_len,
-                    image_count=image_count,
-                    elapsed_ms=elapsed_ms,
-                    vision_used=stats.vision_used,
-                    vision_images_sent=stats.vision_image_count,
-                    llm_call_count=stats.llm_calls,
-                    model_escalated=stats.escalated,
-                ),
-            )
-
         try:
             extraction = validate_and_normalize_taxonomy(extraction)
         except ValueError:
@@ -416,9 +521,17 @@ def extract_notice_info(
                 try:
                     extraction = validate_and_normalize_taxonomy(extraction2)
                 except ValueError:
-                    return _taxonomy_failed_envelope()
+                    extraction = _apply_taxonomy_degradation(
+                        extraction2,
+                        reason="validate_and_normalize_taxonomy_failed_after_model_escalation",
+                    )
+                    increment(AI_EXTRACTION_TAXONOMY_DEGRADED_TOTAL)
             else:
-                return _taxonomy_failed_envelope()
+                extraction = _apply_taxonomy_degradation(
+                    extraction,
+                    reason="validate_and_normalize_taxonomy_failed",
+                )
+                increment(AI_EXTRACTION_TAXONOMY_DEGRADED_TOTAL)
 
         if getattr(settings, "ai_extraction_enforce_raw_substrings", False) and not (image_urls or []):
             try:
@@ -448,6 +561,7 @@ def extract_notice_info(
                 )
         elapsed_ms = int((time.monotonic() - started_at) * 1000)
         resolved_model = stats.model_id or standard_model
+        tax_deg = bool(isinstance(extraction.metadata, dict) and extraction.metadata.get("taxonomy_degraded"))
         envelope = ExtractionEnvelope(
             status="ok",
             result=extraction,
@@ -469,6 +583,7 @@ def extract_notice_info(
                 vision_images_sent=stats.vision_image_count,
                 llm_call_count=stats.llm_calls,
                 model_escalated=stats.escalated,
+                taxonomy_degraded=tax_deg,
             ),
         )
         increment(AI_EXTRACTION_SUCCESS_TOTAL)
@@ -485,6 +600,7 @@ def extract_notice_info(
                 "model": resolved_model,
                 "llm_call_count": stats.llm_calls,
                 "vision_used": stats.vision_used,
+                "taxonomy_degraded": tax_deg,
             },
         )
         return envelope

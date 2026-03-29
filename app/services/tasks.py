@@ -99,6 +99,18 @@ if _google_api_exceptions_for_retry is not None:
         _google_api_exceptions_for_retry.GoogleAPIError,
     )
 
+_AI_EXTRACTION_AUTORETRY: tuple[type[BaseException], ...] = (
+    RequestException,
+    ConnectionError,
+    TimeoutError,
+    OSError,
+)
+if _google_api_exceptions_for_retry is not None:
+    _AI_EXTRACTION_AUTORETRY = (
+        *_AI_EXTRACTION_AUTORETRY,
+        _google_api_exceptions_for_retry.GoogleAPIError,
+    )
+
 
 def _coerce_dataclass_or_dict_to_plain_dict(obj: object) -> dict[str, Any]:
     if is_dataclass(obj) and not isinstance(obj, type):
@@ -467,11 +479,14 @@ def close_stale_crawl_runs_task():
 @app.task(
     name="app.services.tasks.process_notice_ai_task",
     bind=True,
-    autoretry_for=(RequestException, ConnectionError, TimeoutError, OSError),
+    autoretry_for=_AI_EXTRACTION_AUTORETRY,
     retry_backoff=True,
     retry_backoff_max=600,
+    retry_jitter=True,
     rate_limit="10/m",
     max_retries=6,
+    soft_time_limit=900,
+    time_limit=960,
 )
 def process_notice_ai_task(self, notice_id: str):
     """
@@ -505,9 +520,10 @@ def process_notice_ai_task(self, notice_id: str):
 @app.task(
     name="app.services.tasks.process_notice_ai_batch_task",
     bind=True,
-    autoretry_for=(RequestException, ConnectionError, TimeoutError, OSError),
+    autoretry_for=_AI_EXTRACTION_AUTORETRY,
     retry_backoff=True,
     retry_backoff_max=600,
+    retry_jitter=True,
     rate_limit="10/m",
     max_retries=6,
     soft_time_limit=7200,

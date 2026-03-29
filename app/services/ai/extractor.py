@@ -248,6 +248,9 @@ def _get_instructor_client(*, model: str | None = None) -> InstructorExtractionC
     kwargs: dict[str, object] = {}
     if api_key:
         kwargs["api_key"] = api_key
+    timeout_sec = float(getattr(settings, "ai_llm_request_timeout_seconds", 600.0) or 600.0)
+    timeout_ms = max(1, int(timeout_sec * 1000))
+    kwargs["http_options"] = {"timeout": timeout_ms}
     return cast(
         InstructorExtractionClient,
         instructor.from_provider(provider, **kwargs),  # type: ignore[call-overload]

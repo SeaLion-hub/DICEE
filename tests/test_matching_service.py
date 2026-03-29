@@ -46,6 +46,19 @@ def test_notice_department_match_by_label() -> None:
     )
 
 
+def test_notice_department_fuzzy_space_variant_matches() -> None:
+    """공백이 끼어 있는 표기도 카탈로그 라벨과 퍼지 매칭된다."""
+    p = UserProfileForMatching(department_codes=["yu_cs"], grades=["3"])
+    assert (
+        matching_service.notice_matches_profile(
+            target_departments=["컴퓨터 과학과"],
+            target_grades=[],
+            profile=p,
+        )
+        is True
+    )
+
+
 def test_grade_all_passes() -> None:
     p = UserProfileForMatching(department_codes=["yu_cs"], grades=["3"])
     assert (

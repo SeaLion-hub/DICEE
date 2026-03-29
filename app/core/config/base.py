@@ -259,6 +259,15 @@ class Settings(BaseSettings):
         le=10,
         description="Instructor structured-output self-correction retries per LLM call.",
     )
+    ai_llm_request_timeout_seconds: float = Field(
+        600.0,
+        ge=5.0,
+        le=7200.0,
+        description=(
+            "Per-request HTTP timeout for Google GenAI (Gemini) via instructor.from_provider; "
+            "passed as google.genai HttpOptions.timeout in milliseconds. Separate from Celery time_limit."
+        ),
+    )
     ai_extraction_enforce_raw_substrings: bool = Field(
         False,
         description=(

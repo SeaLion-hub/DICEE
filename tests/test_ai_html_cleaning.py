@@ -69,9 +69,10 @@ def test_clean_preserves_long_notice_key_phrases() -> None:
 
 
 def test_clean_includes_img_alt() -> None:
-    """img alt 텍스트가 본문에 포함되어 이미지 기반 정보가 손실되지 않는다."""
+    """img alt 텍스트가 본문에 포함되고 img 태그는 제거된다."""
     cleaned = _clean_notice_html(LONG_NOTICE_HTML)
     assert "[이미지:" in cleaned and "채용 포스터" in cleaned
+    assert "<img" not in cleaned.lower()
 
 
 def test_clean_preserves_table_structure_in_slim_html() -> None:
@@ -102,3 +103,42 @@ def test_clean_empty_input() -> None:
     """빈 입력은 빈 문자열을 반환한다."""
     assert _clean_notice_html("") == ""
     assert _clean_notice_html("   ") == ""
+
+
+def test_clean_abbreviates_long_href() -> None:
+    """긴 링크 URL은 프롬프트용으로 축약된다."""
+    long_qs = "https://example.com/path?" + "x=1&" * 80 + "end=1"
+    html = f'<p><a href="{long_qs}">신청</a></p>'
+    cleaned = _clean_notice_html(html)
+    assert long_qs not in cleaned
+    assert "신청" in cleaned
+    assert "[링크]" in cleaned or "example.com" in cleaned
+
+
+def test_clean_drops_header_aside() -> None:
+    html = """
+    <html><body>
+    <header>로고 공유</header>
+    <aside>사이드 위젯</aside>
+    <main><p>본문 핵심</p></main>
+    </body></html>
+    """
+    cleaned = _clean_notice_html(html)
+    assert "본문 핵심" in cleaned
+    assert "로고 공유" not in cleaned
+    assert "사이드 위젯" not in cleaned
+
+
+def test_clean_smart_truncation_keeps_schedule_keyword() -> None:
+    """긴 HTML에서 일정 키워드 구간이 단순 앞부분만 잘리는 것보다 우선 포함된다."""
+    from unittest.mock import patch
+
+    from app.core.config import settings
+
+    filler = ("<p>잡음 문단입니다. " + "가나다 " * 400 + "</p>\n") * 8
+    tail = "<p>서류 마감은 2026년 5월 1일이며 지원 자격은 재학생입니다.</p>"
+    html = "<html><body>" + filler + tail + "</body></html>"
+    with patch.object(settings, "ai_input_html_char_limit", 2500):
+        cleaned = _clean_notice_html(html)
+    assert len(cleaned) <= 2500
+    assert "서류 마감" in cleaned or "지원 자격" in cleaned

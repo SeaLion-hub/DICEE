@@ -142,6 +142,17 @@ LLM이 JSON을 **위에서부터 순서대로** 생성한다는 점을 이용해
 
 ---
 
+## 6. Timeouts, retries, taxonomy degradation
+
+- **HTTP/SDK timeout**: 설정 키 `ai_llm_request_timeout_seconds`를 Instructor `from_provider("google/...")`의 `http_options={"timeout": ms}`로 전달해 Google GenAI 클라이언트 요청 단위 상한을 건다.
+- **Celery**: `process_notice_ai_task`·`process_notice_ai_batch_task`는 `retry_jitter=True`이고, `autoretry_for`에 임베딩 백필과 동일하게 `google.api_core.exceptions.GoogleAPIError`를 포함한다(모듈 미설치 시 제외). 단건 태스크는 배치와 별도의 `soft_time_limit`/`time_limit`을 둔다.
+- **`ai_extraction_max_retries`**: Instructor 구조화 출력 **스키마 보정** 재시도이며, 전송 계층 재시도가 아니다. 일시적 API/네트워크 오류는 Celery `autoretry_for`·백오프가 담당한다.
+- **Taxonomy**: `validate_and_normalize_taxonomy()`가 실패하면 전체 빈 `NoticeAIExtraction` 폴백 대신 `main_categories`·`taxonomy_mappings`만 비우고 일정·자격·요약 등은 유지한다. `metadata.taxonomy_degraded`, `ExtractionRunMeta.taxonomy_degraded`, 메트릭 `ai_extraction_taxonomy_degraded_total`로 구분한다.
+
+Quality Gates (2026-03-29): `pytest` full suite → 434 passed, 4 skipped (본 절 timeouts/retries/taxonomy/HTML/매칭 반영 후).
+
+---
+
 Quality Gates (2026-03-27): `pytest` full suite → 300 passed, 3 skipped (M2 마무리: AI 완료 훅·동기 DB 멱등·/ready last_crawl_success).
 Quality Gates (2026-03-19): `pytest tests/test_ai_pipeline_schema.py tests/test_tasks_ai_consistency.py tests/test_ai_metrics.py tests/test_ai_html_cleaning.py tests/test_ai_extraction_domain.py` → 51 passed, 1 skipped.
 Quality Gates (2026-03-19, slim_html): `pytest tests/test_ai_html_cleaning.py tests/test_ai_pipeline_schema.py tests/test_tasks_ai_consistency.py` → 37 passed, 1 skipped.

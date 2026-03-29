@@ -8,7 +8,7 @@ from pydantic import ValidationError
 
 from app.domain.contracts.ai_extraction import NoticeAIExtraction
 from app.domain.contracts.user_profile_matching_contracts import UserProfileForMatching
-from app.domain.department_catalog import official_labels_for_department_codes
+from app.domain.department_catalog import all_department_labels, official_labels_for_department_codes
 
 
 def matching_eligible(profile: UserProfileForMatching) -> bool:
@@ -17,6 +17,35 @@ def matching_eligible(profile: UserProfileForMatching) -> bool:
 
 def _normalize_label(s: str) -> str:
     return " ".join((s or "").split())
+
+
+def _department_matches_profile_official(dep: str, norm_official: set[str]) -> bool:
+    """
+    공지의 학과 문자열이 프로필 공식 라벨 집합과 맞는지 판별한다.
+    정규화 일치 후, 카탈로그 라벨에 대한 짧은 퍼지(부분 문자열, 최소 길이)를 적용한다.
+    """
+    nd = _normalize_label(dep)
+    if not nd:
+        return False
+    if nd in norm_official:
+        return True
+    nlow = nd.casefold()
+    n_compact = nlow.replace(" ", "")
+    for o in norm_official:
+        if _normalize_label(o).casefold() == nlow:
+            return True
+    for label in sorted(all_department_labels(), key=len, reverse=True):
+        canon = _normalize_label(label)
+        if canon not in norm_official:
+            continue
+        nl = canon.casefold()
+        nl_compact = nl.replace(" ", "")
+        if nlow == nl or n_compact == nl_compact:
+            return True
+        shorter, longer = (n_compact, nl_compact) if len(n_compact) <= len(nl_compact) else (nl_compact, n_compact)
+        if len(shorter) >= 4 and shorter in longer:
+            return True
+    return False
 
 
 def parse_notice_matching_fields(ai_extracted_json: dict[str, Any] | None) -> tuple[list[str], list[str]]:
@@ -53,8 +82,7 @@ def notice_matches_profile(
     if target_departments:
         dept_ok = False
         for d in target_departments:
-            nd = _normalize_label(d)
-            if nd in norm_official:
+            if _department_matches_profile_official(d, norm_official):
                 dept_ok = True
                 break
         if not dept_ok:

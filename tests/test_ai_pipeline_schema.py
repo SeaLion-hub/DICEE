@@ -365,20 +365,34 @@ def test_validate_and_normalize_taxonomy_deduplicates_sub_categories() -> None:
     assert normalized.taxonomy_mappings[0].sub_categories == ["교내/성적장학", "외부장학"]
 
 
-def test_extract_notice_info_taxonomy_validation_failure_returns_fallback() -> None:
-    """taxonomy 구조 위반(main_categories 있음 + taxonomy_mappings 없음)은 fallback 처리한다."""
+def test_extract_notice_info_taxonomy_validation_degrades_preserves_rest() -> None:
+    """taxonomy 구조 위반 시 대분류·매핑만 비우고 일정·자격 등 나머지는 유지한다."""
     invalid_extraction = DomainNoticeAIExtraction.model_construct(
         main_categories=[NoticeMainCategory.CAREER_EMPLOYMENT],
         taxonomy_mappings=[],
         target_departments=[],
+        raw_eligibility_text="본문 발췌 자격",
+        eligibility_rules=["본문 발췌 자격"],
+        schedules=[
+            ScheduleItem(
+                kind=ScheduleKind.APPLICATION_DEADLINE,
+                label="서류 마감",
+                date_raw="4월 10일",
+            ),
+        ],
     )
     with patch(
         "app.services.ai_pipeline.extract_notice_structured_with_usage",
         return_value=(invalid_extraction, TokenUsage(), ExtractorCallStats()),
     ):
         envelope = extract_notice_info("<p>html</p>")
-    assert envelope.status == "fallback"
-    assert envelope.meta.fallback_reason == "taxonomy_validation_failed"
+    assert envelope.status == "ok"
+    assert envelope.meta.taxonomy_degraded is True
+    assert envelope.result.main_categories == []
+    assert envelope.result.taxonomy_mappings == []
+    assert envelope.result.raw_eligibility_text == "본문 발췌 자격"
+    assert len(envelope.result.schedules) == 1
+    assert envelope.result.metadata.get("taxonomy_degraded") is True
 
 
 def test_taxonomy_case_overseas_scholarship_multi_label_pass() -> None:
