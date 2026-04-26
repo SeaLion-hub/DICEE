@@ -230,3 +230,37 @@ def test_process_notice_ai_task_missing_college_name_stores_fallback() -> None:
     mock_update.assert_called_once()
     ai_json = mock_update.call_args[0][2]
     assert ai_json.get("metadata", {}).get("_envelope_meta", {}).get("fallback_reason") == "missing_college_name"
+
+
+def test_get_notice_html_for_content_url_reads_relative_local_file(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """상대 content_url은 로컬 content storage에서 실제 HTML을 읽는다."""
+    from app.services.tasks import _get_notice_html_for_content_url
+
+    content_base = tmp_path / "contents"
+    html_path = content_base / "notice-contents" / "college" / "notice.html"
+    html_path.parent.mkdir(parents=True)
+    html_path.write_text("<p>참가대상: 대학생</p>", encoding="utf-8")
+    monkeypatch.setattr("app.core.config.settings.content_storage_local_path", str(content_base))
+
+    html = _get_notice_html_for_content_url("/notice-contents/college/notice.html", "제목")
+
+    assert "참가대상: 대학생" in html
+
+
+def test_get_notice_html_for_content_url_falls_back_to_notice_url(monkeypatch: pytest.MonkeyPatch) -> None:
+    """상대 content_url 파일이 로컬에 없으면 원문 notice.url을 fetch한다."""
+    from app.services.tasks import _get_notice_html_for_content_url
+
+    monkeypatch.setattr("app.core.config.settings.content_storage_local_path", "missing-storage-path")
+    response = MagicMock()
+    response.text = "<p>신청대상: 공과대학 재학생</p>"
+    response.raise_for_status.return_value = None
+    with patch("app.services.tasks.requests.get", return_value=response) as mock_get:
+        html = _get_notice_html_for_content_url(
+            "/notice-contents/missing.html",
+            "제목",
+            notice_url="https://engineering.yonsei.ac.kr/notice",
+        )
+
+    assert "신청대상: 공과대학 재학생" in html
+    mock_get.assert_called_once()

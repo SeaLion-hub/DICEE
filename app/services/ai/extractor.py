@@ -73,6 +73,14 @@ JSON 출력 스키마(필드 이름과 설명)는 시스템에 이미 정의되�
 
 ---
 
+## 사고 사슬 (CoT) — extraction_reasoning 필드 우선 작성
+JSON을 생성할 때 **`extraction_reasoning` 필드를 가장 먼저** 채우세요.
+이 필드에 ① 어떤 대분류를 선택했는지와 그 근거, ② 날짜를 어떻게 파싱했는지,
+③ 자격 요건이 있는지 없는지를 2~3문장으로 짧게 기술합니다.
+이 사고 과정을 완성한 뒤 나머지 필드를 순서대로 채우세요.
+
+---
+
 ## 대분류(main_categories) 선정
 입력으로 [제목], [college.name], 본문(slim HTML), 선택적 이미지를 모두 참고하세요.
 
@@ -150,18 +158,16 @@ Step 5. 각 main_category는 taxonomy_mappings에 정확히 한 번만 등장하
    - 학과/전공 제한
    - 학점·성적 커트라인
    - 지원 자격·참석 자격·수혜 자격을 **판가름하는** 조건
-2. **추출하지 않는 경우**: "안내를 받아야 하는 대상", "대상자에게 안내"처럼 **판별 조건 없이 수신 대상만** 언급된 경우.
+   - "신청대상", "참가대상", "대상자", "참여 대상", "모집대상"처럼 대상 범위를 직접 정의하는 문장
+     (예: "참가대상: 대학생", "대상자: 공과대학 재학생", "참여 대상: 학생/교수 누구나")
+2. **추출하지 않는 경우**: "대상자에게 안내", "개별 안내", "해당자에게 통보"처럼 **새로운 신청·참가 자격이 아니라 수신/통보 대상만** 언급된 경우.
    - 이 경우 raw_eligibility_text=null, eligibility_rules=[], target_departments=[], target_grades=[] 로 두세요.
 
-**필드 순서(Schema-driven CoT)** — 자격을 채울 때는 반드시 아래 순서로 채우세요.
+**자격 필드 작성 순서** — `extraction_reasoning`에 자격 요건 판단 근거를 먼저 적은 뒤 아래 순서로 채우세요.
 1. raw_eligibility_text: 본문의 자격 관련 문장을 **가공 없이 그대로** 발췌(스키마 최대 길이 내). 없으면 null.
 2. eligibility_rules: 위 원문을 바탕으로 분절한 자격 조건 리스트.
-3. target_departments: 위 자격 요건에 명시된 학과 리스트.
-   "없음", "알 수 없음", "해당없음" 등 플레이스홀더 사용 금지. 해당 없으면 빈 리스트.
-4. target_grades: 위 자격 요건에 명시된 학년.
-   1~6, all, grad_master, grad_phd, grad_all, other 중 선택. 없으면 빈 리스트.
-
-summary 필드는 꼭 필요할 때만 짧게(한두 문장) 작성하세요. 불필요하면 null로 두세요.
+3. target_departments: 위 자격 요건에 명시된 학과 리스트. 해당 없으면 빈 리스트.
+4. target_grades: 위 자격 요건에 명시된 학년 (1~6, all, grad_master, grad_phd, grad_all, other 중). 없으면 빈 리스트.
 """
 
 
@@ -329,24 +335,28 @@ def _run_single_extraction_call(
             extraction, completion = create_with_completion(
                 messages=messages,
                 response_model=NoticeAIExtraction,
+                strict=False,
                 **mr,
             )
         except TypeError:
             extraction, completion = create_with_completion(
                 messages=messages,
                 response_model=NoticeAIExtraction,
+                strict=False,
             )
         return extraction, _usage_from_completion(completion)
     try:
         extraction = client.create(
             messages=messages,
             response_model=NoticeAIExtraction,
+            strict=False,
             **mr,
         )
     except TypeError:
         extraction = client.create(
             messages=messages,
             response_model=NoticeAIExtraction,
+            strict=False,
         )
     return extraction, TokenUsage()
 

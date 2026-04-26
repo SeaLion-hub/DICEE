@@ -285,11 +285,22 @@ class NoticeAIExtraction(BaseModel):
     - DB notices.ai_extracted_json 에 그대로 저장.
     - 일부 필드는 Notice.dates / eligibility / hashtags / category / sub_category 로 투영.
 
-    자격 요건 블록은 Schema-driven CoT: raw_eligibility_text → eligibility_rules
-    → target_departments → target_grades 순서로 두어 환각을 줄인다.
+    extraction_reasoning → (CoT 버퍼) → main_categories → taxonomy_mappings
+    → raw_eligibility_text → eligibility_rules → target_departments → target_grades
+    순서로 두어 LLM이 reasoning 필드를 채운 뒤 나머지 엄격한 필드를 정확하게 채우도록 유도한다.
     """
 
     model_config = _AI_EXTRACTION_CONFIG
+
+    extraction_reasoning: str = Field(
+        default="",
+        description=(
+            "대분류 선택 근거·날짜 파싱 판단·자격 요건 유무를 2~3문장으로 짧게 기술하는 사고 사슬(CoT) 필드. "
+            "반드시 다른 모든 필드보다 먼저 채우세요. "
+            "예: '본문에 3학년 이상 장학 조건이 명시되어 있고, 접수 마감일은 2026-05-01로 파싱됨. "
+            "대분류는 장학/지원이며 taxonomy는 외부장학에 해당함.'"
+        ),
+    )
 
     main_categories: list[NoticeMainCategory] = Field(
         default_factory=list,
@@ -315,7 +326,7 @@ class NoticeAIExtraction(BaseModel):
     summary: str | None = Field(
         default=None,
         max_length=500,
-        description="공지 내용 요약 (선택, 짧게 유지)",
+        description="공지 내용 요약. 꼭 필요할 때만 한두 문장으로 작성. 불필요하면 null.",
     )
 
     schedules: list[ScheduleItem] = Field(
@@ -351,7 +362,7 @@ class NoticeAIExtraction(BaseModel):
     )
 
     pipeline_version: str = Field(
-        default="v1",
+        default="v2",
         description="AI 파이프라인/프롬프트 버전",
     )
 

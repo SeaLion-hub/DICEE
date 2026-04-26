@@ -435,3 +435,9 @@
 - [4단계·taxonomy] Deep Research 결과를 반영해 taxonomy 프롬프트를 방어형 구조로 강화(수요자 중심 원칙, Step 0 캠퍼스생활 배타 게이트, 대분류 최대 3개 하드 리밋, 의사코드형 분기 규칙).
 - [4단계·taxonomy] 2단계 호출로 리팩터링: 1차 대분류 전용 호출은 `title+college.name`만 사용, 2차 소분류/전체 추출 호출은 `title+college.name+본문+이미지+1차 대분류`를 입력으로 사용하도록 `extractor`·`ai_pipeline`·`tasks` 연동 갱신.
 - [4단계·taxonomy] 입력 제약 강화: `title`·`college.name`을 1/2단계 공통 필수값으로 강제하고, 2단계(소분류/전체 추출)는 본문과 이미지가 둘 다 비어 있으면 즉시 실패하도록 검증 로직 및 테스트를 추가.
+
+## 2026-04-26
+
+- [AI 파이프라인 안정화·v2] `NoticeAIExtraction`에 `extraction_reasoning: str` 필드를 첫 번째 위치에 추가(CoT 버퍼). `extra="forbid"` 환경에서 모델이 스키마 밖 텍스트를 생성해 ValidationError·Fallback이 발생하던 문제를 근본 해결. `EXTRACTOR_SYSTEM_PROMPT`에 "가장 먼저 `extraction_reasoning` 채우기" 섹션 추가, 자격 필드 순서 지시를 동 필드 참조로 통일, `summary` Field description 보강. `pipeline_version` 기본값 `v1` → `v2`. 기존 테스트 489 passed 유지.
+- [AI 워커 안정화] `app/services/ai_pipeline.py`에서 `InstructorRetryException` 중 provider 429/RESOURCE_EXHAUSTED를 validation fallback으로 삼키지 않고 provider_error로 재전파하도록 분기 추가(Celery autoretry 대상). `app/services/ai/extractor.py`의 Instructor 호출에 `strict=False`를 명시해 enum/datetime 문자열 응답의 과도한 strict 검증 실패를 완화. 로컬 검증: `GEMINI_MODEL=gemini-2.5-flash`로 `process_notice_ai_task` 동기 실행 성공, `fallback_reason=None` 및 taxonomy(main/sub) 채워짐 확인.
+- [AI eligibility 복구] 워커 본문 로딩을 수정해 상대 `content_url`은 로컬 `content_storage_local_path`에서 읽고, 파일이 없으면 `notice.url` 원문 HTML로 fallback fetch하도록 개선. eligibility 프롬프트를 `신청대상`/`참가대상`/`대상자`/`참여 대상`/`모집대상`까지 보존하도록 완화. 로컬 검증: YEHS·대학원 대통령과학장학금·AI ROOKIE 3건 재처리 후 `raw_eligibility_text`와 `eligibility`가 채워짐 확인.

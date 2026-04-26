@@ -625,6 +625,17 @@ def extract_notice_info(
                 reason = tag
                 break
 
+        # InstructorRetryException에는 provider 429(RESOURCE_EXHAUSTED)도 감싸져 들어올 수 있다.
+        # 이 경우는 스키마 검증 실패가 아니므로 fallback으로 삼키지 않고 Celery autoretry로 넘긴다.
+        error_text = str(e).lower()
+        is_quota_or_rate_limit = isinstance(e, _instructor_retry_exc_type) and (
+            "resource_exhausted" in error_text or "quota exceeded" in error_text or "429" in error_text
+        )
+        if is_quota_or_rate_limit:
+            increment(AI_EXTRACTION_PROVIDER_ERROR_TOTAL)
+            logger.error("AI extraction failed due to provider quota/rate limit; re-raising for autoretry.", exc_info=True)
+            raise
+
         if isinstance(e, ValidationError | _instructor_retry_exc_type):
             logger.warning(
                 "AI extraction failed with validation-related error; using fallback. reason=%s",

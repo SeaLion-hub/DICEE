@@ -147,28 +147,57 @@ _AI_ENQUEUE_MAX_DELAY_SEC = 4.0
 
 
 def _get_notice_html_for_ai(notice) -> str:
-    """공지 본문 HTML 반환. content_url이 있으면 HTTP GET, 없으면 title 기반 최소 HTML."""
+    """공지 본문 HTML 반환. content_url/원문 URL이 있으면 실제 본문을 읽고, 없으면 title 기반 최소 HTML."""
     url = None
     if getattr(notice, "notice_content", None) and getattr(notice.notice_content, "content_url", None):
         url = (notice.notice_content.content_url or "").strip()
-    return _get_notice_html_for_content_url(url, getattr(notice, "title", None) or "")
+    notice_url = str(getattr(notice, "url", "") or "").strip() or None
+    return _get_notice_html_for_content_url(url, getattr(notice, "title", None) or "", notice_url=notice_url)
 
 
-def _get_notice_html_for_content_url(content_url: str | None, title: str) -> str:
-    """content_url·title로 본문 HTML 로드(HTTP 또는 최소 HTML). DB 세션 없이 사용."""
+def _fetch_notice_html_http(url: str, *, source: str) -> str | None:
+    if not is_safe_worker_http_url(url):
+        logger.warning("Skipping notice HTML fetch: URL blocked by worker safety policy (%s)", source)
+        return None
+    resp = requests.get(url, timeout=NOTICE_HTML_FETCH_TIMEOUT)
+    resp.raise_for_status()
+    return resp.text or ""
+
+
+def _read_notice_html_local(content_url: str) -> str | None:
+    key = content_url.strip().lstrip("/")
+    if not key:
+        return None
+    base = Path(settings.content_storage_local_path or "storage/contents").resolve()
+    path = (base / key).resolve()
+    try:
+        path.relative_to(base)
+    except ValueError:
+        logger.warning("Skipping notice HTML local read: content_url escaped storage base")
+        return None
+    if not path.is_file():
+        return None
+    return path.read_text(encoding="utf-8")
+
+
+def _get_notice_html_for_content_url(content_url: str | None, title: str, *, notice_url: str | None = None) -> str:
+    """content_url·notice_url·title로 본문 HTML 로드. 상대 content_url은 로컬 저장소에서 읽는다."""
     url = (content_url or "").strip()
     if url and (url.startswith("http://") or url.startswith("https://")):
-        if not is_safe_worker_http_url(url):
-            logger.warning(
-                "Skipping notice HTML fetch: URL blocked by worker safety policy (notice content_url)",
-            )
-        else:
-            try:
-                resp = requests.get(url, timeout=NOTICE_HTML_FETCH_TIMEOUT)
-                resp.raise_for_status()
-                return resp.text or ""
-            except RequestException:
-                raise
+        html = _fetch_notice_html_http(url, source="notice content_url")
+        if html is not None:
+            return html
+    elif url:
+        html = _read_notice_html_local(url)
+        if html:
+            return html
+
+    fallback_url = (notice_url or "").strip()
+    if fallback_url and (fallback_url.startswith("http://") or fallback_url.startswith("https://")):
+        html = _fetch_notice_html_http(fallback_url, source="notice url")
+        if html is not None:
+            return html
+
     return f"<title>{title}</title>" if title else ""
 
 
@@ -198,6 +227,7 @@ def _image_urls_from_json_list(images: object, *, max_count: int = MAX_IMAGES_FO
 class _NoticeAIWorkSnapshot:
     notice_id: uuid_mod.UUID
     title: str
+    notice_url: str | None
     content_url: str | None
     images: list[dict[str, Any]] | None
     college_name: str
@@ -227,6 +257,7 @@ def _snapshot_notice_for_ai_work(notice: object) -> _NoticeAIWorkSnapshot:
     return _NoticeAIWorkSnapshot(
         notice_id=nid,
         title=str(getattr(notice, "title", "") or ""),
+        notice_url=str(getattr(notice, "url", "") or "").strip() or None,
         content_url=url,
         images=img_list,
         college_name=cname,
@@ -395,7 +426,7 @@ def _execute_notice_ai_pipeline(
     snap = snap_work
 
     try:
-        html_content = _get_notice_html_for_content_url(snap.content_url, snap.title)
+        html_content = _get_notice_html_for_content_url(snap.content_url, snap.title, notice_url=snap.notice_url)
         image_urls = _image_urls_from_json_list(snap.images, max_count=MAX_IMAGES_FOR_AI)
         envelope = extract_notice_info(
             html_content,
