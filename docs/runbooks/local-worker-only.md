@@ -40,7 +40,7 @@ REDIS_CELERY_URL=redis://localhost:6379/1
 
 ```bash
 set APP_ENTRY=celery
-celery -A app.core.celery_app:app worker -l info -O fair --pool=solo -Q critical,crawl,ai
+celery -A app.core.celery_app:app worker -l info -O fair --pool=solo -Q critical,crawl,ingestion,ai
 ```
 
 - Windows: `--pool=solo` 필수. (DEPLOYMENT.md / README 참고.)

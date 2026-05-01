@@ -25,6 +25,17 @@
 
 ---
 
+## Ingestion 큐 worker 부재 (크롤은 enqueue 성공·upsert 지연)
+
+`process_notice_ingestion_batch_task`는 전용 `ingestion` 큐로 라우팅됩니다. `ingestion` 큐를 소비하는 worker가 없으면 `crawl_college_task`는 batch enqueue 단계까지 성공할 수 있지만, 실제 upsert와 후속 AI enqueue가 진행되지 않아 `ingestion` 큐 backlog가 증가합니다.
+
+1. Celery inspect/브로커 대시보드에서 `ingestion` 큐 depth가 지속 증가하는지 확인합니다.
+2. worker 실행 옵션에 `-Q critical,crawl,ingestion,ai` 또는 ingestion 전용 worker의 `-Q ingestion`이 포함되어 있는지 확인합니다.
+3. worker가 복구되면 backlog가 감소하고 `process_notice_ingestion_batch_task` 로그가 재개되는지 확인합니다.
+4. backlog가 장시간 유지되면 Redis visibility timeout과 worker crash/restart 로그를 함께 확인하고, 필요 시 crawl trigger를 일시 중지합니다.
+
+---
+
 ## 기본 절차
 
 1. DLQ 큐 깊이·유입률 확인. Sentry/로그에서 실패 원인(429, 5xx, timeout, Fatal 4xx) 분류.
