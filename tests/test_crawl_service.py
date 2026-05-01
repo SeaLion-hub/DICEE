@@ -647,16 +647,12 @@ def test_retry_reason_from_exc_requests_timeout_is_timeout():
     assert _retry_reason_from_exc(exc) == RETRY_REASON_TIMEOUT
 
 
-def test_scrape_one_sync_with_sem_retries_request_exception_and_succeeds(monkeypatch):
+def test_scrape_one_sync_with_sem_does_not_retry_request_exception():
     import threading
 
-    from app.services.crawl import collect_sync as crawl_collect_sync
     from app.services.crawl.collect_sync import _scrape_one_sync_with_sem
-    from app.services.crawlers.base import ScrapeResult
     from requests.exceptions import RequestException
-    from tenacity import wait_none
 
-    monkeypatch.setattr(crawl_collect_sync, "get_crawl_retry_wait", wait_none())
     calls = {"scrape": 0, "wait": 0}
 
     class _FakeLimiter:
@@ -665,9 +661,7 @@ def test_scrape_one_sync_with_sem_retries_request_exception_and_succeeds(monkeyp
 
     def _scrape(_url: str):
         calls["scrape"] += 1
-        if calls["scrape"] < 3:
-            raise RequestException("transient")
-        return ScrapeResult("ok", "2024.01.01", "<p>ok</p>", [], [])
+        raise RequestException("transient")
 
     post: LinkItem = {"url": "https://example.com/post/1"}
     result = _scrape_one_sync_with_sem(
@@ -676,22 +670,18 @@ def test_scrape_one_sync_with_sem_retries_request_exception_and_succeeds(monkeyp
         _FakeLimiter(),
         threading.BoundedSemaphore(1),
     )
-    assert result.exc is None
-    assert result.data is not None
-    assert calls["scrape"] == 3
-    assert calls["wait"] == 3
+    assert isinstance(result.exc, RequestException)
+    assert result.data is None
+    assert calls["scrape"] == 1
+    assert calls["wait"] == 0
 
 
-def test_scrape_one_sync_with_sem_retries_request_exception_until_limit(monkeypatch):
+def test_scrape_one_sync_with_sem_returns_first_request_exception():
     import threading
 
-    from app.services.crawl import collect_sync as crawl_collect_sync
     from app.services.crawl.collect_sync import _scrape_one_sync_with_sem
-    from app.services.crawl.runtime import CRAWL_RETRY_MAX_ATTEMPTS
     from requests.exceptions import RequestException
-    from tenacity import wait_none
 
-    monkeypatch.setattr(crawl_collect_sync, "get_crawl_retry_wait", wait_none())
     calls = {"scrape": 0, "wait": 0}
 
     class _FakeLimiter:
@@ -711,20 +701,17 @@ def test_scrape_one_sync_with_sem_retries_request_exception_until_limit(monkeypa
     )
     assert result.data is None
     assert isinstance(result.exc, RequestException)
-    assert calls["scrape"] == CRAWL_RETRY_MAX_ATTEMPTS
-    assert calls["wait"] == CRAWL_RETRY_MAX_ATTEMPTS
+    assert calls["scrape"] == 1
+    assert calls["wait"] == 0
 
 
-def test_retry_policy_404_skippable_no_retry(monkeypatch):
+def test_retry_policy_404_skippable_no_retry():
     """404/410은 스킵: 0회 추가 재시도. scrape 1회만 호출 후 결과 반환."""
     import threading
 
-    from app.services.crawl import collect_sync as crawl_collect_sync
     from app.services.crawl.collect_sync import _get_http_status_code, _scrape_one_sync_with_sem
     from requests.exceptions import HTTPError
-    from tenacity import wait_none
 
-    monkeypatch.setattr(crawl_collect_sync, "get_crawl_retry_wait", wait_none())
     calls = {"scrape": 0}
 
     class _FakeLimiter:
@@ -749,17 +736,13 @@ def test_retry_policy_404_skippable_no_retry(monkeypatch):
     assert calls["scrape"] == 1
 
 
-def test_retry_policy_429_retried(monkeypatch):
-    """429는 재시도 대상. 지정 횟수까지 재시도 후 성공 시 결과 반환."""
+def test_collect_retry_policy_429_is_single_shot():
+    """429 retry는 downloader middleware가 담당하고 collect 레이어는 추가 재시도하지 않는다."""
     import threading
 
-    from app.services.crawl import collect_sync as crawl_collect_sync
     from app.services.crawl.collect_sync import _scrape_one_sync_with_sem
-    from app.services.crawlers.base import ScrapeResult
     from requests.exceptions import HTTPError
-    from tenacity import wait_none
 
-    monkeypatch.setattr(crawl_collect_sync, "get_crawl_retry_wait", wait_none())
     calls = {"scrape": 0}
 
     class _FakeLimiter:
@@ -768,11 +751,9 @@ def test_retry_policy_429_retried(monkeypatch):
 
     def _scrape(_url: str):
         calls["scrape"] += 1
-        if calls["scrape"] < 2:
-            resp = Response()
-            resp.status_code = 429
-            raise HTTPError("429", response=resp)
-        return ScrapeResult("ok", "2024.01.01", "<p>ok</p>", [], [])
+        resp = Response()
+        resp.status_code = 429
+        raise HTTPError("429", response=resp)
 
     post: LinkItem = {"url": "https://example.com/post/1"}
     result = _scrape_one_sync_with_sem(
@@ -781,9 +762,9 @@ def test_retry_policy_429_retried(monkeypatch):
         _FakeLimiter(),
         threading.BoundedSemaphore(1),
     )
-    assert result.exc is None
-    assert result.data is not None
-    assert calls["scrape"] == 2
+    assert isinstance(result.exc, HTTPError)
+    assert result.data is None
+    assert calls["scrape"] == 1
 
 
 def test_process_scrape_result_parser_threshold_aborts():

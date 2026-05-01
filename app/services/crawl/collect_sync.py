@@ -10,15 +10,11 @@ from dataclasses import dataclass
 from typing import Any
 
 import httpx
-from requests.exceptions import RequestException
 from requests.exceptions import Timeout as RequestsTimeout
-from tenacity import RetryError, Retrying, retry_if_exception, stop_after_attempt
 
-from app.core.crawl_rate_limit import host_from_url
 from app.core.metrics import (
     CRAWL_DROP_TOTAL,
     CRAWL_PARSE_THRESHOLD_TRIGGER_TOTAL,
-    CRAWL_RETRY_TOTAL,
     DROP_REASON_DUPLICATE,
     DROP_REASON_PRE_DEDUP,
     RETRY_REASON_5XX,
@@ -32,20 +28,16 @@ from app.services.crawl.error_handling import CrawlErrorAction, CrawlErrorHandle
 from app.services.crawl.item_pipeline import DefaultNoticeItemPipeline, RawNoticeItem
 from app.services.crawl_payload import _external_id_from_url
 from app.services.crawl_policy import (
-    HTTP_RETRY_STATUS_CODES,
     HTTP_RETRY_STATUS_MAX_5XX,
     HTTP_RETRY_STATUS_MIN_5XX,
-    HTTP_SKIP_STATUS_CODES,
     CrawlErrorTracker,
     CrawlThresholdExceeded,
 )
 from app.services.crawlers.base import ScrapeResult
 
 from .runtime import (
-    CRAWL_RETRY_MAX_ATTEMPTS,
     _BoundedSeenSet,
     _RedisSeenSet,
-    get_crawl_retry_wait,
 )
 
 logger = logging.getLogger(__name__)
@@ -62,37 +54,11 @@ class ScrapeAttemptResult:
     exc: Exception | None
 
 
-_BASE_NETWORK_EXC_TYPES = (
-    TimeoutError,
-    OSError,
-    ConnectionError,
-    RequestException,
-    httpx.HTTPError,
-    httpx.TimeoutException,
-)
-
-
 def _get_http_status_code(exc: BaseException) -> int | None:
     if hasattr(exc, "response") and exc.response is not None:
         if hasattr(exc.response, "status_code"):
             return int(exc.response.status_code)
     return None
-
-
-def _is_skippable(exc: BaseException) -> bool:
-    code = _get_http_status_code(exc)
-    return code in HTTP_SKIP_STATUS_CODES if code is not None else False
-
-
-def _is_retryable(exc: BaseException) -> bool:
-    code = _get_http_status_code(exc)
-    if code is not None:
-        if code in HTTP_SKIP_STATUS_CODES:
-            return False
-        if code in HTTP_RETRY_STATUS_CODES or HTTP_RETRY_STATUS_MIN_5XX <= code <= HTTP_RETRY_STATUS_MAX_5XX:
-            return True
-        return False
-    return isinstance(exc, _BASE_NETWORK_EXC_TYPES)
 
 
 def _retry_reason_from_exc(exc: BaseException) -> str:
@@ -205,41 +171,13 @@ def _execute_scrape_with_retry(
     rate_limiter: Any,
 ) -> ScrapeAttemptResult:
     """
-    ?ъ떆??+ rate limit(留??쒕룄 ?? + ?덉쇅 ?뺤콉 ?곸슜. Semaphore ?몃?.
-    ?몄텧泥? _scrape_one_sync_with_sem (?숈떆?깆? 洹몄そ?먯꽌留??좎?).
+    Execute one detail scrape attempt.
+
+    Retry and host rate limiting live in downloader middleware; keeping collect_sync
+    single-shot prevents multiplicative retries when crawler modules use that stack.
     """
-    detail_url = post.get("url") or ""
-    host = host_from_url(detail_url) or "_"
-    last_result: ScrapeAttemptResult | None = None
-    try:
-        for attempt in Retrying(
-            stop=stop_after_attempt(CRAWL_RETRY_MAX_ATTEMPTS),
-            wait=get_crawl_retry_wait,
-            retry=retry_if_exception(_is_retryable),
-            reraise=False,
-        ):
-            with attempt:
-                wait_sync = getattr(rate_limiter, "wait_sync", None)
-                if callable(wait_sync):
-                    wait_sync(host)
-                last_result = _scrape_one_sync(post, scrape_fn)
-                if last_result.exc is None:
-                    return last_result
-                if _is_skippable(last_result.exc):
-                    return last_result
-                if _is_retryable(last_result.exc):
-                    increment(
-                        CRAWL_RETRY_TOTAL,
-                        1,
-                        labels={"reason": _retry_reason_from_exc(last_result.exc)},
-                    )
-                    raise last_result.exc
-                return last_result
-    except RetryError:
-        pass
-    if last_result is not None:
-        return last_result
-    return ScrapeAttemptResult(post=post, detail_url=detail_url, data=None, exc=None)
+    _ = rate_limiter
+    return _scrape_one_sync(post, scrape_fn)
 
 
 def _scrape_one_sync_with_sem(
