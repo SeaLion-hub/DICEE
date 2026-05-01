@@ -50,6 +50,7 @@ htmlcov/
 # Type check / lint caches
 .mypy_cache/
 .ruff_cache/
+.import_linter_cache/
 
 # gstack (vendored under .agents/skills/gstack; run setup after clone)
 .agents/skills/gstack/node_modules/
