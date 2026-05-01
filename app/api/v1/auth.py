@@ -419,6 +419,9 @@ async def post_logout(
     try:
         await logout_user(session, user_id)
         await session.commit()
+    except AuthError as e:
+        await session.rollback()
+        raise HTTPException(status_code=401, detail="Invalid or expired token") from e
     except (OperationalError, SQLAlchemyTimeoutError, TimeoutError) as e:
         await session.rollback()
         logger.warning(

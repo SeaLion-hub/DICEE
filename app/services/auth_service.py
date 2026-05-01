@@ -22,12 +22,12 @@ from app.core.redis import BlocklistUnavailableError, is_access_blocked
 from app.core.user_id_hmac import compute_user_id_hash
 from app.domain.contracts.auth_contracts import GoogleTokenResult, TokenResult
 from app.domain.contracts.user_contracts import UserUpsertCmd
-from app.repositories.login_audit_repository import create_login_audit
 from app.repositories.user_repository import (
     increment_refresh_token_version,
     rotate_refresh_token_version,
     upsert_by_provider_uid,
 )
+from app.services.login_audit_service import enqueue_login_audit_event
 
 logger = logging.getLogger(__name__)
 
@@ -312,7 +312,9 @@ async def refresh_tokens(
 
 async def revoke_refresh_tokens_for_user(session: AsyncSession, user_id: uuid.UUID) -> None:
     """해당 사용자의 refresh_token_version 증가 시 원본 Refresh 토큰 무효화."""
-    await increment_refresh_token_version(session, user_id)
+    updated = await increment_refresh_token_version(session, user_id)
+    if not updated:
+        raise AuthError("User not found or inactive")
 
 
 def _normalize_redirect_uri(uri: str) -> str:
@@ -432,8 +434,7 @@ async def google_login(
     if client_ip:
         try:
             ip_hmac_val, ip_hmac_key_version = compute_ip_hmac(client_ip)
-            await create_login_audit(
-                session,
+            enqueue_login_audit_event(
                 ip_hmac=ip_hmac_val,
                 ip_hmac_key_version=ip_hmac_key_version,
                 user_id=user.id,

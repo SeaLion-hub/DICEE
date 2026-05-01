@@ -55,6 +55,9 @@ INTERNAL_PREAUTH_RATE_LIMITED_TOTAL = "internal_preauth_rate_limited_total"
 CLIENT_IP_RESOLUTION_TOTAL = "client_ip_resolution_total"
 INVALID_XFF_TOTAL = "invalid_xff_total"
 REFRESH_TOKEN_REUSE_ATTEMPT_TOTAL = "refresh_token_reuse_attempt_total"
+LOGIN_AUDIT_ENQUEUE_FAILED_TOTAL = "login_audit_enqueue_failed_total"
+LOGIN_AUDIT_BATCH_INSERTED_TOTAL = "login_audit_batch_inserted_total"
+LOGIN_AUDIT_BATCH_SKIPPED_TOTAL = "login_audit_batch_skipped_total"
 
 # Read cache (soft TTL + mutex)
 READ_CACHE_FRESH_HIT_TOTAL = "read_cache_fresh_hit_total"

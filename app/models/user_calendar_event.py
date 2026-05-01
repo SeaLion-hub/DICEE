@@ -28,6 +28,12 @@ class UserCalendarEvent(Base):
             "notice_id",
             unique=True,
         ),
+        Index(
+            "ix_user_calendar_events_user_start_end",
+            "user_id",
+            "start_at",
+            "end_at",
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)

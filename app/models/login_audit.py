@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from app.models.user import User
 
-from sqlalchemy import DateTime, ForeignKey, String, text
+from sqlalchemy import DateTime, ForeignKey, Index, String, text
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -20,6 +20,7 @@ class LoginAudit(Base):
     """로그인 감사. 평문 IP 저장 금지. ip_hmac, ip_hmac_key_version만 저장."""
 
     __tablename__ = "login_audits"
+    __table_args__ = (Index("ix_login_audits_ip_created", "ip_hmac", text("created_at DESC")),)
 
     id: Mapped[uuid.UUID] = mapped_column(
         PG_UUID(as_uuid=True),

@@ -180,7 +180,7 @@ def test_post_refresh_rollback_on_unexpected_exception(client: TestClient) -> No
 async def test_login_audit_failed_logs_user_id_hash_not_raw_uuid(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Phase 3: Login audit 실패 시 로그에 user_id_hash만 있고 raw user_id 없음. create_login_audit 호출 검증."""
+    """Phase 3: Login audit enqueue 실패 시 로그에 user_id_hash만 있고 raw user_id 없음."""
     from app.services.auth_service import google_login
 
     user = MagicMock()
@@ -199,7 +199,7 @@ async def test_login_audit_failed_logs_user_id_hash_not_raw_uuid(
         patch("app.services.auth_service.upsert_by_provider_uid", new_callable=AsyncMock) as m_upsert,
         patch("app.services.auth_service.exchange_google_code", new_callable=AsyncMock) as m_ex,
         patch("app.services.auth_service.decode_google_id_token", new_callable=AsyncMock) as m_dec,
-        patch("app.services.auth_service.create_login_audit", new_callable=AsyncMock) as m_audit,
+        patch("app.services.auth_service.enqueue_login_audit_event") as m_audit,
     ):
         m_upsert.return_value = user
         m_ex.return_value = mock_google_result
@@ -214,7 +214,7 @@ async def test_login_audit_failed_logs_user_id_hash_not_raw_uuid(
             key_fetcher=MagicMock(),
             client_ip="127.0.0.1",
         )
-        assert m_audit.called, "create_login_audit must be invoked for this test to be meaningful"
+        assert m_audit.called, "enqueue_login_audit_event must be invoked for this test to be meaningful"
 
     log_text = caplog.text
     assert "00000000-0000-7000-8000-000000000002" not in log_text

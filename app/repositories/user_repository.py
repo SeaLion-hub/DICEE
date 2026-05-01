@@ -20,20 +20,28 @@ async def update_profile_json(
 ) -> None:
     """users.profile_json 갱신."""
     now = datetime.now(UTC)
-    await session.execute(update(User).where(User.id == user_id).values(profile_json=profile_json, updated_at=now))
+    await session.execute(
+        update(User)
+        .where(User.id == user_id, User.deleted_at.is_(None))
+        .values(profile_json=profile_json, updated_at=now)
+    )
 
 
 async def get_by_id(session: AsyncSessionLike, user_id: uuid.UUID) -> User | None:
     """id로 유저 조회."""
-    result = await session.execute(select(User).where(User.id == user_id))
+    result = await session.execute(select(User).where(User.id == user_id, User.deleted_at.is_(None)))
     return result.scalars().one_or_none()
 
 
-async def increment_refresh_token_version(session: AsyncSession, user_id: uuid.UUID) -> None:
+async def increment_refresh_token_version(session: AsyncSession, user_id: uuid.UUID) -> bool:
     """로그아웃/탈취 시 해당 유저의 모든 Refresh 토큰 무효화."""
-    await session.execute(
-        update(User).where(User.id == user_id).values(refresh_token_version=User.refresh_token_version + 1)
+    result = await session.execute(
+        update(User)
+        .where(User.id == user_id, User.deleted_at.is_(None))
+        .values(refresh_token_version=User.refresh_token_version + 1)
+        .returning(User.id)
     )
+    return result.one_or_none() is not None
 
 
 async def rotate_refresh_token_version(session: AsyncSession, user_id: uuid.UUID, expected_version: int) -> int | None:
@@ -43,7 +51,7 @@ async def rotate_refresh_token_version(session: AsyncSession, user_id: uuid.UUID
     """
     stmt = (
         update(User)
-        .where(User.id == user_id, User.refresh_token_version == expected_version)
+        .where(User.id == user_id, User.refresh_token_version == expected_version, User.deleted_at.is_(None))
         .values(refresh_token_version=User.refresh_token_version + 1)
         .returning(User.refresh_token_version)
     )
@@ -58,6 +66,7 @@ async def get_by_provider_uid(session: AsyncSession, provider: str, provider_use
         select(User).where(
             User.provider == provider,
             User.provider_user_id == provider_user_id,
+            User.deleted_at.is_(None),
         )
     )
     return result.scalars().one_or_none()

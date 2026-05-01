@@ -113,6 +113,7 @@ class Settings(BaseSettings):
     auth_google_state_rate_limit_per_minute: int = Field(30, ge=1, le=500)
     auth_refresh_rate_limit_per_minute: int = Field(60, ge=1, le=5000)
     auth_refresh_token_fingerprint_rate_limit_per_minute: int = Field(15, ge=1, le=5000)
+    login_audit_batch_size: int = Field(250, ge=1, le=5000)
 
     http_client_connect_timeout_seconds: float = Field(
         10.0,

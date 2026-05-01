@@ -24,6 +24,8 @@ async def list_for_user_in_range(
         UserCalendarEvent.start_at < range_end,
         or_(UserCalendarEvent.end_at.is_(None), UserCalendarEvent.end_at >= range_start),
     )
+    # Current response uses denormalized event fields only. If it starts reading
+    # event.notice or notice.college, add selectinload/join projection here.
     stmt = select(UserCalendarEvent).where(cond).order_by(UserCalendarEvent.start_at.asc())
     result = await session.execute(stmt)
     return list(result.scalars().all())

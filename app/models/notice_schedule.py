@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from app.models.notice import Notice
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, String, text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, String, text
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -18,6 +18,14 @@ from app.models.base import Base
 
 class NoticeSchedule(Base):
     __tablename__ = "notice_schedules"
+    __table_args__ = (
+        Index(
+            "ix_notice_schedules_calendar_range",
+            "start_at",
+            "end_at",
+            postgresql_where=text("is_tbd = false AND start_at IS NOT NULL"),
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         PG_UUID(as_uuid=True),

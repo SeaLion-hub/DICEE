@@ -65,6 +65,7 @@ app.conf.update(
     task_queues=(Queue("critical"), Queue("crawl"), Queue("ai")),
     task_routes={
         "app.services.tasks.close_stale_crawl_runs_task": {"queue": "critical"},
+        "app.services.tasks.process_login_audit_batch_task": {"queue": "critical"},
         "app.services.tasks.crawl_college_task": {"queue": "crawl"},
         "app.services.tasks.process_notice_ingestion_batch_task": {"queue": "crawl"},
         "app.services.tasks.process_notice_ai_task": {"queue": "ai"},

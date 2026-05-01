@@ -633,7 +633,9 @@ def extract_notice_info(
         )
         if is_quota_or_rate_limit:
             increment(AI_EXTRACTION_PROVIDER_ERROR_TOTAL)
-            logger.error("AI extraction failed due to provider quota/rate limit; re-raising for autoretry.", exc_info=True)
+            logger.error(
+                "AI extraction failed due to provider quota/rate limit; re-raising for autoretry.", exc_info=True
+            )
             raise
 
         if isinstance(e, ValidationError | _instructor_retry_exc_type):

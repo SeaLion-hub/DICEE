@@ -182,9 +182,28 @@ def close_stale_running_runs_sync(
 
 async def fetch_source_freshness_async(session: AsyncSession) -> list[IngestionFreshnessRow]:
     """primary college_sources별 최근 ingestion_attempt 1건."""
+    latest_attempt = (
+        select(
+            IngestionAttempt.college_source_id.label("college_source_id"),
+            IngestionAttempt.status.label("status"),
+            IngestionAttempt.started_at.label("started_at"),
+            IngestionAttempt.finished_at.label("finished_at"),
+            IngestionAttempt.total_docs.label("total_docs"),
+        )
+        .distinct(IngestionAttempt.college_source_id)
+        .order_by(IngestionAttempt.college_source_id, IngestionAttempt.started_at.desc())
+        .subquery()
+    )
     stmt = (
-        select(CollegeSource, College.external_id)
+        select(
+            College.external_id,
+            latest_attempt.c.status,
+            latest_attempt.c.started_at,
+            latest_attempt.c.finished_at,
+            latest_attempt.c.total_docs,
+        )
         .join(College, CollegeSource.college_id == College.id)
+        .outerjoin(latest_attempt, latest_attempt.c.college_source_id == CollegeSource.id)
         .where(
             CollegeSource.is_primary.is_(True),
             College.deleted_at.is_(None),
@@ -192,14 +211,8 @@ async def fetch_source_freshness_async(session: AsyncSession) -> list[IngestionF
     )
     result = await session.execute(stmt)
     out: list[IngestionFreshnessRow] = []
-    for src, ext_id in result.all():
-        att = await session.scalar(
-            select(IngestionAttempt)
-            .where(IngestionAttempt.college_source_id == src.id)
-            .order_by(IngestionAttempt.started_at.desc())
-            .limit(1)
-        )
-        if att is None:
+    for ext_id, status, started_at, finished_at, total_docs in result.all():
+        if status is None:
             out.append(
                 IngestionFreshnessRow(
                     college_code=ext_id,
@@ -213,10 +226,10 @@ async def fetch_source_freshness_async(session: AsyncSession) -> list[IngestionF
         out.append(
             IngestionFreshnessRow(
                 college_code=ext_id,
-                last_attempt_status=att.status,
-                last_attempt_started_at=att.started_at,
-                last_attempt_finished_at=att.finished_at,
-                total_docs=int(att.total_docs) if att.total_docs is not None else None,
+                last_attempt_status=status,
+                last_attempt_started_at=started_at,
+                last_attempt_finished_at=finished_at,
+                total_docs=int(total_docs) if total_docs is not None else None,
             )
         )
     return out

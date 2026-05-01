@@ -30,6 +30,8 @@ from app.core.metrics import (
     CRAWL_FAILURE_TOTAL,
     CRAWL_SUCCESS_TOTAL,
     ENQUEUE_TO_START_LAG_SECONDS,
+    LOGIN_AUDIT_BATCH_INSERTED_TOTAL,
+    LOGIN_AUDIT_BATCH_SKIPPED_TOTAL,
     NOTICE_AI_EXTRACTION_COMPLETED_TOTAL,
     increment,
     set_gauge,
@@ -68,6 +70,7 @@ from app.repositories.ingestion_attempt_repository import (
     increment_attempt_completed_batches_sync,
     maybe_finalize_attempt_after_batch_sync,
 )
+from app.repositories.login_audit_repository import create_login_audits_bulk_sync
 from app.repositories.notice_repository import (
     get_by_id_sync,
     get_notice_for_ai_sync,
@@ -86,6 +89,31 @@ from app.services.crawl_service import handle_crawl_failure_composite, run_crawl
 from app.services.gemini_text_embedding import embed_text_sync
 
 logger = logging.getLogger(__name__)
+
+
+def _normalize_login_audit_event(raw: object) -> dict[str, object] | None:
+    """Validate one JSON Celery payload before DB insert."""
+    if not isinstance(raw, dict):
+        return None
+    ip_hmac = str(raw.get("ip_hmac") or "").strip()
+    key_version = str(raw.get("ip_hmac_key_version") or "").strip()
+    if not ip_hmac or not key_version:
+        return None
+    user_id_raw = raw.get("user_id")
+    user_id: uuid_mod.UUID | None = None
+    if user_id_raw is not None:
+        try:
+            user_id = uuid_mod.UUID(str(user_id_raw))
+        except (TypeError, ValueError):
+            return None
+    provider_raw = raw.get("provider")
+    provider = str(provider_raw).strip()[:32] if provider_raw is not None else None
+    return {
+        "ip_hmac": ip_hmac[:64],
+        "ip_hmac_key_version": key_version[:32],
+        "user_id": user_id,
+        "provider": provider or None,
+    }
 
 
 def _sync_notice_schedules_after_ai(
@@ -468,6 +496,33 @@ def _execute_notice_ai_pipeline(
         _sync_notice_schedules_after_ai(session, notice_uuid, envelope.result)
     _emit_notice_ai_extraction_completed_by_code(notice_id_str, snap.college_external_id)
     return True
+
+
+@app.task(name="app.services.tasks.process_login_audit_batch_task")
+def process_login_audit_batch_task(events: list[dict[str, object]]) -> dict[str, int]:
+    """Batch insert login audit events. Malformed events are skipped, not fatal."""
+    if not isinstance(events, list) or not events:
+        return {"inserted": 0, "skipped": 0}
+    rows: list[dict[str, object]] = []
+    skipped = 0
+    for raw in events[: settings.login_audit_batch_size]:
+        row = _normalize_login_audit_event(raw)
+        if row is None:
+            skipped += 1
+            continue
+        rows.append(row)
+    overflow = max(0, len(events) - settings.login_audit_batch_size)
+    skipped += overflow
+    inserted = 0
+    if rows:
+        with get_sync_session() as session:
+            inserted = create_login_audits_bulk_sync(session, rows)
+    if inserted:
+        increment(LOGIN_AUDIT_BATCH_INSERTED_TOTAL, inserted)
+    if skipped:
+        increment(LOGIN_AUDIT_BATCH_SKIPPED_TOTAL, skipped)
+        logger.warning("process_login_audit_batch_task skipped malformed/overflow events count=%s", skipped)
+    return {"inserted": inserted, "skipped": skipped}
 
 
 # Retryable: timeout, 5xx, 408, 409, 425, 429, 네트워크 일시 오류. Fatal(그 외 4xx 등)은 autoretry_for에 넣지 않음.
