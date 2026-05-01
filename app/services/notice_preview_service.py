@@ -52,7 +52,7 @@ class NoticePreviewService:
 
             image_urls = self._extract_image_urls(notice.images)
             attachment_names = self._extract_attachment_names(notice.attachments)
-            eligibility = [str(x).strip() for x in (notice.eligibility or []) if str(x).strip()]
+            eligibility = [str(x).strip() for x in (notice.eligibility or []) if x is not None and str(x).strip()]
             dates = self._extract_dates(notice.dates)
             main_categories, sub_categories = self._extract_taxonomy(
                 taxonomy_mappings=None,

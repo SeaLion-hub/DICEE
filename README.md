@@ -2,7 +2,10 @@
 
 DICEE는 대학 공지 데이터를 수집·정규화해, 필요한 정보를 더 빠르게 찾을 수 있게 만드는 공지 인텔리전스 백엔드입니다.
 
-현재 상태: **M2 (Intelligence)** — 3·4단계(크롤·Celery·AI 추출·taxonomy)는 코드 기준 핵심 완료. **5단계 코어**(프로필·맞춤 피드·달력·ICS·`notice_schedules` 동기화)는 API 반영됨. **PostgreSQL FTS·GIN 키워드 검색**은 후속 PR.
+현재 상태(마지막 코드/문서 기준 반영: **2026-04-26**, 상세: `docs/WORK_LOG.md`):
+
+- **완료**: M2 (Intelligence) 핵심 — 3·4단계(크롤·Celery·AI 추출·taxonomy) + **5단계 코어**(프로필·맞춤 피드·달력·ICS·`notice_schedules` 동기화) API 반영
+- **진행 중/잔여**: **PostgreSQL FTS·GIN 키워드 검색**(후속 PR), **프론트엔드(Next.js, 6단계)**는 아직 미생성/미착수 (`frontend/` 없음)
 
 ## Key Features
 
@@ -22,6 +25,8 @@ DICEE는 대학 공지 데이터를 수집·정규화해, 필요한 정보를 �
 | **Backend** | FastAPI, SQLAlchemy 2.0, Celery, Pydantic v2, Alembic |
 | **Database** | PostgreSQL, Redis |
 | **Infrastructure** | Docker/Compose, Railway, Vercel, Sentry |
+
+로컬 개발 전제(요약): **Python 3.11+** (`pyproject.toml`의 `requires-python`과 동일), PostgreSQL, Redis.
 
 ## Architecture
 

@@ -20,6 +20,8 @@
 | 항목 | 내용 |
 |------|------|
 | **현재 마일스톤** | **M2 Intelligence** — 수집·AI 파이프라인(3·4단계) 핵심 완료. **5단계 코어**(프로필·맞춤·달력·ICS·일정 동기화) 반영. **PostgreSQL FTS·키워드 검색**은 후속 PR |
+| **마지막 반영 기준** | **2026-04-26** (AI 파이프라인 안정화·v2/eligibility 복구 포함, 근거: [WORK_LOG](WORK_LOG.md)) |
+| **남은 큰 덩어리** | (1) **FTS·GIN 키워드 검색** 구현/계약/인덱스, (2) **6단계 프론트(Next.js/Vercel)** 착수(현재 `frontend/` 없음) |
 | **배포** | 백엔드 Railway, 프론트 Vercel. 상세 [DEPLOYMENT](DEPLOYMENT.md). |
 | **작업 기록** | [WORK_LOG](WORK_LOG.md) |
 | **단계별 할 일·확정 사항·예상 문제** | [ROADMAP_PHASES](ROADMAP_PHASES.md) |
@@ -48,7 +50,7 @@
 |----------|------|------|
 | **M1: Foundation** | 인프라·인증 | 비동기 백엔드 뼈대, PostgreSQL·ORM, Railway 배포, 구글 OAuth·JWT·User 스키마 확립. |
 | **M2: Intelligence** | 수집·AI | 연세대 크롤러(레포 이식)·Celery·Redis 연동, Multimodal AI 파이프라인(Gemini), 자격요건·일정 추출·저장. |
-| **M3: Engagement** | 매칭·프론트 | 검색·프로필 매칭 API, 일정·달력 API, Next.js 프론트 연동, 반응형·모바일 우선, 런칭. |
+| **M3: Engagement** | 매칭·프론트 | **백엔드**: 프로필·맞춤 피드·달력·ICS API(5단계 코어)까지 반영. **프론트**: Next.js(Vercel) 연동·반응형·모바일 우선·런칭(6단계, 현재 미착수). |
 
 ---
 

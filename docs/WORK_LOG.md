@@ -12,6 +12,8 @@
 
 - [작성 규칙](#작성-규칙)
 - [작성 형식](#작성-형식)
+- [2026-05-01](#2026-05-01)
+- [2026-04-26](#2026-04-26)
 - [2026-03-30](#2026-03-30)
 - [2026-03-29](#2026-03-29)
 - [2026-03-28](#2026-03-28)
@@ -34,6 +36,7 @@
 - [2026-02-18](#2026-02-18)
 - [2026-02-17](#2026-02-17)
 - [2026-02-16](#2026-02-16)
+- [2026-03-18](#2026-03-18)
 - [템플릿 (새 날짜에 복사)](#템플릿-새-날짜에-복사)
 
 ---
@@ -48,6 +51,10 @@
 - `- [단계 또는 영역] 무엇을 했는지 (어떤 파일/기능). 왜 또는 결과 한 줄.`
 
 ---
+## 2026-05-01
+
+- [문서] 코드베이스 대조 후 온보딩 문서 동기화: `README.md`에 **완료/잔여(FTS·Next.js)**를 명시하고 마지막 반영 기준일을 `2026-04-26`로 고정, `docs/ROADMAP.md`에 **마지막 반영 기준·남은 큰 덩어리** 행 추가, `docs/README.md`에 "지금 어디까지" 빠른 답 섹션 추가. `docs/WORK_LOG.md` 목차에 누락된 최근 날짜 링크 보강 및 템플릿 아래 오정렬 로그 1건을 날짜 섹션으로 복구. 검증: 문서 링크/섹션 앵커 수동 확인(테스트 실행 없음).
+
 ## 2026-03-30
 
 - [문서 릴리스] `/document-release`: `016_user_calendar_events_cleanup`·어드바이저리 락·단일 마이그레이터 안내를 `DEPLOYMENT.md`에 반영. `database-spec.md` §6.7을 pinned-event 스키마(정수 PK, `uq_user_calendar_user_notice`)로 갱신하고 명세 수정 시 품질 게이트 한 줄 추가. 검증: `pytest` 489 passed, 5 skipped.
@@ -255,6 +262,8 @@
 
 - [개선 실행 계획] 문서 기반 컨텍스트(DEPLOYMENT·CAUTIONS·ROADMAP_PHASES·ADR) 대조 후 `docs/PLAN_OWNER_REMEDIATION_2026-02-27.md` 신규 작성. P0/P1 우선순위, 파일 범위, 테스트·완료 기준을 실행 단위로 확정.
 
+- [PLAN_OWNER_REMEDIATION 실행(P0+P1)] `app/core/config` 패키지 분해(호환 import 유지), `JWT_SIGNING_MODE(auto|hs256|rs256)` 도입 및 auto RS 우선 규칙/encode-decode 공통 해석 강제, production local spool fail-fast(`CONTENT_SPOOL_ALLOW_EPHEMERAL`) 추가, internal API client IP 미판별 503 fail-closed 적용. `storage.py`에 local/s3 공통 spool 계약(list/read/overwrite/delete/move_to_dlq) 및 retry/last_error/dead-letter 메타데이터 추가, `tasks.py` drain 경로를 backend 공통 처리로 리팩터링. `crawl_service.py`의 Redis 동기 클라이언트 경로를 `app.core.redis.get_shared_sync_redis_client` 공유 경로로 통합. 테스트/검증: `pytest -q`(85 passed, 3 skipped), `ruff check app tests`, `mypy app` 통과.
+
 - [P0 대규모 트래픽 대비] **DB 데드락 원천 차단:** upsert_notices_bulk 삽입 전 (college_id, external_id) 기준 오름차순 정렬. **Cache Stampede 방어:** app/core/redis.py Soft TTL·Mutex Lock(분산 락). **읽기 전용 트랜잭션:** get_read_only_db(AUTOCOMMIT) 의존성. 수강신청 등 트래픽 폭증 시 1초 이내 API 응답·SNUTT 수준 동시성 제어 목표.
 
 - [안티프래질 인프라 4단계 구현] **(Phase 1)** Redis 역할 분리: config.redis_celery_url 추가, celery_app에서 broker/result_backend에 celery_url or redis_url 사용. task_queues (critical, crawl, ai) 및 task_routes 도입. DEPLOYMENT·.env.example에 REDIS_CELERY_URL·워커 -Q critical,crawl,ai 필수 안내. **(Phase 2)** content 업로드 실패 스풀: content_spool_dir·content_spool_backend·content_spool_max_retries 설정, storage에서 policy=fail 시 _spool_write_failure 후 예외 전파, spool_list_local/spool_read_entry, drain_content_spool_task(재업로드+update_notice_content_url_sync로 DB 반영), beat 스케줄 300s. notice_repository에 update_notice_content_url_sync 추가. **(Phase 3)** 읽기 캐시: read_cache_ttl_seconds·read_cache_key_prefix, app/core/read_cache.py (get_cached/set_cached), /internal/crawl-stats에 read-through 캐시 적용. **(Phase 4)** 자율 모드: degraded_failure_threshold·degraded_recovery_success_count, AppState에 operational_mode·consecutive_failure_count·consecutive_success_count, /ready 호출 시 _update_operational_mode로 연속 N실패→DEGRADED·M성공→NORMAL, DEGRADED 시 crawl-stats는 캐시만 서빙·미스 시 503+Retry-After. ADR: redis-celery-separation.md·content-upload-spool-and-drain.md. CAUTIONS: 워커 큐 명시·스풀 경로 이탈.
@@ -426,7 +435,6 @@
 
 - [단계] 무엇을 했는지 (어떤 파일/기능). 왜 또는 결과 한 줄.
 ```
-- [PLAN_OWNER_REMEDIATION 실행(P0+P1)] `app/core/config` 패키지 분해(호환 import 유지), `JWT_SIGNING_MODE(auto|hs256|rs256)` 도입 및 auto RS 우선 규칙/encode-decode 공통 해석 강제, production local spool fail-fast(`CONTENT_SPOOL_ALLOW_EPHEMERAL`) 추가, internal API client IP 미판별 503 fail-closed 적용. `storage.py`에 local/s3 공통 spool 계약(list/read/overwrite/delete/move_to_dlq) 및 retry/last_error/dead-letter 메타데이터 추가, `tasks.py` drain 경로를 backend 공통 처리로 리팩터링. `crawl_service.py`의 Redis 동기 클라이언트 경로를 `app.core.redis.get_shared_sync_redis_client` 공유 경로로 통합. 테스트/검증: `pytest -q`(85 passed, 3 skipped), `ruff check app tests`, `mypy app` 통과.
 
 ## 2026-03-18
 
