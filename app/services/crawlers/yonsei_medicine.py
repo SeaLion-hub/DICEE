@@ -92,7 +92,7 @@ def parse_medicine_notice_links_from_html(html: str, list_url: str) -> list[dict
 
 def parse_medicine_detail_from_html(html: str, detail_url: str) -> ScrapeResult:
     soup = BeautifulSoup(html, "html.parser")
-    title = "제목 없음"
+    title = ""
     header = soup.find(class_="article-header")
     header = require_present(header if isinstance(header, Tag) else None, selector=".article-header", url=detail_url)
     if isinstance(header, Tag):
@@ -110,17 +110,14 @@ def parse_medicine_detail_from_html(html: str, detail_url: str) -> ScrapeResult:
     content_html = ""
     fr_view = soup.find("div", class_="fr-view")
     fr_view = require_present(fr_view if isinstance(fr_view, Tag) else None, selector="div.fr-view", url=detail_url)
-    if isinstance(fr_view, Tag):
-        end_comment = fr_view.find(string=lambda t: isinstance(t, Comment) and "키워드/태그" in t)
-        if end_comment:
-            curr: PageElement | None = end_comment
-            while curr:
-                nxt = curr.next_sibling
-                curr.extract()
-                curr = nxt
-        content_html = clean_html_content(fr_view)
-    else:
-        content_html = "(본문 영역 .fr-view를 찾을 수 없습니다)"
+    end_comment = fr_view.find(string=lambda t: isinstance(t, Comment) and "키워드/태그" in t)
+    if end_comment:
+        curr: PageElement | None = end_comment
+        while curr:
+            nxt = curr.next_sibling
+            curr.extract()
+            curr = nxt
+    content_html = clean_html_content(fr_view)
     content_html = require_non_empty_text(content_html, field="content_html", url=detail_url)
     images: list[dict[str, Any]] = []
     image_urls: set[str] = set()

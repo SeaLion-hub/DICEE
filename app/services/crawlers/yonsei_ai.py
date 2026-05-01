@@ -16,7 +16,7 @@ from app.core.crawl_http import (
     fetch_html_detail_cached,
 )
 from app.core.crawler_config import CrawlerModuleSpec
-from app.services.crawlers.base import ScrapeResult
+from app.services.crawlers.base import ScrapeResult, require_non_empty_text, require_present
 from app.services.crawlers.notice_dates import normalize_notice_date_split_tokens
 from app.services.crawlers.typing_helpers import ensure_str_attr
 
@@ -86,10 +86,11 @@ def extract_between_comments(soup, start_keyword, end_keyword):
 
 def parse_computing_detail_from_html(html: str, detail_url: str) -> ScrapeResult:
     soup = BeautifulSoup(html, "html.parser")
-    title = "제목 없음"
+    title = ""
     title_elem = soup.find(id="bo_v_title") or soup.find(class_="bo_v_title")
     if isinstance(title_elem, Tag):
         title = title_elem.get_text(strip=True)
+    title = require_non_empty_text(title, field="title", url=detail_url)
     date = "날짜 없음"
     info_sec = soup.find(id="bo_v_info") or soup
     date_match = re.search(r"\d{2,4}\s*[.-]\s*\d{1,2}\s*[.-]\s*\d{1,2}", info_sec.get_text())
@@ -99,28 +100,30 @@ def parse_computing_detail_from_html(html: str, detail_url: str) -> ScrapeResult
     images: list[dict[str, Any]] = []
     image_urls: set[str] = set()
     body_tags = extract_between_comments(soup, "본문 내용 시작", "본문 내용 끝")
-    if body_tags:
-        temp_html = "".join(str(t) for t in body_tags)
-        temp_soup = BeautifulSoup(temp_html, "html.parser")
-        content_text = get_text_structurally(temp_soup)
-        content_text = re.sub(r"\n\s*\n+", "\n\n", content_text).strip()
-        for img in temp_soup.find_all("img"):
-            if not isinstance(img, Tag):
-                continue
-            src = ensure_str_attr(img.get("src", ""))
-            if not src or src.startswith("data:image"):
-                continue
-            if any(x in src for x in ["icon", "btn", "blank"]):
-                continue
-            full = "https://computing.yonsei.ac.kr" + src if src.startswith("/") else src
-            fname = os.path.basename(full.split("?")[0])
-            if not fname or "." not in fname:
-                fname = "image.jpg"
-            if full not in image_urls:
-                image_urls.add(full)
-                images.append({"type": "url", "data": full, "name": fname})
-    else:
-        content_text = "(본문을 찾을 수 없습니다)"
+    body_tags = require_present(body_tags, selector="본문 내용 comment block", url=detail_url)
+    temp_html = "".join(str(t) for t in body_tags)
+    temp_soup = BeautifulSoup(temp_html, "html.parser")
+    content_text = get_text_structurally(temp_soup)
+    content_text = require_non_empty_text(
+        re.sub(r"\n\s*\n+", "\n\n", content_text).strip(),
+        field="content_html",
+        url=detail_url,
+    )
+    for img in temp_soup.find_all("img"):
+        if not isinstance(img, Tag):
+            continue
+        src = ensure_str_attr(img.get("src", ""))
+        if not src or src.startswith("data:image"):
+            continue
+        if any(x in src for x in ["icon", "btn", "blank"]):
+            continue
+        full = "https://computing.yonsei.ac.kr" + src if src.startswith("/") else src
+        fname = os.path.basename(full.split("?")[0])
+        if not fname or "." not in fname:
+            fname = "image.jpg"
+        if full not in image_urls:
+            image_urls.add(full)
+            images.append({"type": "url", "data": full, "name": fname})
     attachments: list[str] = []
     attachment_names: set[str] = set()
     file_tags = extract_between_comments(soup, "첨부파일 시작", "첨부파일 끝")

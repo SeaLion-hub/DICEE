@@ -16,7 +16,7 @@ from app.core.crawl_http import (
     fetch_html_detail_cached,
 )
 from app.core.crawler_config import CrawlerModuleSpec
-from app.services.crawlers.base import ScrapeResult
+from app.services.crawlers.base import ScrapeResult, require_non_empty_text, require_present
 from app.services.crawlers.notice_dates import normalize_notice_date
 from app.services.crawlers.typing_helpers import class_list_from_tag, ensure_str_attr
 
@@ -88,7 +88,7 @@ def scrape_physics_detail(url: str) -> ScrapeResult:
             raise
         soup = BeautifulSoup(text, "html.parser")
 
-        title = "제목 없음"
+        title = ""
         date = "날짜 없음"
         header_div = soup.find("div", class_="bw_header")
         if header_div and isinstance(header_div, Tag):
@@ -107,53 +107,56 @@ def scrape_physics_detail(url: str) -> ScrapeResult:
                         if dd_span and isinstance(dd_span, Tag):
                             date = normalize_notice_date(dd_span.get_text(strip=True))
                         break
+        title = require_non_empty_text(title, field="title", url=url)
 
         content_html = ""
         images: list[dict[str, Any]] = []
         content_div = soup.find("div", class_=lambda c: c and "bw_contents" in (c or ""))
+        content_div = require_present(
+            content_div if isinstance(content_div, Tag) else None,
+            selector="div.bw_contents",
+            url=url,
+        )
 
-        if content_div and isinstance(content_div, Tag):
-            for idx, img in enumerate(content_div.find_all("img")):
-                if not isinstance(img, Tag):
+        for idx, img in enumerate(content_div.find_all("img")):
+            if not isinstance(img, Tag):
+                continue
+            src = ensure_str_attr(img.get("src"))
+            if not src:
+                continue
+            if src.startswith("data:image"):
+                try:
+                    header, encoded = src.split(",", 1)
+                    data = base64.b64decode(encoded)
+                    ext = "jpg" if "jpeg" in header or "jpg" in header else "png"
+                    images.append({"type": "base64", "data": data, "name": f"image_{idx + 1}.{ext}"})
+                except Exception:
+                    pass
+            else:
+                full_url = urljoin(url, src)
+                parsed = urlparse(full_url)
+                if parsed.scheme not in ("http", "https"):
                     continue
-                src = ensure_str_attr(img.get("src"))
-                if not src:
-                    continue
-                if src.startswith("data:image"):
-                    try:
-                        header, encoded = src.split(",", 1)
-                        data = base64.b64decode(encoded)
-                        ext = "jpg" if "jpeg" in header or "jpg" in header else "png"
-                        images.append({"type": "base64", "data": data, "name": f"image_{idx + 1}.{ext}"})
-                    except Exception:
-                        pass
-                else:
-                    full_url = urljoin(url, src)
-                    parsed = urlparse(full_url)
-                    if parsed.scheme not in ("http", "https"):
-                        continue
-                    unquoted_path = unquote(parsed.path)
-                    encoded_path = quote(unquoted_path)
-                    safe_url = urlunparse(
-                        (
-                            parsed.scheme,
-                            parsed.netloc,
-                            encoded_path,
-                            parsed.params,
-                            parsed.query,
-                            parsed.fragment,
-                        )
+                unquoted_path = unquote(parsed.path)
+                encoded_path = quote(unquoted_path)
+                safe_url = urlunparse(
+                    (
+                        parsed.scheme,
+                        parsed.netloc,
+                        encoded_path,
+                        parsed.params,
+                        parsed.query,
+                        parsed.fragment,
                     )
-                    fname = os.path.basename(unquoted_path)
-                    if not any(d.get("data") == safe_url for d in images):
-                        images.append({"type": "url", "data": safe_url, "name": fname or f"image_{idx + 1}.jpg"})
-                img.decompose()
-            for table in content_div.find_all("table"):
-                if isinstance(table, Tag) and not table.get("border"):
-                    table["border"] = "1"
-            content_html = content_div.decode_contents().strip()
-        else:
-            content_html = "(본문 영역을 찾을 수 없습니다)"
+                )
+                fname = os.path.basename(unquoted_path)
+                if not any(d.get("data") == safe_url for d in images):
+                    images.append({"type": "url", "data": safe_url, "name": fname or f"image_{idx + 1}.jpg"})
+            img.decompose()
+        for table in content_div.find_all("table"):
+            if isinstance(table, Tag) and not table.get("border"):
+                table["border"] = "1"
+        content_html = require_non_empty_text(content_div.decode_contents().strip(), field="content_html", url=url)
 
         attachments: list[str] = []
         files_div = soup.find("div", class_="bw_files")

@@ -84,7 +84,7 @@ def parse_yonsei_engineering_precise_from_html(html: str, detail_url: str) -> Sc
     """상세 HTML만 파싱해 ScrapeResult 생성. I/O 없음(단위 테스트·재사용용)."""
     soup = BeautifulSoup(html, "html.parser")
 
-    title = "제목 없음"
+    title = ""
     title_label = soup.find(string=lambda t: bool(t and "제목" in t))
     if title_label:
         title_container = title_label.find_parent(["dt", "th", "td"])
@@ -92,7 +92,7 @@ def parse_yonsei_engineering_precise_from_html(html: str, detail_url: str) -> Sc
             title_elem = title_container.find_next_sibling(["dd", "td"])
             if title_elem:
                 title = get_text_structurally(title_elem).strip()
-    if title == "제목 없음":
+    if not title:
         h3 = soup.find("h3")
         if h3:
             title = get_text_structurally(h3).strip()

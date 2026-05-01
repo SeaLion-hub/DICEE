@@ -13,7 +13,7 @@ from app.core.crawl_http import (
     fetch_html_detail_cached,
 )
 from app.core.crawler_config import CrawlerModuleSpec
-from app.services.crawlers.base import ScrapeResult
+from app.services.crawlers.base import ScrapeResult, require_non_empty_text, require_present
 from app.services.crawlers.html_image_extract import extract_images_from_container
 from app.services.crawlers.notice_dates import normalize_notice_date
 from app.services.crawlers.typing_helpers import ensure_str_attr
@@ -60,12 +60,13 @@ def parse_glc_links_from_html(html: str, list_url: str) -> list[dict[str, Any]]:
 def parse_glc_detail_from_html(html: str, detail_url: str) -> ScrapeResult:
     """상세 HTML만 파싱. I/O 없음."""
     soup = BeautifulSoup(html, "html.parser")
-    title = "제목 없음"
+    title = ""
     title_div = soup.find("div", class_="kboard-title")
     if title_div and isinstance(title_div, Tag):
         h1_tag = title_div.find("h1")
         if isinstance(h1_tag, Tag):
             title = h1_tag.get_text(strip=True)
+    title = require_non_empty_text(title, field="title", url=detail_url)
     date = "날짜 없음"
     date_div = soup.find("div", class_="detail-date")
     if date_div and isinstance(date_div, Tag):
@@ -75,11 +76,13 @@ def parse_glc_detail_from_html(html: str, detail_url: str) -> ScrapeResult:
     content_html = ""
     images: list[dict[str, Any]] = []
     content_div = soup.find("div", class_="content-view")
-    if content_div and isinstance(content_div, Tag):
-        images = extract_images_from_container(content_div, detail_url, prefer_data_orig_src=True)
-        content_html = content_div.decode_contents().strip()
-    else:
-        content_html = "(본문 영역을 찾을 수 없습니다)"
+    content_div = require_present(
+        content_div if isinstance(content_div, Tag) else None,
+        selector="div.content-view",
+        url=detail_url,
+    )
+    images = extract_images_from_container(content_div, detail_url, prefer_data_orig_src=True)
+    content_html = require_non_empty_text(content_div.decode_contents().strip(), field="content_html", url=detail_url)
     attachments: list[str] = []
     attachment_names: set[str] = set()
     for btn in soup.find_all("button", class_=lambda c: bool(c and "kboard-button-download" in c)):
