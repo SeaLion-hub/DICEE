@@ -243,6 +243,25 @@ def test_extract_notice_info_instructor_429_raises_retryable_provider_error() ->
             extract_notice_info("<p>html</p>")
 
 
+def test_extract_notice_info_instructor_503_raises_retryable_provider_error() -> None:
+    instructor_exceptions = pytest.importorskip("instructor.core.exceptions")
+    instructor_retry_exc_cls = instructor_exceptions.InstructorRetryException
+
+    def _raise_unavailable(*args, **kwargs):
+        raise instructor_retry_exc_cls(
+            "503 UNAVAILABLE This model is currently experiencing high demand",
+            n_attempts=3,
+            total_usage={},
+        )
+
+    with patch(
+        "app.services.ai_pipeline.extract_notice_structured_with_usage",
+        side_effect=_raise_unavailable,
+    ):
+        with pytest.raises(AIProviderRetryableError):
+            extract_notice_info("<p>html</p>")
+
+
 def test_extract_notice_info_token_limit_retries_once_then_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[int] = []
 

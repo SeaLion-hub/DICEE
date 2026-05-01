@@ -194,6 +194,8 @@ celery -A app.core.celery_app:app beat -l info
 
 **재큐 대상 pending:** `requeue_stale_pending_ai_notices_task`는 `notices.updated_at`이 임계보다 오래된 `pending` 행을 골라 AI 배치 큐에 다시 넣습니다. 다른 컬럼 갱신으로 `updated_at`만 최근으로 밀리면 재큐 시점이 늦어질 수 있습니다.
 
+**로컬 AI 관리자:** `/internal/admin/ai-test`와 `/internal/admin/token-dashboard`는 `ENVIRONMENT=production`에서 404이며, `get_client_ip()` 기준 localhost만 허용합니다. DB 반영은 Redis 기반 `Idempotency-Key`와 notice 단위 락을 요구합니다. 선택 환경 변수는 `.env.example`의 `INTERNAL_AI_ADMIN_RATE_LIMIT_PER_MINUTE`, `AI_ADMIN_APPLY_LOCK_TTL_SECONDS`, `AI_ADMIN_DASHBOARD_MAX_ROWS`, `AI_ADMIN_MODEL_COSTS_USD_PER_MILLION`을 참고하세요.
+
 ### 3) Cron 트리거
 
 - 권장 방식: Railway Cron 또는 외부 Cron이 `POST /internal/trigger-crawl` 호출

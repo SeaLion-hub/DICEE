@@ -361,9 +361,9 @@ async def read_only_session_cm(
     """
     if not maker:
         raise RuntimeError("Database not initialized. Set DATABASE_URL.")
-    async with maker(execution_options={"isolation_level": "AUTOCOMMIT"}) as session:
+    async with maker() as session:
         try:
-            await session.execute(text("SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY"))
+            await session.execute(text("SET TRANSACTION READ ONLY"))
         except Exception as e:
             logger.debug("Read-only session: could not set PG READ ONLY: %s", e)
         yield ReadOnlySessionWrapper(session)

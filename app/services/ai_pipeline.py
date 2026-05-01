@@ -363,7 +363,16 @@ def _error_text(exc: BaseException) -> str:
 
 def _is_provider_rate_limit_error(exc: BaseException) -> bool:
     text = _error_text(exc)
-    return "resource_exhausted" in text or "quota exceeded" in text or "429" in text or "rate limit" in text
+    markers = (
+        "resource_exhausted",
+        "quota exceeded",
+        "429",
+        "rate limit",
+        "503 unavailable",
+        "status': 'unavailable'",
+        "high demand",
+    )
+    return any(marker in text for marker in markers)
 
 
 def _is_token_limit_error(exc: BaseException) -> bool:

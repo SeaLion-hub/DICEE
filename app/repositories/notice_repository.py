@@ -7,6 +7,7 @@
 import base64
 import uuid
 from collections.abc import Iterator, Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -31,6 +32,32 @@ NOTICE_LIST_DEFER_OPTIONS = (
     defer(Notice.images),
     defer(Notice.attachments),
 )
+
+
+@dataclass(frozen=True)
+class AdminNoticeOptionRow:
+    """관리자 AI 테스트에서 선택할 최근 공지 1건 요약."""
+
+    id: uuid.UUID
+    title: str
+    college_name: str
+    college_code: str
+    published_at: datetime | None
+    ai_status: str
+    total_tokens: int | None
+
+
+@dataclass(frozen=True)
+class AdminAiUsageSourceRow:
+    """토큰 대시보드 집계 입력 행. JSONB 파싱은 service에서 수행한다."""
+
+    id: uuid.UUID
+    title: str
+    college_name: str
+    college_code: str
+    updated_at: datetime | None
+    published_at: datetime | None
+    ai_extracted_json: dict[str, Any] | None
 
 
 def _decode_cursor(cursor: str | None) -> tuple[datetime | None, datetime | None, uuid.UUID | None] | None:
@@ -206,6 +233,82 @@ async def list_recent_notices_for_college_preview(
     return list(result.scalars().unique().all())
 
 
+def _extract_envelope_total_tokens(ai_extracted_json: dict[str, Any] | None) -> int | None:
+    if not isinstance(ai_extracted_json, dict):
+        return None
+    metadata = ai_extracted_json.get("metadata")
+    if not isinstance(metadata, dict):
+        return None
+    envelope_meta = metadata.get("_envelope_meta")
+    if not isinstance(envelope_meta, dict):
+        return None
+    usage = envelope_meta.get("usage")
+    if not isinstance(usage, dict):
+        return None
+    raw_total = usage.get("total_tokens")
+    try:
+        return int(raw_total)
+    except (TypeError, ValueError):
+        return None
+
+
+async def list_recent_notices_for_ai_admin(
+    session: AsyncSessionLike,
+    *,
+    limit: int = 30,
+) -> list[AdminNoticeOptionRow]:
+    """관리자 AI 테스트용 최근 공지 목록. 읽기 전용이며 본문 heavy field는 로드하지 않는다."""
+    stmt = (
+        select(Notice)
+        .where(Notice.deleted_at.is_(None))
+        .options(
+            *NOTICE_LIST_DEFER_OPTIONS,
+            selectinload(Notice.college),
+        )
+        .order_by(
+            Notice.published_at.desc().nulls_last(),
+            Notice.created_at.desc(),
+            Notice.id.desc(),
+        )
+        .limit(limit)
+    )
+    result = await session.execute(stmt)
+    rows = list(result.scalars().unique().all())
+    out: list[AdminNoticeOptionRow] = []
+    for notice in rows:
+        college = notice.college
+        out.append(
+            AdminNoticeOptionRow(
+                id=notice.id,
+                title=notice.title,
+                college_name=college.name if college is not None else "",
+                college_code=college.external_id if college is not None else "",
+                published_at=notice.published_at,
+                ai_status=notice.ai_status,
+                total_tokens=_extract_envelope_total_tokens(notice.ai_extracted_json),
+            )
+        )
+    return out
+
+
+async def get_notice_for_ai_admin(session: AsyncSessionLike, notice_id: uuid.UUID) -> Notice | None:
+    """
+    관리자 AI 테스트용 공지 1건 조회.
+    get_notice_for_ai_sync와 달리 ai_status를 변경하지 않고, FOR UPDATE도 사용하지 않는다.
+    """
+    stmt = (
+        select(Notice)
+        .where(Notice.id == notice_id, Notice.deleted_at.is_(None))
+        .options(
+            selectinload(Notice.college),
+            selectinload(Notice.notice_content),
+        )
+        .limit(1)
+    )
+    result = await session.execute(stmt)
+    return result.scalars().unique().one_or_none()
+
+
 async def search_notices_by_embedding(
     session: AsyncSessionLike,
     *,
@@ -241,6 +344,50 @@ async def search_notices_by_embedding(
     )
     result = await session.execute(stmt)
     return list(result.scalars().unique().all())
+
+
+async def list_ai_usage_source_rows_for_admin(
+    session: AsyncSessionLike,
+    *,
+    since: datetime | None = None,
+    limit: int = 5000,
+) -> list[AdminAiUsageSourceRow]:
+    """관리자 토큰 대시보드 집계용 원천 행. JSONB usage 파싱은 service가 담당한다."""
+    stmt = (
+        select(
+            Notice.id,
+            Notice.title,
+            Notice.updated_at,
+            Notice.published_at,
+            Notice.ai_extracted_json,
+            College.name,
+            College.external_id,
+        )
+        .join(College, Notice.college_id == College.id)
+        .where(
+            Notice.deleted_at.is_(None),
+            Notice.ai_extracted_json.isnot(None),
+        )
+        .order_by(Notice.updated_at.desc(), Notice.id.desc())
+        .limit(limit)
+    )
+    if since is not None:
+        stmt = stmt.where(Notice.updated_at >= since)
+    result = await session.execute(stmt)
+    rows: list[AdminAiUsageSourceRow] = []
+    for row in result.all():
+        rows.append(
+            AdminAiUsageSourceRow(
+                id=row.id,
+                title=row.title,
+                updated_at=row.updated_at,
+                published_at=row.published_at,
+                ai_extracted_json=row.ai_extracted_json,
+                college_name=row.name,
+                college_code=row.external_id,
+            )
+        )
+    return rows
 
 
 def update_notice_embedding_sync(session: Session, notice_id: uuid.UUID, embedding: Sequence[float]) -> None:
@@ -329,6 +476,50 @@ def update_ai_result_sync(
             taxonomy_rows=taxonomy_rows,
         )
     session.flush()
+    return rowcount
+
+
+async def update_ai_result_admin(
+    session: AsyncSessionLike,
+    notice_id: uuid.UUID,
+    ai_extracted_json: dict[str, Any],
+    *,
+    dates: list[dict[str, Any]] | None = None,
+    eligibility: list[str] | None = None,
+    hashtags: list[str] | None = None,
+    taxonomy_rows: list[dict[str, str]] | None = None,
+) -> int:
+    """
+    관리자 apply용 AI 결과 반영.
+    processing 상태 전이를 만들지 않고 notice_id 1건만 업데이트한다. 반환: 매칭 행 수.
+    """
+    values: dict[str, Any] = {
+        "ai_status": "done",
+        "ai_extracted_json": ai_extracted_json,
+        "ai_processing_started_at": None,
+    }
+    if dates is not None:
+        values["dates"] = dates
+    if eligibility is not None:
+        values["eligibility"] = eligibility
+    if hashtags is not None:
+        values["hashtags"] = hashtags
+    result = await session.execute(
+        update(Notice)
+        .where(
+            Notice.id == notice_id,
+            Notice.deleted_at.is_(None),
+        )
+        .values(**values)
+    )
+    rowcount = int(result.rowcount or 0)
+    if rowcount > 0 and taxonomy_rows is not None:
+        await _replace_notice_taxonomy_rows(
+            session=session,
+            notice_id=notice_id,
+            taxonomy_rows=taxonomy_rows,
+        )
+    await session.flush()
     return rowcount
 
 
@@ -423,6 +614,39 @@ def _replace_notice_taxonomy_rows_sync(
         return
 
     session.execute(insert(NoticeTaxonomyMapping).values(cleaned_rows))
+
+
+async def _replace_notice_taxonomy_rows(
+    *,
+    session: AsyncSessionLike,
+    notice_id: uuid.UUID,
+    taxonomy_rows: list[dict[str, str]],
+) -> None:
+    """notice_id의 taxonomy 매핑을 전달된 행 목록으로 완전 교체한다(비동기)."""
+    await session.execute(delete(NoticeTaxonomyMapping).where(NoticeTaxonomyMapping.notice_id == notice_id))
+    if not taxonomy_rows:
+        return
+
+    cleaned_rows: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for row in taxonomy_rows:
+        main_category = str(row.get("main_category", "")).strip()
+        sub_category = str(row.get("sub_category", "")).strip()
+        if not main_category or not sub_category:
+            continue
+        key = (main_category, sub_category)
+        if key in seen:
+            continue
+        seen.add(key)
+        cleaned_rows.append(
+            {
+                "notice_id": notice_id,
+                "main_category": main_category,
+                "sub_category": sub_category,
+            }
+        )
+    if cleaned_rows:
+        await session.execute(insert(NoticeTaxonomyMapping).values(cleaned_rows))
 
 
 def get_by_college_external_sync(

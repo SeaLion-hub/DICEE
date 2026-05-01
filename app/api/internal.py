@@ -3,9 +3,13 @@
 Query 파라미터 시크릿 미지원(Access Log 유출 방지). college별 분산락으로 중복 enqueue 방지.
 """
 
+# ruff: noqa: E501
+
 import logging
+from dataclasses import asdict, is_dataclass
 from html import escape
 from typing import cast
+from urllib.parse import parse_qs
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response
@@ -21,7 +25,9 @@ from app.core.config import settings
 from app.core.crawler_config import college_codes_for_openapi
 from app.core.database import read_only_session_cm
 from app.core.deps import (
+    ReadOnlySessionDep,
     SessionDep,
+    get_ai_admin_service,
     get_crawl_stats_service,
     get_internal_crawl_service,
     get_notice_preview_service,
@@ -46,6 +52,16 @@ from app.domain.contracts.internal_contracts import (
     TriggerCrawlResultKind,
 )
 from app.schemas.internal import CrawlRunStatsItem, CrawlSourceFreshnessStatsItem, CrawlStatsResponse
+from app.services.ai_admin_service import (
+    AiAdminConflictError,
+    AiAdminDependencyUnavailableError,
+    AiAdminError,
+    AiAdminNotFoundError,
+    AiAdminService,
+    AiAdminValidationError,
+    payload_to_json,
+    result_to_payload,
+)
 from app.services.crawl_stats_service import CrawlStatsService
 from app.services.internal_crawl_service import InternalCrawlService, normalize_trigger_idempotency_key
 from app.services.notice_preview_service import NoticePreviewRow, NoticePreviewService
@@ -125,6 +141,447 @@ def _render_engineering_preview_html(rows: list[NoticePreviewRow], *, limit: int
       {rows_html}
     </tbody>
   </table>
+</body>
+</html>"""
+
+
+def _json_pretty(value: object) -> str:
+    return escape(payload_to_json(cast(dict[str, object], value) if isinstance(value, dict) else {"value": value}))
+
+
+def _to_plain(value: object) -> dict[str, object]:
+    if is_dataclass(value):
+        return cast(dict[str, object], asdict(value))
+    if isinstance(value, dict):
+        return cast(dict[str, object], value)
+    raw = getattr(value, "__dict__", None)
+    if isinstance(raw, dict):
+        return cast(dict[str, object], raw)
+    return {}
+
+
+def _to_plain_list(values: list[object]) -> list[dict[str, object]]:
+    return [_to_plain(value) for value in values]
+
+
+def _format_cost(cost: dict[str, object]) -> str:
+    total = cost.get("total_usd")
+    if total is None:
+        return "unknown"
+    try:
+        return f"${float(total):.8f}"
+    except (TypeError, ValueError):
+        return "unknown"
+
+
+def _format_number(value: object) -> str:
+    try:
+        return f"{int(value or 0):,}"
+    except (TypeError, ValueError):
+        return "0"
+
+
+async def _admin_form_data(request: Request) -> dict[str, str]:
+    content_type = (request.headers.get("content-type") or "").lower()
+    if "application/x-www-form-urlencoded" in content_type:
+        body = (await request.body()).decode("utf-8")
+        parsed = parse_qs(body, keep_blank_values=True)
+        return {k: values[-1] if values else "" for k, values in parsed.items()}
+    if "application/json" in content_type:
+        payload = await request.json()
+        if isinstance(payload, dict):
+            return {str(k): str(v) for k, v in payload.items()}
+    return {}
+
+
+def _form_bool(data: dict[str, str], key: str) -> bool:
+    return (data.get(key) or "").strip().lower() in {"1", "true", "on", "yes"}
+
+
+def _render_ai_admin_html(
+    *,
+    notices: list[dict[str, object]],
+    dashboard: dict[str, object],
+    result: dict[str, object] | None = None,
+    message: str | None = None,
+) -> str:
+    options = []
+    for notice in notices:
+        nid = str(notice.get("id") or "")
+        title = str(notice.get("title") or "(제목 없음)")
+        college = str(notice.get("college_code") or "-")
+        tokens = notice.get("total_tokens")
+        label = f"[{college}] {title}"
+        if tokens is not None:
+            label += f" ({tokens} tokens)"
+        options.append(f'<option value="{escape(nid)}">{escape(label)}</option>')
+    options_html = "".join(options)
+
+    result_html = """
+        <div class="empty-state">
+          <span class="empty-kicker">Ready</span>
+          <h3>아직 실행 결과가 없습니다</h3>
+          <p>최근 공지를 선택하고 드라이런을 실행하면 토큰 사용량, 예상 비용, 추출 요약이 여기에 표시됩니다.</p>
+        </div>
+        """
+    if result is not None:
+        usage = cast(dict[str, object], result.get("usage") or {})
+        cost = cast(dict[str, object], result.get("cost") or {})
+        meta = cast(dict[str, object], result.get("meta") or {})
+        summary = cast(dict[str, object], result.get("summary") or {})
+        notice_id = escape(str(result.get("notice_id") or ""))
+        html_source = str(result.get("html_source") or "unknown")
+        source_quality = str(result.get("source_quality") or "warning")
+        usage_quality = str(result.get("usage_quality") or "unknown")
+        cost_quality = str(result.get("cost_quality") or cost.get("reason") or "estimated")
+        token_band = str(result.get("token_band") or "unknown")
+        admin_advice = str(result.get("admin_advice") or "")
+        result_html = f"""
+        <div class="metric-grid result-metrics">
+          <div class="metric-card">
+            <span class="metric-label">Total Tokens</span>
+            <strong>{escape(_format_number(usage.get("total_tokens")))}</strong>
+            <small>band {escape(token_band)}</small>
+          </div>
+          <div class="metric-card">
+            <span class="metric-label">Prompt Tokens</span>
+            <strong>{escape(_format_number(usage.get("prompt_tokens")))}</strong>
+            <small>model input</small>
+          </div>
+          <div class="metric-card">
+            <span class="metric-label">Completion Tokens</span>
+            <strong>{escape(_format_number(usage.get("completion_tokens")))}</strong>
+            <small>model output</small>
+          </div>
+          <div class="metric-card">
+            <span class="metric-label">Estimated Cost</span>
+            <strong>{escape(_format_cost(cost))}</strong>
+            <small>{escape(cost_quality)}</small>
+          </div>
+          <div class="metric-card">
+            <span class="metric-label">Source Quality</span>
+            <strong>{escape(source_quality)}</strong>
+            <small>{escape(html_source)} · raw {escape(_format_number(meta.get("html_raw_len")))} chars</small>
+          </div>
+          <div class="metric-card">
+            <span class="metric-label">Usage Quality</span>
+            <strong>{escape(usage_quality)}</strong>
+            <small>{escape(str(meta.get("model") or "model unknown"))} · {escape(str(meta.get("elapsed_ms") or 0))}ms</small>
+          </div>
+          <div class="metric-card">
+            <span class="metric-label">Run Meta</span>
+            <strong>{escape(str(meta.get("elapsed_ms") or 0))}ms</strong>
+            <small>{escape(str(meta.get("model") or "model unknown"))} · vision {escape(str(meta.get("vision_used") or False))}</small>
+          </div>
+        </div>
+        <div class="analysis-panel quality-{escape(source_quality)}">
+          <span class="eyebrow">Analysis</span>
+          <h3>운영 판단</h3>
+          <p>{escape(admin_advice)}</p>
+          <dl class="quality-list">
+            <div><dt>HTML source</dt><dd>{escape(html_source)}</dd></div>
+            <div><dt>Usage quality</dt><dd>{escape(usage_quality)}</dd></div>
+            <div><dt>Cost quality</dt><dd>{escape(cost_quality)}</dd></div>
+            <div><dt>Vision</dt><dd>{escape(str(meta.get("vision_used") or False))}</dd></div>
+          </dl>
+        </div>
+        <div class="result-block">
+          <div class="section-heading compact">
+            <span class="eyebrow">AI Output</span>
+            <h3>추출 요약</h3>
+          </div>
+          <pre>{_json_pretty(summary)}</pre>
+        </div>
+        <details class="apply-panel">
+          <summary>DB 반영 위험 영역 열기</summary>
+        <form method="post" action="/internal/admin/ai-test/apply" class="danger">
+          <div>
+            <span class="eyebrow danger-text">DB Apply</span>
+            <h3>검토한 결과만 DB에 반영</h3>
+            <p>AI를 다시 실행한 뒤 선택한 공지 1건만 업데이트합니다. Idempotency-Key는 제출 시 브라우저에서 자동 생성됩니다.</p>
+          </div>
+          <input type="hidden" name="notice_id" value="{notice_id}" />
+          <label class="check-row"><input type="checkbox" name="include_vision" value="true" /> 이미지 포함(vision)</label>
+          <label class="field">확인 문자열 <span>notice_id 또는 제목 일부</span><input name="confirmation" value="{notice_id}" /></label>
+          <button class="button danger-button" type="submit" name="apply" value="true">DB 반영 실행</button>
+        </form>
+        </details>
+        <details class="raw-panel"><summary>Raw JSON 보기</summary><pre>{_json_pretty(result)}</pre></details>
+        """
+
+    overall = cast(dict[str, object], dashboard.get("overall") or {})
+    last_24h = cast(dict[str, object], dashboard.get("last_24h") or {})
+    last_7d = cast(dict[str, object], dashboard.get("last_7d") or {})
+    top = cast(list[dict[str, object]], dashboard.get("top_notices") or [])
+    quality_note = (
+        f"valid usage {escape(_format_number(overall.get('valid_usage_count')))}, "
+        f"missing usage {escape(_format_number(overall.get('missing_usage_count')))}, "
+        f"invalid usage {escape(_format_number(overall.get('invalid_usage_count')))}, "
+        f"unavailable usage {escape(_format_number(overall.get('unavailable_usage_count')))}"
+    )
+    top_rows = "".join(
+        "<tr>"
+        f"<td class=\"title-cell\">{escape(str(item.get('title') or ''))}</td>"
+        f"<td>{escape(str(item.get('college_code') or ''))}</td>"
+        f"<td>{escape(str(item.get('model') or ''))}</td>"
+        f"<td>{escape(_format_number(item.get('total_tokens')))}</td>"
+        f"<td>{escape(str(item.get('estimated_cost_usd') or 'unknown'))}</td>"
+        "</tr>"
+        for item in top
+    )
+    if not top_rows:
+        top_rows = '<tr><td colspan="5" class="table-empty">아직 집계된 AI 사용 기록이 없습니다.</td></tr>'
+    message_html = f'<div class="message">{escape(message)}</div>' if message else ""
+    return f"""<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AI Token Cost Console</title>
+  <style>
+    :root {{
+      color-scheme: light;
+      --bg: #f4f6f8;
+      --surface: #ffffff;
+      --surface-muted: #f8fafc;
+      --border: #d8dee8;
+      --border-strong: #b8c2d2;
+      --text: #172033;
+      --muted: #667085;
+      --accent: #2457d6;
+      --accent-dark: #1e45a8;
+      --danger: #b42318;
+      --danger-bg: #fff4f2;
+      --danger-border: #f5b8b1;
+      --success-bg: #ecfdf3;
+      --success-border: #abefc6;
+      --shadow: 0 18px 45px rgba(16, 24, 40, 0.08);
+    }}
+    * {{ box-sizing: border-box; }}
+    body {{
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: "Segoe UI", "Noto Sans KR", "Apple SD Gothic Neo", sans-serif;
+      line-height: 1.5;
+    }}
+    .page {{ max-width: 1180px; margin: 0 auto; padding: 32px 24px 48px; }}
+    .page-header {{
+      display: flex;
+      justify-content: space-between;
+      gap: 24px;
+      align-items: flex-start;
+      margin-bottom: 24px;
+    }}
+    .page-header h1 {{ margin: 6px 0 8px; font-size: clamp(30px, 5vw, 44px); letter-spacing: -0.04em; }}
+    .page-header p {{ max-width: 760px; margin: 0; color: var(--muted); font-size: 16px; }}
+    .badge {{
+      flex: 0 0 auto;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      border-radius: 999px;
+      padding: 8px 12px;
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 650;
+    }}
+    .grid {{ display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(360px, 0.95fr); gap: 20px; align-items: start; }}
+    .panel {{
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      box-shadow: var(--shadow);
+      padding: 22px;
+    }}
+    .section-heading {{ margin-bottom: 18px; }}
+    .section-heading.compact {{ margin: 20px 0 10px; }}
+    .section-heading h2, .section-heading h3 {{ margin: 4px 0 6px; letter-spacing: -0.02em; }}
+    .section-heading p {{ margin: 0; color: var(--muted); }}
+    .eyebrow {{ color: var(--accent); font-size: 12px; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; }}
+    .field {{ display: grid; gap: 7px; margin: 14px 0; font-weight: 700; }}
+    .field span {{ color: var(--muted); font-size: 13px; font-weight: 500; }}
+    select, input:not([type="checkbox"]) {{
+      width: 100%;
+      min-height: 44px;
+      border: 1px solid var(--border-strong);
+      border-radius: 10px;
+      background: var(--surface);
+      color: var(--text);
+      padding: 10px 12px;
+      font: inherit;
+    }}
+    select:focus-visible, input:focus-visible, button:focus-visible, summary:focus-visible {{
+      outline: 3px solid rgba(36, 87, 214, 0.22);
+      outline-offset: 2px;
+    }}
+    .check-row {{ display: flex; align-items: center; gap: 10px; margin: 12px 0; color: var(--text); font-weight: 650; }}
+    .check-row input {{ width: 18px; height: 18px; accent-color: var(--accent); }}
+    .button {{
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 44px;
+      border: 0;
+      border-radius: 10px;
+      background: var(--accent);
+      color: #fff;
+      padding: 10px 16px;
+      cursor: pointer;
+      font-weight: 750;
+    }}
+    .button:hover {{ background: var(--accent-dark); }}
+    .metric-grid {{ display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }}
+    .metric-card {{
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      background: var(--surface-muted);
+      padding: 15px;
+      min-width: 0;
+    }}
+    .metric-label {{ display: block; color: var(--muted); font-size: 12px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.06em; }}
+    .metric-card strong {{ display: block; margin-top: 8px; font-size: 28px; letter-spacing: -0.04em; }}
+    .metric-card small {{ display: block; margin-top: 4px; color: var(--muted); word-break: break-word; }}
+    .result-metrics {{ margin-top: 18px; }}
+    pre {{
+      white-space: pre-wrap;
+      word-break: break-word;
+      background: #0f172a;
+      color: #e5e7eb;
+      padding: 16px;
+      border-radius: 14px;
+      overflow: auto;
+      max-height: 480px;
+    }}
+    .empty-state {{
+      margin-top: 20px;
+      border: 1px dashed var(--border-strong);
+      border-radius: 16px;
+      background: var(--surface-muted);
+      padding: 24px;
+    }}
+    .empty-state h3 {{ margin: 6px 0; }}
+    .empty-state p {{ margin: 0; color: var(--muted); }}
+    .empty-kicker {{ color: var(--muted); font-size: 12px; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; }}
+    .danger {{
+      display: grid;
+      gap: 8px;
+      margin-top: 18px;
+      border: 1px solid var(--danger-border);
+      background: var(--danger-bg);
+      padding: 18px;
+      border-radius: 16px;
+    }}
+    .danger h3 {{ margin: 3px 0 6px; }}
+    .danger p {{ margin: 0; color: #7a271a; }}
+    .danger-text {{ color: var(--danger); }}
+    .danger-button {{ background: var(--danger); }}
+    .danger-button:hover {{ background: #912018; }}
+    .message {{
+      margin-bottom: 18px;
+      border: 1px solid var(--success-border);
+      background: var(--success-bg);
+      border-radius: 12px;
+      padding: 12px 14px;
+      font-weight: 700;
+    }}
+    .analysis-panel {{
+      margin-top: 16px;
+      border: 1px solid var(--border);
+      background: var(--surface-muted);
+      border-radius: 14px;
+      padding: 16px;
+    }}
+    .analysis-panel h3 {{ margin: 4px 0 6px; }}
+    .analysis-panel p {{ margin: 0 0 12px; color: var(--text); font-weight: 650; }}
+    .quality-warning {{ border-color: #fdb022; background: #fffaeb; }}
+    .quality-blocked {{ border-color: var(--danger-border); background: var(--danger-bg); }}
+    .quality-list {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 14px; margin: 0; }}
+    .quality-list div {{ min-width: 0; }}
+    .quality-list dt {{ color: var(--muted); font-size: 12px; font-weight: 800; text-transform: uppercase; }}
+    .quality-list dd {{ margin: 2px 0 0; font-weight: 700; word-break: break-word; }}
+    .apply-panel {{
+      margin-top: 16px;
+      border: 1px solid var(--danger-border);
+      border-radius: 16px;
+      background: var(--danger-bg);
+      padding: 14px;
+    }}
+    .apply-panel summary {{ color: var(--danger); }}
+    .raw-panel {{ margin-top: 16px; }}
+    summary {{ cursor: pointer; color: var(--accent); font-weight: 750; }}
+    .dashboard-note {{ color: var(--muted); margin: 14px 0 16px; }}
+    .table-wrap {{ overflow-x: auto; border: 1px solid var(--border); border-radius: 14px; }}
+    table {{ width: 100%; border-collapse: collapse; min-width: 720px; background: var(--surface); }}
+    th, td {{ border-bottom: 1px solid var(--border); padding: 11px 12px; text-align: left; vertical-align: top; }}
+    th {{ background: var(--surface-muted); color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; }}
+    tr:last-child td {{ border-bottom: 0; }}
+    .title-cell {{ min-width: 260px; font-weight: 650; }}
+    .table-empty {{ color: var(--muted); text-align: center; padding: 28px; }}
+    @media (max-width: 900px) {{
+      .page {{ padding: 22px 14px 36px; }}
+      .page-header {{ display: block; }}
+      .badge {{ display: inline-flex; margin-top: 14px; }}
+      .grid, .metric-grid, .quality-list {{ grid-template-columns: 1fr; }}
+      .panel {{ padding: 18px; border-radius: 16px; }}
+    }}
+  </style>
+  <script>
+    document.addEventListener('submit', function (event) {{
+      if (event.target.action.endsWith('/apply')) {{
+        event.target.action = event.target.action + '?idempotency_key=' + crypto.randomUUID();
+      }}
+    }});
+  </script>
+</head>
+<body>
+  <main class="page">
+    <header class="page-header">
+      <div>
+        <span class="eyebrow">Local Admin</span>
+        <h1>AI Token Cost Console</h1>
+        <p>공지 1건을 드라이런하고 토큰 사용량, 추정 비용, 본문 소스 신뢰도, usage 품질을 함께 확인합니다.</p>
+        <div hidden>
+        <h1>AI 관리자</h1>
+        <p>공지 1건을 안전하게 드라이런하고, 토큰 비용과 추출 결과를 확인한 뒤 필요한 경우에만 DB에 반영합니다.</p>
+      </div>
+      <span class="badge">localhost only · remote fetch disabled</span>
+      </div>
+    </header>
+    {message_html}
+    <div class="grid">
+      <section class="panel">
+      <div class="section-heading">
+        <span class="eyebrow">Step 1</span>
+        <h2>공지 선택 및 드라이런</h2>
+        <p>드라이런은 DB, 큐, 공지 상태를 변경하지 않습니다.</p>
+      </div>
+      <form method="post" action="/internal/admin/ai-test/run">
+        <label class="field">최근 공지 <span>AI 테스트에 사용할 공지 1건</span><select name="notice_id" required>{options_html}</select></label>
+        <label class="check-row"><input type="checkbox" name="include_vision" value="true" /> 이미지 포함(vision)</label>
+        <button class="button" type="submit">드라이런 실행</button>
+      </form>
+      {result_html}
+    </section>
+    <section class="panel">
+      <div class="section-heading">
+        <span class="eyebrow">Usage</span>
+        <h2>Token Dashboard</h2>
+        <p>최근 AI 실행 기록의 토큰 사용량과 비용 추정치를 빠르게 확인합니다.</p>
+      </div>
+      <div class="metric-grid">
+        <div class="metric-card"><span class="metric-label">Overall</span><strong>{escape(_format_number(overall.get("total_tokens")))}</strong><small>{escape(_format_number(overall.get("call_count")))} calls</small></div>
+        <div class="metric-card"><span class="metric-label">24h</span><strong>{escape(_format_number(last_24h.get("total_tokens")))}</strong><small>{escape(_format_number(last_24h.get("call_count")))} calls</small></div>
+        <div class="metric-card"><span class="metric-label">7d</span><strong>{escape(_format_number(last_7d.get("total_tokens")))}</strong><small>{escape(_format_number(last_7d.get("call_count")))} calls</small></div>
+      </div>
+      <p class="dashboard-note">{quality_note}</p>
+      <div class="section-heading compact">
+        <h3>Top 20</h3>
+      </div>
+      <div class="table-wrap"><table><thead><tr><th>제목</th><th>college</th><th>model</th><th>tokens</th><th>cost</th></tr></thead><tbody>{top_rows}</tbody></table></div>
+      <details class="raw-panel"><summary>Dashboard Raw JSON 보기</summary><pre>{_json_pretty(dashboard)}</pre></details>
+    </section>
+    </div>
+  </main>
 </body>
 </html>"""
 
@@ -241,6 +698,18 @@ def _require_client_ip(request: Request) -> str:
     return client_ip
 
 
+def _require_local_admin_request(request: Request) -> str:
+    """Local-only admin pages. Production is hidden, unresolved IP fails closed."""
+    if (settings.environment or "").strip().lower() == "production":
+        raise HTTPException(status_code=404, detail="Not found")
+    client_ip = get_client_ip(request)
+    if client_ip is None:
+        raise HTTPException(status_code=503, detail="Client identity could not be determined.")
+    if client_ip not in {"127.0.0.1", "::1", "localhost"}:
+        raise HTTPException(status_code=403, detail="AI admin is allowed only from localhost")
+    return client_ip
+
+
 async def _apply_internal_preauth_limit(
     request: Request,
     redis_client: RedisAsyncio | None,
@@ -292,6 +761,39 @@ async def _authorize_with_fail_limit(
                 headers=_rate_limit_headers(),
             ) from None
         raise
+
+
+async def _apply_ai_admin_rate_limit(
+    request: Request,
+    redis_client: RedisAsyncio | None,
+    *,
+    endpoint: str,
+) -> None:
+    client_ip = _require_local_admin_request(request)
+    allowed = await _enforce_rate_limit_or_503(
+        redis_client,
+        identifier=f"internal_ai_admin:{endpoint}:{client_ip}",
+        max_requests=settings.internal_ai_admin_rate_limit_per_minute,
+    )
+    if allowed:
+        return
+    raise HTTPException(
+        status_code=429,
+        detail="Too many AI admin requests, please try again later.",
+        headers=_rate_limit_headers(),
+    )
+
+
+def _ai_admin_http_error(exc: AiAdminError) -> HTTPException:
+    if isinstance(exc, AiAdminNotFoundError):
+        return HTTPException(status_code=404, detail=str(exc))
+    if isinstance(exc, AiAdminConflictError):
+        return HTTPException(status_code=409, detail=str(exc))
+    if isinstance(exc, AiAdminDependencyUnavailableError):
+        return HTTPException(status_code=503, detail=str(exc))
+    if isinstance(exc, AiAdminValidationError):
+        return HTTPException(status_code=400, detail=str(exc))
+    return HTTPException(status_code=500, detail="AI admin operation failed")
 
 
 @router.post("/trigger-crawl")
@@ -523,6 +1025,166 @@ async def get_engineering_public_preview_page(
         raise HTTPException(status_code=403, detail="Public preview is allowed only from localhost")
     rows = await preview_service.get_engineering_preview(session, limit=limit)
     return HTMLResponse(content=_render_engineering_preview_html(rows, limit=limit), status_code=200)
+
+
+@router.get("/admin/ai-test", response_class=HTMLResponse)
+async def get_ai_admin_page(
+    request: Request,
+    session: ReadOnlySessionDep,
+    limit: int = Query(30, ge=1, le=100, description="최근 공지 수"),
+    ai_admin_service: AiAdminService = Depends(get_ai_admin_service),
+) -> HTMLResponse:
+    """로컬 전용 AI 테스트/토큰 대시보드."""
+    _require_local_admin_request(request)
+    notices = await ai_admin_service.list_notice_options(cast(AsyncSession, session), limit=limit)
+    dashboard = await ai_admin_service.usage_dashboard(
+        cast(AsyncSession, session),
+        period_days=30,
+        limit=settings.ai_admin_dashboard_max_rows,
+    )
+    return HTMLResponse(
+        content=_render_ai_admin_html(
+            notices=_to_plain_list(cast(list[object], notices)),
+            dashboard=_to_plain(dashboard),
+        ),
+        status_code=200,
+    )
+
+
+@router.post("/admin/ai-test/run", response_class=HTMLResponse)
+async def post_ai_admin_dry_run(
+    request: Request,
+    session: ReadOnlySessionDep,
+    redis_client: RedisAsyncio | None = Depends(get_redis_trigger_lock),
+    ai_admin_service: AiAdminService = Depends(get_ai_admin_service),
+) -> HTMLResponse:
+    """로컬 전용 공지 1건 AI 드라이런. DB/큐/상태를 변경하지 않는다."""
+    await _apply_ai_admin_rate_limit(request, redis_client, endpoint="/internal/admin/ai-test/run")
+    form_data = await _admin_form_data(request)
+    notice_id = form_data.get("notice_id") or ""
+    include_vision = _form_bool(form_data, "include_vision")
+    try:
+        result = await ai_admin_service.run_dry_run(
+            cast(AsyncSession, session),
+            notice_id=notice_id,
+            include_vision=include_vision,
+        )
+        notices = await ai_admin_service.list_notice_options(cast(AsyncSession, session), limit=30)
+        dashboard = await ai_admin_service.usage_dashboard(
+            cast(AsyncSession, session),
+            period_days=30,
+            limit=settings.ai_admin_dashboard_max_rows,
+        )
+    except AiAdminError as exc:
+        raise _ai_admin_http_error(exc) from exc
+    return HTMLResponse(
+        content=_render_ai_admin_html(
+            notices=_to_plain_list(cast(list[object], notices)),
+            dashboard=_to_plain(dashboard),
+            result=result_to_payload(result),
+        ),
+        status_code=200,
+    )
+
+
+@router.post("/admin/ai-test/apply", response_class=HTMLResponse)
+async def post_ai_admin_apply(
+    request: Request,
+    session: SessionDep,
+    idempotency_key: str | None = Query(None, min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$"),
+    redis_client: RedisAsyncio | None = Depends(get_redis_trigger_lock),
+    ai_admin_service: AiAdminService = Depends(get_ai_admin_service),
+) -> HTMLResponse:
+    """로컬 전용 공지 1건 AI 실행 후 DB 반영. Idempotency-Key와 notice lock이 필수."""
+    await _apply_ai_admin_rate_limit(request, redis_client, endpoint="/internal/admin/ai-test/apply")
+    form_data = await _admin_form_data(request)
+    notice_id = form_data.get("notice_id") or ""
+    confirmation = form_data.get("confirmation") or ""
+    include_vision = _form_bool(form_data, "include_vision")
+    if form_data.get("apply") != "true":
+        raise HTTPException(status_code=400, detail="apply=true is required")
+    claim = None
+    try:
+        claim, cached = await ai_admin_service.prepare_apply_claim(
+            redis_client,
+            notice_id=notice_id,
+            idempotency_key=idempotency_key or "",
+        )
+        if cached is not None:
+            if cached.get("status") == "in_progress":
+                raise HTTPException(status_code=409, detail="Admin apply is already in progress for this key")
+            notices = await ai_admin_service.list_notice_options(session, limit=30)
+            dashboard = await ai_admin_service.usage_dashboard(
+                session,
+                period_days=30,
+                limit=settings.ai_admin_dashboard_max_rows,
+            )
+            return HTMLResponse(
+                content=_render_ai_admin_html(
+                    notices=_to_plain_list(cast(list[object], notices)),
+                    dashboard=_to_plain(dashboard),
+                    result=cached,
+                    message="Idempotency-Key replay: cached apply result.",
+                ),
+                status_code=202,
+            )
+        if claim is None:
+            raise HTTPException(status_code=409, detail="Admin apply claim was not created")
+        result = await ai_admin_service.run_apply(
+            session,
+            claim=claim,
+            include_vision=include_vision,
+            confirmation=confirmation,
+        )
+        await session.commit()
+        payload = result_to_payload(result)
+        await ai_admin_service.complete_apply(redis_client, claim, payload)
+        notices = await ai_admin_service.list_notice_options(session, limit=30)
+        dashboard = await ai_admin_service.usage_dashboard(
+            session,
+            period_days=30,
+            limit=settings.ai_admin_dashboard_max_rows,
+        )
+    except HTTPException:
+        await session.rollback()
+        await ai_admin_service.abort_apply(redis_client, claim)
+        raise
+    except AiAdminError as exc:
+        await session.rollback()
+        await ai_admin_service.abort_apply(redis_client, claim)
+        raise _ai_admin_http_error(exc) from exc
+    except Exception:
+        await session.rollback()
+        await ai_admin_service.abort_apply(redis_client, claim)
+        logger.exception("AI admin apply failed")
+        raise
+    return HTMLResponse(
+        content=_render_ai_admin_html(
+            notices=_to_plain_list(cast(list[object], notices)),
+            dashboard=_to_plain(dashboard),
+            result=payload,
+            message="DB 반영이 완료되었습니다.",
+        ),
+        status_code=200,
+    )
+
+
+@router.get("/admin/token-dashboard")
+async def get_ai_admin_token_dashboard(
+    request: Request,
+    session: ReadOnlySessionDep,
+    period_days: int = Query(30, ge=1, le=365),
+    limit: int = Query(5000, ge=100, le=100000),
+    ai_admin_service: AiAdminService = Depends(get_ai_admin_service),
+) -> JSONResponse:
+    """로컬 전용 토큰/비용 대시보드 JSON."""
+    _require_local_admin_request(request)
+    dashboard = await ai_admin_service.usage_dashboard(
+        cast(AsyncSession, session),
+        period_days=period_days,
+        limit=limit,
+    )
+    return JSONResponse(content=_to_plain(dashboard))
 
 
 def _metrics_allowed_client_ip(request: Request) -> bool:

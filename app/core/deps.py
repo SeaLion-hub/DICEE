@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Annotated, cast
 import httpx
 
 if TYPE_CHECKING:
+    from app.services.ai_admin_service import AiAdminService
     from app.services.crawl_stats_service import CrawlStatsService
     from app.services.internal_crawl_service import InternalCrawlService
     from app.services.notice_preview_service import NoticePreviewService
@@ -69,3 +70,10 @@ def get_notice_preview_service() -> NoticePreviewService:
     from app.services.notice_preview_service import NoticePreviewService
 
     return NoticePreviewService()
+
+
+def get_ai_admin_service() -> AiAdminService:
+    """요청 스코프 AiAdminService."""
+    from app.services.ai_admin_service import AiAdminService
+
+    return AiAdminService()

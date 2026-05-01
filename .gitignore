@@ -91,3 +91,4 @@ tmp_*.txt
 *.tmp
 # 루트 로컬 업로드/스풀만 제외 (app/core/storage 패키지는 추적)
 /storage/
+.gstack/

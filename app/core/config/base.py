@@ -176,6 +176,31 @@ class Settings(BaseSettings):
     internal_auth_fail_rate_limit_per_minute: int = Field(10, ge=1, le=10000)
     internal_trigger_crawl_rate_limit_per_minute: int = Field(10, ge=1, le=1000)
     internal_crawl_stats_rate_limit_per_minute: int = Field(30, ge=1, le=1000)
+    internal_ai_admin_rate_limit_per_minute: int = Field(
+        3,
+        ge=1,
+        le=60,
+        description="Local AI admin dry-run/apply request limit per minute per client IP.",
+    )
+    ai_admin_apply_lock_ttl_seconds: int = Field(
+        600,
+        ge=30,
+        le=3600,
+        description="Redis lock TTL for one-notice admin AI apply operations.",
+    )
+    ai_admin_dashboard_max_rows: int = Field(
+        5000,
+        ge=100,
+        le=100_000,
+        description="Max notice rows scanned by the local AI token dashboard.",
+    )
+    ai_admin_model_costs_usd_per_million: str = Field(
+        "",
+        description=(
+            "Comma-separated model costs: model:input_usd_per_1m:output_usd_per_1m. "
+            "Empty means cost is unknown and only token counts are shown."
+        ),
+    )
     crawl_trigger_stagger_seconds: int = Field(
         300,
         ge=0,
@@ -236,7 +261,7 @@ class Settings(BaseSettings):
         description="Gemini API key. When unset, google-generativeai uses GOOGLE_API_KEY from env.",
     )
     gemini_model: str = Field(
-        "gemini-1.5-flash-latest",
+        "gemini-2.5-flash",
         description="Gemini model id for AI extraction (tool-calling supported).",
     )
     gemini_model_light: str = Field(

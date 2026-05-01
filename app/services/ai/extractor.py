@@ -299,16 +299,57 @@ def _messages_and_content(
     return messages, user_content
 
 
+def _field_value(obj: object, name: str) -> object:
+    if obj is None:
+        return None
+    if isinstance(obj, dict):
+        return obj.get(name)
+    return getattr(obj, name, None)
+
+
+def _first_int(obj: object, names: tuple[str, ...]) -> int:
+    for name in names:
+        raw = _field_value(obj, name)
+        if raw is None:
+            continue
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            continue
+    return 0
+
+
+def _completion_usage_sources(completion: object) -> list[object]:
+    sources: list[object] = []
+    for attr in ("usage", "usage_metadata"):
+        value = _field_value(completion, attr)
+        if value is not None:
+            sources.append(value)
+    for raw_attr in ("raw_response", "_raw_response", "response"):
+        raw = _field_value(completion, raw_attr)
+        if raw is None:
+            continue
+        for attr in ("usage", "usage_metadata"):
+            value = _field_value(raw, attr)
+            if value is not None:
+                sources.append(value)
+    return sources
+
+
 def _usage_from_completion(completion: object) -> TokenUsage:
     """completion.usage를 TokenUsage로 변환."""
     prompt = 0
     completion_tokens = 0
     total = 0
-    usage = getattr(completion, "usage", None)
-    if usage is not None:
-        prompt = int(getattr(usage, "prompt_tokens", 0) or 0)
-        completion_tokens = int(getattr(usage, "completion_tokens", 0) or 0)
-        total = int(getattr(usage, "total_tokens", 0) or 0)
+    for usage in _completion_usage_sources(completion):
+        prompt = _first_int(usage, ("prompt_tokens", "input_tokens", "prompt_token_count"))
+        completion_tokens = _first_int(
+            usage,
+            ("completion_tokens", "output_tokens", "candidates_token_count"),
+        )
+        total = _first_int(usage, ("total_tokens", "total_token_count"))
+        if total or prompt or completion_tokens:
+            break
     if total == 0 and (prompt or completion_tokens):
         total = prompt + completion_tokens
     return TokenUsage(
@@ -325,11 +366,18 @@ def _max_retries_kw() -> dict[str, Any]:
     return {"max_retries": n}
 
 
+def _gemini_safety_settings_kw() -> dict[str, list[object]]:
+    # instructor 1.14.x can auto-select HARM_CATEGORY_IMAGE_* entries that the Gemini Developer API rejects.
+    # An explicit empty list lets Google apply provider defaults without sending invalid category names.
+    return {"safety_settings": []}
+
+
 def _run_single_extraction_call(
     client: InstructorExtractionClient,
     messages: list[dict[str, object]],
 ) -> tuple[NoticeAIExtraction, TokenUsage]:
     mr = _max_retries_kw()
+    safety_settings = _gemini_safety_settings_kw()
     create_with_completion = getattr(client, "create_with_completion", None)
     if create_with_completion is not None:
         try:
@@ -337,6 +385,7 @@ def _run_single_extraction_call(
                 messages=messages,
                 response_model=NoticeAIExtraction,
                 strict=False,
+                **safety_settings,
                 **mr,
             )
         except TypeError:
@@ -351,6 +400,7 @@ def _run_single_extraction_call(
             messages=messages,
             response_model=NoticeAIExtraction,
             strict=False,
+            **safety_settings,
             **mr,
         )
     except TypeError:

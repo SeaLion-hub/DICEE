@@ -6,7 +6,8 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import and_, delete, inspect, or_, select
+from sqlalchemy import and_, delete, insert, inspect, or_, select
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.database import AsyncSessionLike
@@ -68,6 +69,23 @@ def replace_notice_schedules_sync(
     if rows:
         session.bulk_insert_mappings(inspect(NoticeSchedule).mapper, rows)
     session.flush()
+
+
+async def replace_notice_schedules(
+    session: AsyncSession,
+    notice_id: uuid.UUID,
+    schedules: list[ScheduleItem],
+) -> None:
+    """해당 공지의 일정 행을 AI schedules로 완전 교체(비동기 관리자/API 경로)."""
+    await session.execute(delete(NoticeSchedule).where(NoticeSchedule.notice_id == notice_id))
+    rows: list[dict[str, Any]] = []
+    for item in schedules:
+        row = _schedule_row_dict(notice_id, item)
+        if row is not None:
+            rows.append(row)
+    if rows:
+        await session.execute(insert(NoticeSchedule), rows)
+    await session.flush()
 
 
 async def list_schedules_overlapping_range(
