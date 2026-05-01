@@ -8,9 +8,10 @@ import threading
 import time
 import types
 import uuid as uuid_mod
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, is_dataclass
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Protocol, TypeVar, cast
 
 import requests
 from celery import Task
@@ -75,7 +76,7 @@ from app.repositories.notice_repository import (
     reset_stale_ai_processing_notices_sync,
     update_ai_result_sync,
     update_notice_content_url_sync,
-    update_notice_embedding_sync,
+    update_notice_embedding_if_missing_sync,
     upsert_notices_bulk_sync,
 )
 from app.repositories.notice_schedule_repository import replace_notice_schedules_sync
@@ -864,72 +865,44 @@ def backfill_notice_embedding_task(self, notice_id: str) -> dict[str, str]:
         if not title:
             logger.warning("backfill_notice_embedding_task: empty title notice_id=%s", notice_id)
             return {"status": "skipped_empty_title"}
-        try:
-            vec = embed_text_sync(title)
-        except ValueError as e:
-            logger.warning("backfill_notice_embedding_task: embed validation %s", e)
-            return {"status": "skipped_invalid_text"}
-        update_notice_embedding_sync(session, notice_uuid, vec)
-        session.commit()
+
+    try:
+        vec = embed_text_sync(title)
+    except ValueError as e:
+        logger.warning("backfill_notice_embedding_task: embed validation %s", e)
+        return {"status": "skipped_invalid_text"}
+
+    with get_sync_session() as session:
+        updated = update_notice_embedding_if_missing_sync(session, notice_uuid, vec)
+        if not updated:
+            return {"status": "skipped_already_set"}
     return {"status": "ok"}
 
 
-def _resolve_spool_backend_ops(backend: str):
-    if backend == "local":
-        return (
-            spool_list_local,
-            spool_read_entry,
-            spool_overwrite_entry,
-            spool_delete_local,
-            lambda item, entry, reason: spool_move_to_dlq_local(item, entry, reason=reason),
-        )
-    if backend == "s3":
-        return (
-            spool_list_s3,
-            spool_read_s3,
-            spool_overwrite_s3,
-            spool_delete_s3,
-            lambda item, entry, reason: spool_move_to_dlq_s3(item, entry, reason=reason),
-        )
-    return None
+TSpoolItem = TypeVar("TSpoolItem")
 
 
-@app.task(name="app.services.tasks.drain_content_spool_task")
-def drain_content_spool_task():
-    """Drain failed content uploads from spool and update notice content URLs."""
-    backend = (getattr(settings, "content_spool_backend", None) or "local").strip().lower()
-    ephemeral = bool(getattr(settings, "content_spool_allow_ephemeral", False))
-    logger.info(
-        "drain_content_spool_task: start backend=%s allow_ephemeral=%s",
-        backend,
-        ephemeral,
-    )
+class _SpoolMoveToDlq(Protocol[TSpoolItem]):
+    def __call__(self, item: TSpoolItem, entry: dict[str, Any], *, reason: str) -> bool: ...
 
-    ops = _resolve_spool_backend_ops(backend)
-    if ops is None:
-        logger.warning("drain_content_spool_task: unsupported backend=%s", backend)
-        return {"drained": 0, "failed": 0, "dlq": 0}
 
-    list_fn, read_fn, overwrite_fn, delete_fn, move_to_dlq_fn = ops
-    max_retries = int(getattr(settings, "content_spool_max_retries", 5) or 5)
-
+def _drain_content_spool_core(
+    list_fn: Callable[[], list[TSpoolItem]],
+    read_fn: Callable[[TSpoolItem], dict[str, Any] | None],
+    overwrite_fn: Callable[[TSpoolItem, dict[str, Any]], None],
+    delete_fn: Callable[[TSpoolItem], None],
+    move_to_dlq_fn: _SpoolMoveToDlq[TSpoolItem],
+    *,
+    max_retries: int,
+    backend: str,
+    ephemeral: bool,
+) -> dict[str, int]:
     drained = 0
     dlq_count = 0
     failed = 0
 
-    def _move_to_dlq_or_mark(
-        item: Path | str,
-        entry: dict,
-        *,
-        reason: str,
-    ) -> bool:
-        moved = bool(
-            move_to_dlq_fn(
-                cast(Path, item) if backend == "local" else cast(str, item),
-                entry,
-                reason=reason,
-            )
-        )
+    def _move_to_dlq_or_mark(item: TSpoolItem, entry: dict[str, Any], *, reason: str) -> bool:
+        moved = bool(move_to_dlq_fn(item, entry, reason=reason))
         if moved:
             return True
 
@@ -939,14 +912,11 @@ def drain_content_spool_task():
             stage="dlq_move",
             retry_count=int(entry.get(SPOOL_RETRY_COUNT_KEY, 0) or 0),
         )
-        if backend == "local":
-            overwrite_fn(cast(Path, item), marked)
-        else:
-            overwrite_fn(cast(str, item), marked)
+        overwrite_fn(item, marked)
         return False
 
     for item in list_fn():
-        entry = read_fn(cast(Path, item) if backend == "local" else cast(str, item))
+        entry = read_fn(item)
         if not entry:
             _move_to_dlq_or_mark(item, {}, reason="invalid_spool_entry")
             failed += 1
@@ -982,10 +952,7 @@ def drain_content_spool_task():
                     dlq_count += 1
                 failed += 1
             else:
-                if backend == "local":
-                    overwrite_fn(cast(Path, item), marked)
-                else:
-                    overwrite_fn(cast(str, item), marked)
+                overwrite_fn(item, marked)
             continue
 
         if not content_url:
@@ -1001,20 +968,14 @@ def drain_content_spool_task():
                     dlq_count += 1
                 failed += 1
             else:
-                if backend == "local":
-                    overwrite_fn(cast(Path, item), marked)
-                else:
-                    overwrite_fn(cast(str, item), marked)
+                overwrite_fn(item, marked)
             continue
 
         with get_sync_session() as session:
             if update_notice_content_url_sync(session, cid, eid, content_url):
                 drained += 1
                 try:
-                    if backend == "local":
-                        delete_fn(cast(Path, item))
-                    else:
-                        delete_fn(cast(str, item))
+                    delete_fn(item)
                 except Exception:
                     logger.warning("drain_content_spool_task: delete after success failed item=%s", item)
             else:
@@ -1043,3 +1004,40 @@ def drain_content_spool_task():
             ephemeral,
         )
     return {"drained": drained, "failed": failed, "dlq": dlq_count}
+
+
+@app.task(name="app.services.tasks.drain_content_spool_task")
+def drain_content_spool_task() -> dict[str, int]:
+    """Drain failed content uploads from spool and update notice content URLs."""
+    backend = (getattr(settings, "content_spool_backend", None) or "local").strip().lower()
+    ephemeral = bool(getattr(settings, "content_spool_allow_ephemeral", False))
+    logger.info(
+        "drain_content_spool_task: start backend=%s allow_ephemeral=%s",
+        backend,
+        ephemeral,
+    )
+    max_retries = int(getattr(settings, "content_spool_max_retries", 5) or 5)
+    if backend == "local":
+        return _drain_content_spool_core(
+            spool_list_local,
+            spool_read_entry,
+            spool_overwrite_entry,
+            spool_delete_local,
+            spool_move_to_dlq_local,
+            max_retries=max_retries,
+            backend=backend,
+            ephemeral=ephemeral,
+        )
+    if backend == "s3":
+        return _drain_content_spool_core(
+            spool_list_s3,
+            spool_read_s3,
+            spool_overwrite_s3,
+            spool_delete_s3,
+            spool_move_to_dlq_s3,
+            max_retries=max_retries,
+            backend=backend,
+            ephemeral=ephemeral,
+        )
+    logger.warning("drain_content_spool_task: unsupported backend=%s", backend)
+    return {"drained": 0, "failed": 0, "dlq": 0}

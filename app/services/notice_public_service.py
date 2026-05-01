@@ -18,7 +18,7 @@ class UnknownCollegeExternalIdError(Exception):
         super().__init__(f"No college with external_id={external_id!r}")
 
 
-def _notice_to_list_dto(notice: Notice) -> NoticePublicListItemDTO:
+def notice_to_list_dto(notice: Notice) -> NoticePublicListItemDTO:
     college = notice.college
     ext = college.external_id if college is not None else ""
     return NoticePublicListItemDTO(
@@ -32,7 +32,7 @@ def _notice_to_list_dto(notice: Notice) -> NoticePublicListItemDTO:
 
 
 def _notice_to_detail_dto(notice: Notice) -> NoticePublicDetailDTO:
-    base = _notice_to_list_dto(notice)
+    base = notice_to_list_dto(notice)
     nc = notice.notice_content
     content_url = nc.content_url if nc is not None else None
     return NoticePublicDetailDTO(
@@ -76,7 +76,7 @@ async def list_public_notices(
         load_college=True,
         load_taxonomy_mappings=False,
     )
-    return ([_notice_to_list_dto(n) for n in rows], next_cursor)
+    return ([notice_to_list_dto(n) for n in rows], next_cursor)
 
 
 async def get_public_notice_by_id(

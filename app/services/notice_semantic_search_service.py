@@ -7,10 +7,10 @@ from datetime import datetime
 
 from app.core.database import AsyncSessionLike
 from app.core.exceptions import EmptySemanticQueryError
-from app.models.notice import Notice
+from app.domain.contracts.notice_public_contracts import NoticePublicListItemDTO
 from app.repositories import college_repository, notice_repository
 from app.services.gemini_text_embedding import embed_text_sync
-from app.services.notice_public_service import UnknownCollegeExternalIdError
+from app.services.notice_public_service import UnknownCollegeExternalIdError, notice_to_list_dto
 
 
 async def search_public_notices_semantic(
@@ -21,22 +21,22 @@ async def search_public_notices_semantic(
     published_to: datetime,
     query: str,
     limit: int,
-) -> list[Notice]:
+) -> list[NoticePublicListItemDTO]:
     stripped_q = (query or "").strip()
     if not stripped_q:
         raise EmptySemanticQueryError()
-
-    ext = (college_external_id or "").strip()
-    college = await college_repository.get_by_external_id(session, ext)
-    if college is None:
-        raise UnknownCollegeExternalIdError(ext)
 
     try:
         vec = await asyncio.to_thread(embed_text_sync, stripped_q)
     except ValueError as e:
         raise ValueError(str(e)) from e
 
-    return await notice_repository.search_notices_by_embedding(
+    ext = (college_external_id or "").strip()
+    college = await college_repository.get_by_external_id(session, ext)
+    if college is None:
+        raise UnknownCollegeExternalIdError(ext)
+
+    rows = await notice_repository.search_notices_by_embedding(
         session,
         college_id=college.id,
         published_from=published_from,
@@ -44,3 +44,4 @@ async def search_public_notices_semantic(
         query_embedding=vec,
         limit=limit,
     )
+    return [notice_to_list_dto(n) for n in rows]

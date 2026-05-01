@@ -10,7 +10,6 @@ from sqlalchemy.exc import TimeoutError as SQLAlchemyTimeoutError
 from app.core.deps import ReadOnlySessionDep
 from app.core.exceptions import EmptySemanticQueryError
 from app.domain.contracts.notice_public_contracts import NoticePublicDetailDTO, NoticePublicListItemDTO
-from app.models.notice import Notice
 from app.schemas.notice_public import NoticeDetailResponse, NoticeListItem, NoticeListResponse
 from app.schemas.notice_semantic import NoticeSemanticSearchRequest, NoticeSemanticSearchResponse
 from app.services.gemini_text_embedding import EmbeddingProviderError
@@ -36,19 +35,6 @@ def _list_dto_to_schema(d: NoticePublicListItemDTO) -> NoticeListItem:
         title=d.title,
         url=d.url,
         published_at=d.published_at,
-    )
-
-
-def _notice_model_to_list_item(n: Notice) -> NoticeListItem:
-    college = n.college
-    ext = college.external_id if college is not None else ""
-    return NoticeListItem(
-        id=n.id,
-        college_external_id=ext,
-        external_id=n.external_id,
-        title=n.title,
-        url=n.url,
-        published_at=n.published_at,
     )
 
 
@@ -152,7 +138,7 @@ async def semantic_search_notices(
         )
         raise HTTPException(status_code=503, detail=_NOTICES_DB_UNAVAILABLE_DETAIL) from e
     return NoticeSemanticSearchResponse(
-        items=[_notice_model_to_list_item(n) for n in rows],
+        items=[_list_dto_to_schema(n) for n in rows],
         limit=body.limit,
     )
 

@@ -62,6 +62,8 @@ class _SyncCrawlAdapter(Protocol):
 
     def upsert_chunk(self, session: Session, chunk: list[NoticeDraft]) -> list[uuid.UUID]: ...
 
+    def after_chunk_committed(self) -> None: ...
+
 
 class _DefaultSyncCrawlAdapter:
     def __init__(self, upsert_pipeline: NoticeBulkUpsertPipeline | None = None) -> None:
@@ -91,6 +93,9 @@ class _DefaultSyncCrawlAdapter:
     def upsert_chunk(self, session: Session, chunk: list[NoticeDraft]) -> list[uuid.UUID]:
         return self._upsert_pipeline.process(session, chunk)
 
+    def after_chunk_committed(self) -> None:
+        return None
+
 
 class DeferredBatchCrawlAdapter(_DefaultSyncCrawlAdapter):
     """수집 청크를 ingestion_batches에 저장 후 비동기 process_notice_ingestion_batch_task에서 upsert."""
@@ -107,14 +112,17 @@ class DeferredBatchCrawlAdapter(_DefaultSyncCrawlAdapter):
         self._attempt_id = attempt_id
         self._college_code = college_code
         self._sequence_counter = sequence_counter
+        self._pending_batch_ids: list[uuid.UUID] = []
 
     def upsert_chunk(self, session: Session, chunk: list[NoticeDraft]) -> list[uuid.UUID]:
         if not chunk:
             return []
         self._sequence_counter[0] += 1
         seq = self._sequence_counter[0]
+        batch_id = uuid.uuid4()
         payloads = [notice_draft_to_payload(d) for d in chunk]
         batch = IngestionBatch(
+            id=batch_id,
             attempt_id=self._attempt_id,
             sequence=seq,
             status=IngestionBatchStatus.PENDING.value,
@@ -126,10 +134,16 @@ class DeferredBatchCrawlAdapter(_DefaultSyncCrawlAdapter):
         session.flush()
         increment_attempt_total_batches_sync(session, self._attempt_id)
         add_ingestion_scheduled_docs_sync(session, self._attempt_id, len(chunk))
+        self._pending_batch_ids.append(batch_id)
+        return []
+
+    def after_chunk_committed(self) -> None:
         from app.services.tasks import process_notice_ingestion_batch_task
 
-        process_notice_ingestion_batch_task.delay(str(batch.id), self._college_code)
-        return []
+        pending = self._pending_batch_ids
+        self._pending_batch_ids = []
+        for batch_id in pending:
+            process_notice_ingestion_batch_task.delay(str(batch_id), self._college_code)
 
 
 def _finalize_chunk_sync(
@@ -155,6 +169,7 @@ def _finalize_chunk_sync(
         )
     _dispatch_chunk_result_sync(
         session,
+        adapter,
         ids,
         on_chunk_processed=on_chunk_processed,
         notice_ids_to_process=notice_ids_to_process,
@@ -164,6 +179,7 @@ def _finalize_chunk_sync(
 
 def _dispatch_chunk_result_sync(
     session: Session,
+    adapter: _SyncCrawlAdapter,
     ids: list[uuid.UUID],
     *,
     on_chunk_processed: Callable[[list[uuid.UUID]], None] | None,
@@ -178,6 +194,7 @@ def _dispatch_chunk_result_sync(
         # Chunk 단위 커밋 지점: 콜백(예: AI enqueue)이 실패해도 upsert 결과는 추적 가능.
         session.commit()
         session.expunge_all()
+        adapter.after_chunk_committed()
         on_chunk_processed(ids)
         return
     notice_ids_to_process.extend(ids)
@@ -390,6 +407,7 @@ def crawl_college_sync(
         settings.crawl_split_crawl_and_process and ingestion_attempt_id is not None,
     )
     if use_deferred:
+        assert ingestion_attempt_id is not None
         seq: list[int] = [0]
         adapter: _SyncCrawlAdapter = DeferredBatchCrawlAdapter(
             attempt_id=ingestion_attempt_id,

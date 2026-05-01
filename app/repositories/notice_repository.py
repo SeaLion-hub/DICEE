@@ -252,6 +252,16 @@ def update_notice_embedding_sync(session: Session, notice_id: uuid.UUID, embeddi
     session.flush()
 
 
+def update_notice_embedding_if_missing_sync(session: Session, notice_id: uuid.UUID, embedding: Sequence[float]) -> bool:
+    """embedding이 아직 비어 있을 때만 갱신. 백필 race에서 기존 값을 덮어쓰지 않는다."""
+    if len(embedding) != EMBEDDING_DIM:
+        raise ValueError(f"embedding dim must be {EMBEDDING_DIM}")
+    stmt = update(Notice).where(Notice.id == notice_id, Notice.embedding.is_(None)).values(embedding=list(embedding))
+    result = session.execute(stmt)
+    session.flush()
+    return bool(result.rowcount)
+
+
 def get_by_id_sync(session: Session, notice_id: uuid.UUID) -> Notice | None:
     """notice_id로 1건 조회 (동기, 워커용)."""
     result = session.execute(select(Notice).where(Notice.id == notice_id).limit(1))

@@ -68,24 +68,22 @@ def test_semantic_search_valueerror_from_service_returns_500_without_leaking_mes
     assert r.json().get("detail") == "Internal server error"
 
 
-def test_semantic_search_returns_items_when_service_returns_notices(client: TestClient) -> None:
-    from app.models.college import College
-    from app.models.notice import Notice
+def test_semantic_search_returns_items_when_service_returns_dtos(client: TestClient) -> None:
+    import uuid
 
-    college = College(name="C", external_id="cext")
-    college.id = __import__("uuid").uuid4()
-    n = Notice(
-        college_id=college.id,
+    from app.domain.contracts.notice_public_contracts import NoticePublicListItemDTO
+
+    dto = NoticePublicListItemDTO(
+        id=uuid.uuid4(),
+        college_external_id="cext",
         external_id="e1",
         title="T",
         url="https://example.com/n",
         published_at=None,
     )
-    n.id = __import__("uuid").uuid4()
-    n.college = college
 
     async def _fake(*_a: object, **_kw: object):
-        return [n]
+        return [dto]
 
     with patch(
         "app.api.v1.notices.search_public_notices_semantic",

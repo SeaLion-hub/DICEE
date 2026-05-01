@@ -218,6 +218,40 @@ def test_run_crawl_pipeline_sync_uses_chunk_size_for_flush():
     assert get_gauge(CRAWL_PIPELINE_PEAK_PENDING_DRAFTS, {"college_code": "engineering"}) == 2.0
 
 
+def test_deferred_batch_adapter_enqueues_only_after_chunk_commit():
+    from app.services.crawl.pipeline_sync import DeferredBatchCrawlAdapter, _finalize_chunk_sync
+
+    events: list[str] = []
+    session = MagicMock()
+    session.commit.side_effect = lambda: events.append("commit")
+    session.expunge_all.side_effect = lambda: events.append("expunge")
+    attempt_id = uuid.uuid4()
+    adapter = DeferredBatchCrawlAdapter(
+        attempt_id=attempt_id,
+        college_code="engineering",
+        sequence_counter=[0],
+    )
+    chunk = [_make_draft(uuid.uuid4(), 1)]
+
+    def _delay(batch_id: str, college_code: str) -> None:
+        assert uuid.UUID(batch_id)
+        assert college_code == "engineering"
+        events.append("enqueue")
+
+    with patch("app.services.tasks.process_notice_ingestion_batch_task.delay", side_effect=_delay):
+        n = _finalize_chunk_sync(
+            session,
+            adapter,
+            chunk,
+            on_chunk_processed=lambda ids: events.append(f"callback:{len(ids)}"),
+            notice_ids_to_process=[],
+        )
+
+    assert n == 0
+    assert chunk == []
+    assert events == ["commit", "expunge", "enqueue", "callback:0"]
+
+
 def test_sync_adapter_reflects_worker_and_inflight_config(monkeypatch):
     from app.services.crawl import pipeline_sync as crawl_pipeline_sync
     from app.services.crawl.pipeline_sync import _DefaultSyncCrawlAdapter

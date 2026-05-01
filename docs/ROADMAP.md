@@ -20,7 +20,7 @@
 | 항목 | 내용 |
 |------|------|
 | **현재 마일스톤** | **M2 Intelligence** — 수집·AI 파이프라인(3·4단계) 핵심 완료. **5단계 코어**(프로필·맞춤·달력·ICS·일정 동기화) 반영. **PostgreSQL FTS·키워드 검색**은 후속 PR |
-| **마지막 반영 기준** | **2026-04-26** (AI 파이프라인 안정화·v2/eligibility 복구 포함, 근거: [WORK_LOG](WORK_LOG.md)) |
+| **마지막 반영 기준** | **2026-05-01** (시맨틱 검색 DTO·지연 배치 큐 순서·임베딩 백필 멱등·AI HTML 로딩 보강, 근거: [WORK_LOG](WORK_LOG.md)) |
 | **남은 큰 덩어리** | (1) **FTS·GIN 키워드 검색** 구현/계약/인덱스, (2) **6단계 프론트(Next.js/Vercel)** 착수(현재 `frontend/` 없음) |
 | **배포** | 백엔드 Railway, 프론트 Vercel. 상세 [DEPLOYMENT](DEPLOYMENT.md). |
 | **작업 기록** | [WORK_LOG](WORK_LOG.md) |

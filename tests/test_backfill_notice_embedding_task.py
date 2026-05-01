@@ -45,3 +45,64 @@ def test_backfill_notice_embedding_task_skips_when_embedding_already_set(celery_
     assert result == {"status": "skipped_already_set"}
     mock_embed.assert_not_called()
     mock_session.commit.assert_not_called()
+
+
+def test_backfill_notice_embedding_task_embeds_after_read_session_closes(celery_eager: None) -> None:
+    from app.constants.embeddings import EMBEDDING_DIM
+    from app.services.tasks import backfill_notice_embedding_task
+
+    nid = uuid.uuid4()
+    notice = MagicMock()
+    notice.embedding = None
+    notice.title = "Title"
+    events: list[str] = []
+
+    read_cm = MagicMock()
+    read_session = MagicMock()
+    read_cm.__enter__.side_effect = lambda: events.append("read_enter") or read_session
+    read_cm.__exit__.side_effect = lambda *_args: events.append("read_exit") or None
+
+    write_cm = MagicMock()
+    write_session = MagicMock()
+    write_cm.__enter__.side_effect = lambda: events.append("write_enter") or write_session
+    write_cm.__exit__.side_effect = lambda *_args: events.append("write_exit") or None
+
+    def _embed(_title: str) -> list[float]:
+        events.append("embed")
+        return [0.1] * EMBEDDING_DIM
+
+    with (
+        patch("app.services.tasks.get_sync_session", side_effect=[read_cm, write_cm]),
+        patch("app.services.tasks.get_by_id_sync", return_value=notice),
+        patch("app.services.tasks.embed_text_sync", side_effect=_embed),
+        patch("app.services.tasks.update_notice_embedding_if_missing_sync", return_value=True) as mock_update,
+    ):
+        result = backfill_notice_embedding_task.apply(args=(str(nid),)).get()
+
+    assert result == {"status": "ok"}
+    assert events == ["read_enter", "read_exit", "embed", "write_enter", "write_exit"]
+    mock_update.assert_called_once_with(write_session, nid, [0.1] * EMBEDDING_DIM)
+
+
+def test_backfill_notice_embedding_task_does_not_overwrite_racing_embedding(celery_eager: None) -> None:
+    from app.constants.embeddings import EMBEDDING_DIM
+    from app.services.tasks import backfill_notice_embedding_task
+
+    nid = uuid.uuid4()
+    notice = MagicMock()
+    notice.embedding = None
+    notice.title = "Title"
+
+    cm = MagicMock()
+    cm.__enter__.return_value = MagicMock()
+    cm.__exit__.return_value = None
+
+    with (
+        patch("app.services.tasks.get_sync_session", side_effect=[cm, cm]),
+        patch("app.services.tasks.get_by_id_sync", return_value=notice),
+        patch("app.services.tasks.embed_text_sync", return_value=[0.1] * EMBEDDING_DIM),
+        patch("app.services.tasks.update_notice_embedding_if_missing_sync", return_value=False),
+    ):
+        result = backfill_notice_embedding_task.apply(args=(str(nid),)).get()
+
+    assert result == {"status": "skipped_already_set"}

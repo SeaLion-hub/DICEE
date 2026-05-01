@@ -53,7 +53,9 @@
 ---
 ## 2026-05-01
 
-- [문서] 코드베이스 대조 후 온보딩 문서 동기화: `README.md`에 **완료/잔여(FTS·Next.js)**를 명시하고 마지막 반영 기준일을 `2026-04-26`로 고정, `docs/ROADMAP.md`에 **마지막 반영 기준·남은 큰 덩어리** 행 추가, `docs/README.md`에 "지금 어디까지" 빠른 답 섹션 추가. `docs/WORK_LOG.md` 목차에 누락된 최근 날짜 링크 보강 및 템플릿 아래 오정렬 로그 1건을 날짜 섹션으로 복구. 검증: 문서 링크/섹션 앵커 수동 확인(테스트 실행 없음).
+- [시맨틱·공개 DTO·워커] 공개 시맨틱 검색 응답을 `NoticePublicListItemDTO`로 일원화(`notice_semantic_search_service`, `app/api/v1/notices.py`). 임베딩은 대학 `external_id` 검증 전에 호출되어, 임베딩 프로바이더 실패 시 DB 조회를 생략(의도·`tests/test_notice_semantic_search_service.py`). 지연 배치 크롤 `DeferredBatchCrawlAdapter`는 청크 `commit`·`expunge` 이후 `process_notice_ingestion_batch_task.delay`를 호출해 배치 행 가시성과 큐 적재 순서를 맞춤(`pipeline_sync`, `tests/test_crawl_service.py`). `backfill_notice_embedding_task`는 읽기 세션에서 제목만 확보한 뒤 세션 밖에서 `embed_text_sync`하고, `update_notice_embedding_if_missing_sync`로 `embedding IS NULL`일 때만 갱신해 경쟁 백필이 기존 벡터를 덮어쓰지 않음(`notice_repository`, `tests/test_backfill_notice_embedding_task.py`). AI 파이프라인 HTML: `http(s) content_url`은 워커 URL 안전 검사 후 GET, 그 외 상대 경로는 `content_storage_local_path` 기준으로 `resolve`·`relative_to`로 로컬 파일만 읽고, 실패 시 `notice.url` HTTP 폴백(`tasks.py`). 검증: `pytest` 532 passed, 5 skipped.
+
+- [문서] 코드베이스 대조 후 온보딩 문서 동기화: 루트 `README.md`에 **완료/잔여(FTS·Next.js)**를 명시하고 마지막 반영 기준일을 `2026-04-26`로 고정, `docs/ROADMAP.md`에 **마지막 반영 기준·남은 큰 덩어리** 행 추가, `docs/README.md`에 "지금 어디까지" 빠른 답 섹션 추가. `docs/WORK_LOG.md` 목차에 누락된 최근 날짜 링크 보강 및 템플릿 아래 오정렬 로그 1건을 날짜 섹션으로 복구. 검증: 문서 링크/섹션 앵커 수동 확인(테스트 실행 없음).
 
 ## 2026-03-30
 
