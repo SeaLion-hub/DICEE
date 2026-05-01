@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 from app.services.crawlers import yonsei_chemistry as chem
+from app.services.crawlers.base import ParserStructureError
 
 _LIST_FIXTURE = Path(__file__).resolve().parent / "fixtures" / "yonsei_chemistry_list_min.html"
 _DETAIL_FIXTURE = Path(__file__).resolve().parent / "fixtures" / "yonsei_chemistry_detail_min.html"
@@ -38,3 +39,13 @@ def test_scrape_chemistry_detail_from_fixture(monkeypatch: pytest.MonkeyPatch) -
     assert result.date_str in {"2024-06-01", "2024.06.01"}
     assert "상세 본문 단락" in (result.html_content or "")
     assert any("chem.png" in (img.get("data") or "") for img in result.images)
+
+
+def test_scrape_chemistry_missing_content_selector_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    url = "https://chemyonsei.kr/board/notice/99"
+    html = "<html><body><h3 class='nxb-view__header-title'>Title</h3><time>2024-06-01</time></body></html>"
+
+    monkeypatch.setattr(chem, "fetch_html_detail_cached", lambda *_args, **_kwargs: html)
+
+    with pytest.raises(ParserStructureError):
+        chem.scrape_chemistry_detail(url)

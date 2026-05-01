@@ -7,6 +7,7 @@ import types
 
 from app.constants.embeddings import EMBEDDING_DIM, GEMINI_EMBEDDING_MODEL
 from app.core.config import settings
+from app.services.ai.exceptions import EmbeddingProviderError, EmbeddingProviderTransientError
 
 logger = logging.getLogger(__name__)
 
@@ -17,10 +18,6 @@ except ImportError:  # pragma: no cover
     pass
 else:
     _google_api_exceptions = _gae
-
-
-class EmbeddingProviderError(Exception):
-    """API 키 누락·네트워크·응답 형식 오류 등 임베딩 제공자 실패."""
 
 
 def _configure_genai() -> None:
@@ -49,9 +46,9 @@ def embed_text_sync(text: str) -> list[float]:
     except Exception as e:
         if _google_api_exceptions is not None and isinstance(e, _google_api_exceptions.GoogleAPIError):
             logger.warning("embed_content Google API error", exc_info=True)
-            raise EmbeddingProviderError("embedding provider request failed") from e
+            raise EmbeddingProviderTransientError("embedding provider request failed") from e
         logger.warning("embed_content failed", exc_info=True)
-        raise EmbeddingProviderError("embedding request failed") from e
+        raise EmbeddingProviderTransientError("embedding request failed") from e
 
     emb: object = None
     if isinstance(result, dict):

@@ -14,7 +14,7 @@ from requests.exceptions import RequestException
 from requests.exceptions import Timeout as RequestsTimeout
 from tenacity import RetryError, Retrying, retry_if_exception, stop_after_attempt
 
-from app.core.crawl_rate_limit import get_host_rate_limiter_sync, host_from_url
+from app.core.crawl_rate_limit import host_from_url
 from app.core.metrics import (
     CRAWL_DROP_TOTAL,
     CRAWL_PARSE_THRESHOLD_TRIGGER_TOTAL,
@@ -219,7 +219,9 @@ def _execute_scrape_with_retry(
             reraise=False,
         ):
             with attempt:
-                rate_limiter.wait_sync(host)
+                wait_sync = getattr(rate_limiter, "wait_sync", None)
+                if callable(wait_sync):
+                    wait_sync(host)
                 last_result = _scrape_one_sync(post, scrape_fn)
                 if last_result.exc is None:
                     return last_result
@@ -271,10 +273,10 @@ def _collect_payloads_sync(
     """
     seen_for_dedup: set[str] | _BoundedSeenSet | _RedisSeenSet = seen if seen is not None else set()
     item_pipeline = DefaultNoticeItemPipeline(seen_for_dedup)
-    rate_limiter = get_host_rate_limiter_sync(delay_sec)
     tracker = CrawlErrorTracker()
     remaining = deque(links)
-    sem = threading.BoundedSemaphore(in_flight_limit)
+    effective_in_flight = max(1, min(max_workers, in_flight_limit))
+    sem = threading.BoundedSemaphore(effective_in_flight)
     in_flight_external_ids: set[str] = set()
 
     def submit_one() -> None:
@@ -287,14 +289,14 @@ def _collect_payloads_sync(
                     continue
             if no is not None and no != "":
                 in_flight_external_ids.add(no)
-            fut = executor.submit(_scrape_one_sync_with_sem, post, scrape_fn, rate_limiter, sem)
+            fut = executor.submit(_scrape_one_sync_with_sem, post, scrape_fn, None, sem)
             futures[fut] = post
             return
 
     executor = ThreadPoolExecutor(max_workers=max_workers)
     futures: dict = {}
     try:
-        for _ in range(min(in_flight_limit, len(remaining))):
+        for _ in range(min(effective_in_flight, len(remaining))):
             if not remaining:
                 break
             submit_one()
@@ -335,9 +337,3 @@ def _collect_payloads_sync(
                 submit_one()
     finally:
         executor.shutdown(wait=False, cancel_futures=True)
-        close_fn = getattr(rate_limiter, "close", None)
-        if callable(close_fn):
-            try:
-                close_fn()
-            except Exception:
-                pass

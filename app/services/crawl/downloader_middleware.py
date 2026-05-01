@@ -24,6 +24,15 @@ from app.core.crawl_rate_limit import (
     host_from_url,
 )
 from app.core.crawler_config import CRAWLER_HEADERS
+from app.core.metrics import (
+    CRAWL_RETRY_TOTAL,
+    RETRY_REASON_5XX,
+    RETRY_REASON_429,
+    RETRY_REASON_NETWORK,
+    RETRY_REASON_TIMEOUT,
+    increment,
+)
+from app.services.crawl.retry_after import parse_retry_after_seconds
 from app.services.crawl_policy import (
     HTTP_RETRY_STATUS_CODES,
     HTTP_RETRY_STATUS_MAX_5XX,
@@ -166,7 +175,9 @@ class SyncRetryMiddleware:
             return False
         if not _should_retry(request, exc, self._retry_403_hosts):
             return False
-        sleep_sec = _retry_backoff_seconds(
+        increment(CRAWL_RETRY_TOTAL, 1, labels={"reason": _retry_reason_from_exc(exc)})
+        sleep_sec = _retry_backoff_seconds_for_exc(
+            exc,
             attempt=attempt,
             base=self._backoff_base,
             cap=self._backoff_max,
@@ -202,7 +213,9 @@ class AsyncRetryMiddleware:
             return False
         if not _should_retry(request, exc, self._retry_403_hosts):
             return False
-        sleep_sec = _retry_backoff_seconds(
+        increment(CRAWL_RETRY_TOTAL, 1, labels={"reason": _retry_reason_from_exc(exc)})
+        sleep_sec = _retry_backoff_seconds_for_exc(
+            exc,
             attempt=attempt,
             base=self._backoff_base,
             cap=self._backoff_max,
@@ -344,6 +357,25 @@ def _retry_backoff_seconds(*, attempt: int, base: float, cap: float) -> float:
     exp: float = float(min(cap, base * (2 ** max(0, attempt - 1))))
     jitter = float(random.uniform(0.0, min(0.5, exp)))
     return exp + jitter
+
+
+def _retry_backoff_seconds_for_exc(exc: BaseException, *, attempt: int, base: float, cap: float) -> float:
+    if _exception_status_code(exc) == 429:
+        secs = parse_retry_after_seconds(getattr(exc, "response", None))
+        if secs is not None:
+            return secs
+    return _retry_backoff_seconds(attempt=attempt, base=base, cap=cap)
+
+
+def _retry_reason_from_exc(exc: BaseException) -> str:
+    code = _exception_status_code(exc)
+    if code == 429:
+        return RETRY_REASON_429
+    if code is not None and HTTP_RETRY_STATUS_MIN_5XX <= code <= HTTP_RETRY_STATUS_MAX_5XX:
+        return RETRY_REASON_5XX
+    if isinstance(exc, TimeoutError | httpx.TimeoutException | RequestsTimeout):
+        return RETRY_REASON_TIMEOUT
+    return RETRY_REASON_NETWORK
 
 
 def _parse_retry_403_hosts(raw: str) -> set[str]:

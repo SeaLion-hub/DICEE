@@ -15,7 +15,7 @@ from app.core.crawl_http import (
     fetch_html_detail_cached,
 )
 from app.core.crawler_config import CrawlerModuleSpec
-from app.services.crawlers.base import ScrapeResult
+from app.services.crawlers.base import ScrapeResult, require_non_empty_text
 from app.services.crawlers.link_dedupe import dedupe_link_dicts_by_url
 from app.services.crawlers.typing_helpers import ensure_str_attr
 
@@ -96,6 +96,7 @@ def parse_yonsei_engineering_precise_from_html(html: str, detail_url: str) -> Sc
         h3 = soup.find("h3")
         if h3:
             title = get_text_structurally(h3).strip()
+    title = require_non_empty_text(title, field="title", url=detail_url)
 
     date = "날짜 없음"
     date_match = re.search(r"\d{4}[.-]\d{2}[.-]\d{2}", soup.get_text())
@@ -122,8 +123,7 @@ def parse_yonsei_engineering_precise_from_html(html: str, detail_url: str) -> Sc
                         raw_text = raw_text.split(keyword)[0]
                 content_text = finalize_text(raw_text)
 
-    if not content_text:
-        content_text = "(본문 영역인 <dd> 태그를 찾지 못했습니다.)"
+    content_text = require_non_empty_text(content_text, field="content_html", url=detail_url)
 
     images_data: list[dict] = []
     seen_image_urls: set[str] = set()

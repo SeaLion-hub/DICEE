@@ -15,7 +15,7 @@ from app.core.crawl_http import (
     fetch_html_detail_cached,
 )
 from app.core.crawler_config import CrawlerModuleSpec
-from app.services.crawlers.base import ScrapeResult
+from app.services.crawlers.base import ScrapeResult, require_non_empty_text, require_present
 from app.services.crawlers.cms_board_view import board_view_title_from_soup
 from app.services.crawlers.fetch_config import BUSINESS_SITE_FETCH
 from app.services.crawlers.link_dedupe import dedupe_link_dicts_by_url
@@ -146,7 +146,7 @@ def get_business_notice_links(list_url):
 def parse_business_detail_from_html(html: str, url: str) -> ScrapeResult:
     """상세 HTML만 파싱. I/O 없음."""
     soup = BeautifulSoup(html, "html.parser")
-    title = board_view_title_from_soup(soup) or "제목 없음"
+    title = require_non_empty_text(board_view_title_from_soup(soup), field="title", url=url)
 
     date = "날짜 없음"
     info = soup.find(id="BoardViewAdd")
@@ -162,10 +162,8 @@ def parse_business_detail_from_html(html: str, url: str) -> ScrapeResult:
 
     content_html = ""
     container = soup.find("div", id="BoardContent")
-    if container and isinstance(container, Tag):
-        content_html = clean_html_content(container)
-    else:
-        content_html = "(본문 BoardContent를 찾을 수 없습니다)"
+    container = require_present(container if isinstance(container, Tag) else None, selector="div#BoardContent", url=url)
+    content_html = require_non_empty_text(clean_html_content(container), field="content_html", url=url)
 
     images: list[dict[str, Any]] = []
     image_urls: set[str] = set()

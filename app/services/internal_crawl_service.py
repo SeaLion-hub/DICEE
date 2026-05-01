@@ -140,9 +140,14 @@ async def _enqueue_colleges(
 
     for i, code in enumerate(codes):
         lock_token: str | None = None
+        countdown = i * stagger if len(codes) > 1 else 0
+        lock_ttl = max(
+            int(settings.redis.redis_trigger_lock_ttl_seconds),
+            int(countdown) + int(settings.crawl_trigger_lock_countdown_margin_seconds),
+        )
         if redis is not None:
             try:
-                acquired, lock_token = await acquire_trigger_lock(redis, code)
+                acquired, lock_token = await acquire_trigger_lock(redis, code, ttl_seconds=lock_ttl)
             except RedisLockUnavailableError:
                 logger.exception(
                     "Trigger lock unavailable (Redis error) for college_code=%s",
@@ -157,7 +162,6 @@ async def _enqueue_colleges(
                 skipped.append(code)
                 continue
 
-        countdown = i * stagger if len(codes) > 1 else 0
         enqueued_at = time.time()
         try:
             task_id = await dispatcher.enqueue(code, lock_token, countdown, enqueued_at)

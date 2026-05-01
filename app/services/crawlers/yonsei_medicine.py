@@ -16,7 +16,7 @@ from app.core.crawl_http import (
     fetch_html_detail_cached,
 )
 from app.core.crawler_config import CrawlerModuleSpec
-from app.services.crawlers.base import ScrapeResult
+from app.services.crawlers.base import ScrapeResult, require_non_empty_text, require_present
 from app.services.crawlers.notice_dates import normalize_notice_date_split_tokens
 from app.services.crawlers.typing_helpers import ensure_str_attr
 
@@ -94,6 +94,7 @@ def parse_medicine_detail_from_html(html: str, detail_url: str) -> ScrapeResult:
     soup = BeautifulSoup(html, "html.parser")
     title = "제목 없음"
     header = soup.find(class_="article-header")
+    header = require_present(header if isinstance(header, Tag) else None, selector=".article-header", url=detail_url)
     if isinstance(header, Tag):
         t_tag = header.find(["h1", "h2", "h3", "h4"])
         if t_tag is not None and isinstance(t_tag, Tag):
@@ -101,12 +102,14 @@ def parse_medicine_detail_from_html(html: str, detail_url: str) -> ScrapeResult:
         else:
             title = header.get_text(strip=True)
     date = "날짜 없음"
+    title = require_non_empty_text(title, field="title", url=detail_url)
     d_text = header.get_text() if isinstance(header, Tag) else soup.get_text()
     d_match = re.search(r"\d{4}[.-]\s*\d{1,2}[.-]\s*\d{1,2}", d_text)
     if d_match:
         date = normalize_notice_date_split_tokens(d_match.group())
     content_html = ""
     fr_view = soup.find("div", class_="fr-view")
+    fr_view = require_present(fr_view if isinstance(fr_view, Tag) else None, selector="div.fr-view", url=detail_url)
     if isinstance(fr_view, Tag):
         end_comment = fr_view.find(string=lambda t: isinstance(t, Comment) and "키워드/태그" in t)
         if end_comment:
@@ -118,6 +121,7 @@ def parse_medicine_detail_from_html(html: str, detail_url: str) -> ScrapeResult:
         content_html = clean_html_content(fr_view)
     else:
         content_html = "(본문 영역 .fr-view를 찾을 수 없습니다)"
+    content_html = require_non_empty_text(content_html, field="content_html", url=detail_url)
     images: list[dict[str, Any]] = []
     image_urls: set[str] = set()
     raw_view = soup.find("div", class_="fr-view")

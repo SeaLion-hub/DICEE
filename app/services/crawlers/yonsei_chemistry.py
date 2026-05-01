@@ -14,7 +14,7 @@ from app.core.crawl_http import (
     fetch_html_detail_cached,
 )
 from app.core.crawler_config import CrawlerModuleSpec
-from app.services.crawlers.base import ScrapeResult
+from app.services.crawlers.base import ScrapeResult, require_non_empty_text, require_present
 from app.services.crawlers.html_image_extract import extract_images_from_container
 from app.services.crawlers.notice_dates import normalize_notice_date
 from app.services.crawlers.typing_helpers import class_list_from_tag, ensure_str_attr
@@ -90,10 +90,13 @@ def scrape_chemistry_detail(url: str) -> ScrapeResult:
             raise
         soup = BeautifulSoup(text, "html.parser")
 
-        title = "제목 없음"
         title_tag = soup.find("h3", class_=lambda c: c and "nxb-view__header-title" in (c or ""))
-        if title_tag and isinstance(title_tag, Tag):
-            title = title_tag.get_text(strip=True)
+        title_tag = require_present(
+            title_tag if isinstance(title_tag, Tag) else None,
+            selector="h3.nxb-view__header-title",
+            url=url,
+        )
+        title = require_non_empty_text(title_tag.get_text(strip=True), field="title", url=url)
 
         date = "날짜 없음"
         time_tag = soup.find("time")
@@ -104,12 +107,13 @@ def scrape_chemistry_detail(url: str) -> ScrapeResult:
         content_html = ""
         images: list[dict[str, Any]] = []
         content_div = soup.find("div", class_="editor-contents")
-
-        if content_div and isinstance(content_div, Tag):
-            images = extract_images_from_container(content_div, url)
-            content_html = content_div.decode_contents().strip()
-        else:
-            content_html = "(본문 영역을 찾을 수 없습니다)"
+        content_div = require_present(
+            content_div if isinstance(content_div, Tag) else None,
+            selector="div.editor-contents",
+            url=url,
+        )
+        images = extract_images_from_container(content_div, url)
+        content_html = require_non_empty_text(content_div.decode_contents().strip(), field="content_html", url=url)
 
         attachments: list[str] = []
         for p_tag in soup.find_all("p", class_=lambda c: c and "nxb-view__files-text" in (c or "")):

@@ -23,6 +23,16 @@ class _SeenSet(Protocol):
     def __contains__(self, x: str) -> bool: ...
 
 
+def _claim_seen(seen: _SeenSet, external_id: str) -> bool:
+    claim = getattr(seen, "claim", None)
+    if callable(claim):
+        return bool(claim(external_id))
+    if external_id in seen:
+        return False
+    seen.add(external_id)
+    return True
+
+
 @dataclass(frozen=True, slots=True)
 class RawNoticeItem:
     college_id: uuid.UUID
@@ -69,7 +79,7 @@ class DeduplicationStage:
             return item
         if not item.external_id:
             return item
-        if item.external_id in self._seen:
+        if not _claim_seen(self._seen, item.external_id):
             increment(CRAWL_DROP_TOTAL, 1, labels={"reason": DROP_REASON_DUPLICATE})
             return None
         return item
@@ -86,6 +96,12 @@ class NoticeDraftBuildStage:
             return item
         data = item.data
         html_content = data.html_content
+        title = (data.title or "").strip()
+        body = (html_content or "").strip()
+        if not title or title == "제목 없음":
+            raise ValueError(f"crawler returned placeholder title: url={item.detail_url[:200]}")
+        if not body or "본문 영역" in body or "본문을 찾을 수 없습니다" in body:
+            raise ValueError(f"crawler returned placeholder content: url={item.detail_url[:200]}")
         body_text_for_hash = (
             BeautifulSoup(html_content, "html.parser").get_text(separator="\n", strip=True) if html_content else ""
         )
@@ -105,8 +121,6 @@ class NoticeDraftBuildStage:
         if payload is None:
             increment(CRAWL_DROP_TOTAL, 1, labels={"reason": DROP_REASON_PAYLOAD_BUILD_NONE})
             return None
-        if item.external_id:
-            self._seen.add(item.external_id)
         return payload
 
 

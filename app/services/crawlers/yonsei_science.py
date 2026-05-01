@@ -16,7 +16,7 @@ from app.core.crawl_http import (
     fetch_html_detail_cached,
 )
 from app.core.crawler_config import CrawlerModuleSpec
-from app.services.crawlers.base import ScrapeResult
+from app.services.crawlers.base import ScrapeResult, require_non_empty_text, require_present
 from app.services.crawlers.notice_dates import normalize_notice_date
 from app.services.crawlers.typing_helpers import ensure_str_attr
 
@@ -87,10 +87,11 @@ def parse_science_links_from_html(html: str, list_url: str) -> list[dict[str, An
 
 def parse_science_detail_from_html(html: str, detail_url: str) -> ScrapeResult:
     soup = BeautifulSoup(html, "html.parser")
-    title = "제목 없음"
     t_tag = soup.find("h3", class_="nxb-view__header-title")
-    if t_tag:
-        title = t_tag.get_text(strip=True)
+    t_tag = require_present(
+        t_tag if isinstance(t_tag, Tag) else None, selector="h3.nxb-view__header-title", url=detail_url
+    )
+    title = require_non_empty_text(t_tag.get_text(strip=True), field="title", url=detail_url)
     date = "날짜 없음"
     for dt in soup.find_all("div", class_="nxb-view__info-dt"):
         if "작성일" in dt.get_text():
@@ -102,48 +103,46 @@ def parse_science_detail_from_html(html: str, detail_url: str) -> ScrapeResult:
     images: list[dict[str, Any]] = []
     image_urls: set[str] = set()
     temp_soup = get_body_soup(soup)
-    if temp_soup:
-        for idx, img in enumerate(temp_soup.find_all("img")):
-            img_tag = as_tag(img)
-            if img_tag is None:
-                continue
-            src = ensure_str_attr(img_tag.get("src", ""))
-            if src and not any(x in src for x in ["icon", "btn", "blank"]):
-                if src.startswith("data:image"):
-                    try:
-                        header, encoded = src.split(",", 1)
-                        ext = "png"
-                        if "jpeg" in header or "jpg" in header:
-                            ext = "jpg"
-                        images.append({"type": "base64", "data": encoded, "name": f"image_{idx+1}.{ext}"})
-                    except (ValueError, IndexError):
-                        logger.warning(
-                            "parse_science_detail_from_html inline image parse failed url=%s index=%s",
-                            detail_url,
-                            idx,
-                            exc_info=True,
-                        )
-                else:
-                    full_url = urljoin(detail_url, src)
-                    parsed = urllib.parse.urlparse(full_url)
-                    encoded_path = urllib.parse.quote(parsed.path)
-                    safe_url = urllib.parse.urlunparse(
-                        (parsed.scheme, parsed.netloc, encoded_path, parsed.params, parsed.query, parsed.fragment)
+    temp_soup = require_present(temp_soup, selector="게시물 내용 comment block", url=detail_url)
+    for idx, img in enumerate(temp_soup.find_all("img")):
+        img_tag = as_tag(img)
+        if img_tag is None:
+            continue
+        src = ensure_str_attr(img_tag.get("src", ""))
+        if src and not any(x in src for x in ["icon", "btn", "blank"]):
+            if src.startswith("data:image"):
+                try:
+                    header, encoded = src.split(",", 1)
+                    ext = "png"
+                    if "jpeg" in header or "jpg" in header:
+                        ext = "jpg"
+                    images.append({"type": "base64", "data": encoded, "name": f"image_{idx+1}.{ext}"})
+                except (ValueError, IndexError):
+                    logger.warning(
+                        "parse_science_detail_from_html inline image parse failed url=%s index=%s",
+                        detail_url,
+                        idx,
+                        exc_info=True,
                     )
-                    if safe_url not in image_urls:
-                        image_urls.add(safe_url)
-                        fname = os.path.basename(parsed.path)
-                        images.append({"type": "url", "data": safe_url, "name": fname or f"image_{idx+1}.jpg"})
-            img_tag.decompose()
-        for table in temp_soup.find_all("table"):
-            table_tag = as_tag(table)
-            if table_tag is None:
-                continue
-            if not table_tag.get("border"):
-                table_tag["border"] = "1"
-        content_html = temp_soup.decode_contents().strip()
-    else:
-        content_html = "(본문 영역을 찾을 수 없습니다)"
+            else:
+                full_url = urljoin(detail_url, src)
+                parsed = urllib.parse.urlparse(full_url)
+                encoded_path = urllib.parse.quote(parsed.path)
+                safe_url = urllib.parse.urlunparse(
+                    (parsed.scheme, parsed.netloc, encoded_path, parsed.params, parsed.query, parsed.fragment)
+                )
+                if safe_url not in image_urls:
+                    image_urls.add(safe_url)
+                    fname = os.path.basename(parsed.path)
+                    images.append({"type": "url", "data": safe_url, "name": fname or f"image_{idx+1}.jpg"})
+        img_tag.decompose()
+    for table in temp_soup.find_all("table"):
+        table_tag = as_tag(table)
+        if table_tag is None:
+            continue
+        if not table_tag.get("border"):
+            table_tag["border"] = "1"
+    content_html = require_non_empty_text(temp_soup.decode_contents().strip(), field="content_html", url=detail_url)
     attachments: list[str] = []
     attachment_names: set[str] = set()
     for fdiv in soup.find_all("div", class_="file-name-area"):

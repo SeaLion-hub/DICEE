@@ -22,6 +22,23 @@ class ScrapeResult:
     attachments: list[str]
 
 
+class ParserStructureError(ValueError):
+    """Crawler detail/list HTML no longer matches required selectors."""
+
+
+def require_non_empty_text(value: str | None, *, field: str, url: str) -> str:
+    text = (value or "").strip()
+    if not text or text in {"제목 없음", "날짜 없음"}:
+        raise ParserStructureError(f"Required crawler field missing: {field}; url={url[:200]}")
+    return text
+
+
+def require_present(value: Any | None, *, selector: str, url: str) -> Any:
+    if value is None:
+        raise ParserStructureError(f"Required crawler selector missing: {selector}; url={url[:200]}")
+    return value
+
+
 class CrawlerStrategy(Protocol):
     """Sync crawler contract used by the crawl pipeline registry."""
 

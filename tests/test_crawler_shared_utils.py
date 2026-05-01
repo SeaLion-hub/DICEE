@@ -47,6 +47,16 @@ def test_dedupe_link_dicts_by_url() -> None:
     assert out[1]["url"] == "https://a.com/2"
 
 
+def test_dedupe_link_dicts_by_url_uses_canonical_url() -> None:
+    raw = [
+        {"url": "https://A.com/path?b=2&a=1#frag", "no": "1"},
+        {"url": "https://a.com/path?a=1&b=2", "no": "2"},
+    ]
+    out = dedupe_link_dicts_by_url(raw)
+    assert len(out) == 1
+    assert out[0]["no"] == "1"
+
+
 def test_extract_images_from_container_url_and_skips_icon() -> None:
     html = '<div id="c"><img src="/x.png"/><img src="/icon-btn.png"/></div>'
     soup = BeautifulSoup(html, "html.parser")

@@ -117,3 +117,32 @@ def test_get_crawl_retry_wait_non_429_delegates_to_fallback(monkeypatch):
     state.outcome.exception = lambda: exc
     got = get_crawl_retry_wait(state)
     assert got == fallback_ret
+
+
+def test_sync_downloader_retry_middleware_uses_retry_after_for_429(monkeypatch):
+    from app.services.crawl.downloader_middleware import DownloadRequest, SyncRetryMiddleware
+    from requests import Response
+    from requests.exceptions import HTTPError
+
+    sleeps: list[float] = []
+    monkeypatch.setattr("app.services.crawl.downloader_middleware.time.sleep", lambda s: sleeps.append(s))
+
+    resp = Response()
+    resp.status_code = 429
+    resp.headers["Retry-After"] = "12"
+    exc = HTTPError("429", response=resp)
+    middleware = SyncRetryMiddleware(
+        max_attempts=3,
+        backoff_base_seconds=0.1,
+        backoff_max_seconds=1.0,
+        retry_403_hosts=set(),
+    )
+
+    should_retry = middleware.process_exception(
+        DownloadRequest(url="https://example.com/1", timeout=1),
+        exc,
+        attempt=1,
+    )
+
+    assert should_retry is True
+    assert sleeps == [12.0]

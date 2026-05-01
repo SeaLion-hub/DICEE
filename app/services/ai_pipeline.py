@@ -34,6 +34,7 @@ from app.domain.contracts.ai_extraction import (
     NoticeMainCategory,
     TaxonomyMappingItem,
 )
+from app.services.ai.exceptions import AIProviderRetryableError
 from app.services.ai.extractor import (
     extract_notice_structured_with_usage,
     html_plain_text_length,
@@ -345,6 +346,92 @@ def _normalize_html_for_substring_validation(source_html: str) -> str:
     return "\n".join(lines)
 
 
+class _TokenLimitExhaustedError(Exception):
+    """Raised when both normal and reduced AI extraction inputs exceed provider limits."""
+
+
+def _error_text(exc: BaseException) -> str:
+    parts = [str(exc)]
+    cause = getattr(exc, "__cause__", None)
+    if cause is not None:
+        parts.append(str(cause))
+    context = getattr(exc, "__context__", None)
+    if context is not None:
+        parts.append(str(context))
+    return " ".join(parts).lower()
+
+
+def _is_provider_rate_limit_error(exc: BaseException) -> bool:
+    text = _error_text(exc)
+    return "resource_exhausted" in text or "quota exceeded" in text or "429" in text or "rate limit" in text
+
+
+def _is_token_limit_error(exc: BaseException) -> bool:
+    text = _error_text(exc)
+    markers = (
+        "context length",
+        "context_limit",
+        "input token",
+        "max token",
+        "token limit",
+        "too many tokens",
+        "maximum context",
+        "request too large",
+    )
+    return any(marker in text for marker in markers)
+
+
+def _reduced_prompt_html(prompt_html: str) -> str:
+    limit = int(getattr(settings, "ai_extraction_token_limit_retry_char_limit", 4000) or 4000)
+    limit = max(500, limit)
+    return prompt_html[:limit]
+
+
+def _run_extraction_with_token_limit_retry(
+    *,
+    prompt_html: str,
+    image_urls: list[str] | None,
+    title: str | None,
+    college_name: str | None,
+    chosen_model: str,
+) -> tuple[NoticeAIExtraction, TokenUsage, ExtractorCallStats, bool]:
+    try:
+        extraction, usage, stats = extract_notice_structured_with_usage(
+            prompt_html,
+            image_urls=image_urls,
+            title=title,
+            college_name=college_name,
+            model=chosen_model,
+        )
+        return extraction, usage, stats, False
+    except Exception as first_exc:
+        if not _is_token_limit_error(first_exc):
+            raise
+        reduced = _reduced_prompt_html(prompt_html)
+        if reduced == prompt_html:
+            raise _TokenLimitExhaustedError("AI extraction input exceeded provider token limit") from first_exc
+        logger.warning(
+            "AI extraction hit provider token/context limit; retrying with reduced input. "
+            "original_len=%s reduced_len=%s",
+            len(prompt_html),
+            len(reduced),
+            exc_info=True,
+        )
+        try:
+            extraction, usage, stats = extract_notice_structured_with_usage(
+                reduced,
+                image_urls=image_urls,
+                title=title,
+                college_name=college_name,
+                model=chosen_model,
+            )
+            return extraction, usage, stats, True
+        except Exception as second_exc:
+            if _is_token_limit_error(second_exc):
+                raise _TokenLimitExhaustedError("AI extraction input exceeded provider token limit") from second_exc
+            raise
+
+
 def validate_extraction_raw_substrings(
     extraction: NoticeAIExtraction,
     source_text: str,
@@ -489,26 +576,28 @@ def extract_notice_info(
     provider = f"google/{standard_model}"
     model = standard_model
     increment(AI_EXTRACTION_ATTEMPT_TOTAL)
+    token_retry_used = False
     try:
-        extraction, usage, stats = extract_notice_structured_with_usage(
-            prompt_html,
+        extraction, usage, stats, token_retry_used = _run_extraction_with_token_limit_retry(
+            prompt_html=prompt_html,
             image_urls=image_urls,
             title=title,
             college_name=college_name,
-            model=chosen_model,
+            chosen_model=chosen_model,
         )
 
         try:
             extraction = validate_and_normalize_taxonomy(extraction)
         except ValueError:
             if getattr(settings, "ai_extraction_model_routing_enabled", False) and chosen_model != standard_model:
-                extraction2, usage2, stats2 = extract_notice_structured_with_usage(
-                    prompt_html,
+                extraction2, usage2, stats2, token_retry_used2 = _run_extraction_with_token_limit_retry(
+                    prompt_html=prompt_html,
                     image_urls=image_urls,
                     title=title,
                     college_name=college_name,
-                    model=standard_model,
+                    chosen_model=standard_model,
                 )
+                token_retry_used = token_retry_used or token_retry_used2
                 usage = add_token_usage(usage, usage2)
                 stats = ExtractorCallStats(
                     vision_used=stats.vision_used or stats2.vision_used,
@@ -601,6 +690,7 @@ def extract_notice_info(
                 "llm_call_count": stats.llm_calls,
                 "vision_used": stats.vision_used,
                 "taxonomy_degraded": tax_deg,
+                "token_limit_retry_used": token_retry_used,
             },
         )
         return envelope
@@ -625,18 +715,35 @@ def extract_notice_info(
                 reason = tag
                 break
 
-        # InstructorRetryException에는 provider 429(RESOURCE_EXHAUSTED)도 감싸져 들어올 수 있다.
-        # 이 경우는 스키마 검증 실패가 아니므로 fallback으로 삼키지 않고 Celery autoretry로 넘긴다.
-        error_text = str(e).lower()
-        is_quota_or_rate_limit = isinstance(e, _instructor_retry_exc_type) and (
-            "resource_exhausted" in error_text or "quota exceeded" in error_text or "429" in error_text
-        )
-        if is_quota_or_rate_limit:
+        if isinstance(e, _TokenLimitExhaustedError):
+            elapsed_ms = int((time.monotonic() - started_at) * 1000)
+            fallback_result = NoticeAIExtraction(target_departments=[])
+            increment(AI_EXTRACTION_FALLBACK_TOTAL)
+            logger.warning("AI extraction token/context limit exhausted; using fallback.", exc_info=True)
+            return ExtractionEnvelope(
+                status="fallback",
+                result=fallback_result,
+                meta=ExtractionRunMeta(
+                    pipeline_version=fallback_result.pipeline_version,
+                    provider=provider,
+                    model=model,
+                    fallback_reason="token_limit_exhausted",
+                    html_raw_len=html_raw_len,
+                    html_clean_len=html_clean_len,
+                    image_count=image_count,
+                    elapsed_ms=elapsed_ms,
+                ),
+            )
+
+        # InstructorRetryException can wrap provider 429/RESOURCE_EXHAUSTED.
+        # Treat that as a transient provider failure so Celery owns backoff.
+        if _is_provider_rate_limit_error(e):
             increment(AI_EXTRACTION_PROVIDER_ERROR_TOTAL)
             logger.error(
-                "AI extraction failed due to provider quota/rate limit; re-raising for autoretry.", exc_info=True
+                "AI extraction failed due to provider quota/rate limit; raising retryable provider error.",
+                exc_info=True,
             )
-            raise
+            raise AIProviderRetryableError("AI provider quota/rate limit exceeded") from e
 
         if isinstance(e, ValidationError | _instructor_retry_exc_type):
             logger.warning(

@@ -12,6 +12,7 @@ from app.domain.contracts.ai_extraction import (
     TaxonomyMappingItem,
 )
 from app.schemas.ai import NoticeAIExtraction, NoticeCategory, ScheduleItem, ScheduleKind
+from app.services.ai.exceptions import AIProviderRetryableError
 from app.services.ai.extractor import (
     EXTRACTOR_SYSTEM_PROMPT,
     MAIN_CATEGORY_SYSTEM_PROMPT,
@@ -221,6 +222,45 @@ def test_extract_notice_info_provider_error_is_propagated() -> None:
     ):
         with pytest.raises(RequestException):
             extract_notice_info("<p>html</p>")
+
+
+def test_extract_notice_info_instructor_429_raises_retryable_provider_error() -> None:
+    instructor_exceptions = pytest.importorskip("instructor.core.exceptions")
+    instructor_retry_exc_cls = instructor_exceptions.InstructorRetryException
+
+    def _raise_rate_limited(*args, **kwargs):
+        raise instructor_retry_exc_cls(
+            "RESOURCE_EXHAUSTED 429 quota exceeded",
+            n_attempts=3,
+            total_usage={},
+        )
+
+    with patch(
+        "app.services.ai_pipeline.extract_notice_structured_with_usage",
+        side_effect=_raise_rate_limited,
+    ):
+        with pytest.raises(AIProviderRetryableError):
+            extract_notice_info("<p>html</p>")
+
+
+def test_extract_notice_info_token_limit_retries_once_then_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[int] = []
+
+    def _raise_token_limit(html_content: str, *args, **kwargs):
+        calls.append(len(html_content))
+        raise RuntimeError("context length token limit exceeded")
+
+    monkeypatch.setattr(settings, "ai_extraction_token_limit_retry_char_limit", 500)
+    with patch(
+        "app.services.ai_pipeline.extract_notice_structured_with_usage",
+        side_effect=_raise_token_limit,
+    ):
+        envelope = extract_notice_info("<p>" + ("x" * 2000) + "</p>")
+
+    assert envelope.status == "fallback"
+    assert envelope.meta.fallback_reason == "token_limit_exhausted"
+    assert len(calls) == 2
+    assert calls[1] == 500
 
 
 def test_extract_notice_info_success_meta_includes_provider() -> None:

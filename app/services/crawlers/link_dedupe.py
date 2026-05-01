@@ -3,6 +3,27 @@
 from __future__ import annotations
 
 from typing import Any
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+
+
+def canonicalize_link_url(url: str) -> str:
+    raw = (url or "").strip()
+    if not raw:
+        return ""
+    try:
+        parts = urlsplit(raw)
+    except ValueError:
+        return raw
+    query = urlencode(sorted(parse_qsl(parts.query, keep_blank_values=True)), doseq=True)
+    return urlunsplit(
+        (
+            parts.scheme.lower(),
+            parts.netloc.lower(),
+            parts.path,
+            query,
+            "",
+        )
+    )
 
 
 def dedupe_link_dicts_by_url(links: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -11,8 +32,9 @@ def dedupe_link_dicts_by_url(links: list[dict[str, Any]]) -> list[dict[str, Any]
     out: list[dict[str, Any]] = []
     for item in links:
         url = (item.get("url") or "").strip()
-        if not url or url in seen:
+        key = canonicalize_link_url(url)
+        if not key or key in seen:
             continue
-        seen.add(url)
+        seen.add(key)
         out.append(item)
     return out

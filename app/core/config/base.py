@@ -182,6 +182,15 @@ class Settings(BaseSettings):
         le=3600,
         description="단과대별 크롤 시작 시간 분산(초). Thundering Herd 방지. 0이면 동시 시작.",
     )
+    crawl_trigger_lock_countdown_margin_seconds: int = Field(
+        600,
+        ge=0,
+        le=86400,
+        description=(
+            "Extra trigger-lock TTL beyond Celery countdown so scheduled crawl tasks "
+            "do not start after the lock expires."
+        ),
+    )
     client_ip_resolution_log_sample_rate: float = Field(0.0, ge=0.0, le=1.0)
 
     metrics_allowed_ips: str = Field(
@@ -283,6 +292,12 @@ class Settings(BaseSettings):
         ge=0,
         le=10,
         description="Instructor structured-output self-correction retries per LLM call.",
+    )
+    ai_extraction_token_limit_retry_char_limit: int = Field(
+        4000,
+        ge=500,
+        le=500_000,
+        description="Reduced prompt HTML character limit for the one retry after provider token/context limit errors.",
     )
     ai_llm_request_timeout_seconds: float = Field(
         600.0,

@@ -83,6 +83,7 @@ from app.repositories.notice_repository import (
     upsert_notices_bulk_sync,
 )
 from app.repositories.notice_schedule_repository import replace_notice_schedules_sync
+from app.services.ai.exceptions import AIProviderRetryableError, EmbeddingProviderTransientError
 from app.services.ai_pipeline import extract_notice_info, project_extraction_to_notice_fields
 from app.services.crawl.item_pipeline import NoticeBulkUpsertPipeline
 from app.services.crawl_service import handle_crawl_failure_composite, run_crawl_job_sync
@@ -137,6 +138,7 @@ _EMBED_BACKFILL_AUTORETRY: tuple[type[BaseException], ...] = (
     ConnectionError,
     TimeoutError,
     OSError,
+    EmbeddingProviderTransientError,
 )
 if _google_api_exceptions_for_retry is not None:
     _EMBED_BACKFILL_AUTORETRY = (
@@ -149,6 +151,7 @@ _AI_EXTRACTION_AUTORETRY: tuple[type[BaseException], ...] = (
     ConnectionError,
     TimeoutError,
     OSError,
+    AIProviderRetryableError,
 )
 if _google_api_exceptions_for_retry is not None:
     _AI_EXTRACTION_AUTORETRY = (

@@ -14,7 +14,7 @@ from app.services.internal_crawl_service import InternalCrawlService
 
 @pytest.mark.asyncio
 async def test_trigger_skipped_lock_increments_metric(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def fake_acquire(_redis: object, _code: str) -> tuple[bool, None]:
+    async def fake_acquire(_redis: object, _code: str, *, ttl_seconds: int | None = None) -> tuple[bool, None]:
         return (False, None)
 
     monkeypatch.setattr(
@@ -38,7 +38,7 @@ async def test_trigger_skipped_lock_increments_metric(monkeypatch: pytest.Monkey
 
 @pytest.mark.asyncio
 async def test_trigger_enqueue_success_increments_metric(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def fake_acquire(_redis: object, _code: str) -> tuple[bool, str]:
+    async def fake_acquire(_redis: object, _code: str, *, ttl_seconds: int | None = None) -> tuple[bool, str]:
         return (True, "lock-token-test")
 
     monkeypatch.setattr(

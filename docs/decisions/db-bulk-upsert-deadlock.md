@@ -1,7 +1,7 @@
-# DB Bulk Upsert 데드락(Deadlock) 방지 전략
+﻿# DB Bulk Upsert 데드락(Deadlock) 방지 전략
 
 ## 배경 (Context)
-DICEE는 크롤링 속도 제한을 준수하면서도 빠르게 데이터를 수집하기 위해 다수의 Celery 워커를 병렬로 실행합니다. 수집된 데이터는 `INSERT ... ON CONFLICT DO UPDATE` 구문을 통해 PostgreSQL에 Bulk Upsert 됩니다. 
+DICEE는 크롤링 속도 제한을 준수하면서도 빠르게 데이터를 수집하기 위해 다수의 Celery 워커를 병렬로 실행합니다. 수집된 데이터는 `INSERT ... ON CONFLICT DO UPDATE` 구문을 통해 PostgreSQL에 Bulk Upsert 됩니다.
 하지만 여러 워커가 무작위 순서로 나열된 공지사항 배열을 동시에 DB에 밀어넣을 때, 교집합 데이터가 존재하면 워커 간에 행 수준 잠금(Row-level Lock)을 획득하는 순서가 엇갈려 필연적으로 **순환 대기(데드락, Deadlock)**가 발생하고 트랜잭션이 강제 롤백되는 치명적인 문제가 있었습니다.
 
 ## 결정 (Decision)

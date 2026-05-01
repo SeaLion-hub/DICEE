@@ -333,3 +333,36 @@ async def test_internal_crawl_idempotency_does_not_cache_when_skipped_only(monke
     assert result.result_kind == TriggerCrawlResultKind.success
     assert len(captured) == 0
     assert "skipped" in result.payload
+
+
+async def test_internal_crawl_uses_countdown_aware_trigger_lock_ttl(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    from app.domain.contracts.internal_contracts import TriggerCrawlCmd
+    from app.services import internal_crawl_service as ics
+    from app.services.internal_crawl_service import InternalCrawlService
+
+    class MockRedis:
+        pass
+
+    class Dispatcher:
+        async def enqueue(self, college_code, lock_token, countdown, enqueued_at):
+            return f"tid-{college_code}"
+
+    calls: list[tuple[str, int | None]] = []
+
+    async def capture_acquire(_redis, code, *, ttl_seconds=None):
+        calls.append((code, ttl_seconds))
+        return (True, f"token-{code}")
+
+    monkeypatch.setattr(ics, "COLLEGE_CODE_TO_MODULE", {"a": "ma", "b": "mb"})
+    monkeypatch.setattr(ics.settings, "crawl_trigger_stagger_seconds", 3000)
+    monkeypatch.setattr(ics.settings, "crawl_trigger_lock_countdown_margin_seconds", 600)
+    monkeypatch.setattr(ics.settings, "redis_trigger_lock_ttl_seconds", 2400)
+    monkeypatch.setattr(ics, "acquire_trigger_lock", capture_acquire)
+    monkeypatch.setattr(ics, "release_trigger_lock", AsyncMock(return_value=True))
+
+    svc = InternalCrawlService(MockRedis(), Dispatcher())
+    await svc.trigger(TriggerCrawlCmd(college_code=None, idempotency_key=None, client_ip="127.0.0.1"))
+
+    assert calls == [("a", 2400), ("b", 3600)]

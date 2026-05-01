@@ -522,48 +522,55 @@ def test_scrape_one_sync_keyboard_interrupt_propagates():
         _scrape_one_sync(post, scrape_raise)
 
 
-def test_collect_payloads_sync_applies_rate_limit_in_worker_thread(monkeypatch):
-    import threading
+def test_collect_payloads_sync_limits_pending_futures_to_max_workers(monkeypatch):
+    import concurrent.futures
+    import time
 
     from app.services.crawl import collect_sync as crawl_collect_sync
     from app.services.crawl.collect_sync import _collect_payloads_sync
     from app.services.crawlers.base import ScrapeResult
 
-    events: list[tuple[str, str]] = []
+    max_outstanding = {"value": 0}
+    outstanding = {"value": 0}
 
-    class _FakeLimiter:
-        def wait_sync(self, host: str) -> None:
-            events.append(("wait", threading.current_thread().name))
+    class TrackingExecutor:
+        def __init__(self, max_workers: int):
+            self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
 
-        def close(self) -> None:
-            return
+        def submit(self, *args, **kwargs):
+            outstanding["value"] += 1
+            max_outstanding["value"] = max(max_outstanding["value"], outstanding["value"])
+            fut = self._executor.submit(*args, **kwargs)
+            fut.add_done_callback(lambda _f: outstanding.__setitem__("value", outstanding["value"] - 1))
+            return fut
 
-    monkeypatch.setattr(crawl_collect_sync, "get_host_rate_limiter_sync", lambda _delay: _FakeLimiter())
+        def shutdown(self, *args, **kwargs):
+            return self._executor.shutdown(*args, **kwargs)
+
+    monkeypatch.setattr(crawl_collect_sync, "ThreadPoolExecutor", TrackingExecutor)
 
     def _scrape(_url: str):
-        events.append(("scrape", threading.current_thread().name))
+        time.sleep(0.001)
         return ScrapeResult("title", "2024.01.01", "<p>body</p>", [], [])
 
     from app.domain.contracts.crawl_contracts import CrawlLogContext
 
-    links: list[LinkItem] = [{"no": "1", "url": "https://example.com/post/1"}]
+    links: list[LinkItem] = [{"no": str(i), "url": f"https://example.com/post/{i}"} for i in range(20)]
     payloads = list(
         _collect_payloads_sync(
             links,
             uuid.uuid4(),
             _scrape,
             1.0,
-            max_workers=1,
-            in_flight_limit=1,
+            max_workers=3,
+            in_flight_limit=20,
             seen=set(),
             ctx=CrawlLogContext(college_code="test"),
         )
     )
 
-    assert len(payloads) == 1
-    assert events[0][0] == "wait"
-    assert events[1][0] == "scrape"
-    assert events[0][1] != "MainThread"
+    assert len(payloads) == 20
+    assert max_outstanding["value"] <= 3
 
 
 def test_collect_payloads_sync_pre_dedup_reduces_scrape_calls():

@@ -760,6 +760,14 @@ def test_crawl_college_task_on_chunk_enqueue_failure_increments_ai_enqueue_faile
     assert after == before + 1
 
 
+def test_celery_routes_ingestion_batch_to_dedicated_queue():
+    from app.core.celery_app import app as celery_app
+
+    queue_names = {q.name for q in celery_app.conf.task_queues}
+    assert "ingestion" in queue_names
+    assert celery_app.conf.task_routes["app.services.tasks.process_notice_ingestion_batch_task"]["queue"] == "ingestion"
+
+
 def test_production_google_redirect_uris_valid_accepts_https():
     from app.core.config.base import _production_google_redirect_uris_valid
 

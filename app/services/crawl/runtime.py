@@ -4,10 +4,7 @@ import logging
 import uuid
 from collections import deque
 from dataclasses import dataclass
-from datetime import UTC, datetime
-from email.utils import parsedate_to_datetime
 from functools import lru_cache
-from typing import Any
 
 from tenacity import RetryCallState, wait_exponential_jitter
 
@@ -15,6 +12,7 @@ from app.core.config import settings
 from app.core.crawler_config import COLLEGE_CODE_TO_MODULE, CRAWLER_CONFIG
 from app.core.redis import get_shared_sync_redis_client
 from app.domain.contracts.crawl_contracts import LinkItem
+from app.services.crawl.retry_after import CRAWL_RETRY_BASE_SEC, CRAWL_RETRY_MAX_SEC, parse_retry_after_seconds
 
 logger = logging.getLogger(__name__)
 
@@ -46,47 +44,12 @@ def _load_crawl_runtime_config() -> CrawlRuntimeConfig:
     )
 
 
-CRAWL_RETRY_BASE_SEC = 1.0
-CRAWL_RETRY_MAX_SEC = 60.0
 CRAWL_RETRY_MAX_ATTEMPTS = 5
 _crawl_retry_wait = wait_exponential_jitter(
     initial=CRAWL_RETRY_BASE_SEC,
     max=CRAWL_RETRY_MAX_SEC,
     jitter=1.0,
 )
-
-
-def parse_retry_after_seconds(response: Any) -> float | None:
-    """
-    RFC 7231 Retry-After: delta-seconds (integer) or HTTP-date.
-    wait_seconds = retry_after_datetime - now for HTTP-date (positive if server time in future).
-    Returns None if header absent, invalid, negative, or oversized (then use fallback).
-    """
-    if response is None or not hasattr(response, "headers"):
-        return None
-    raw = response.headers.get("Retry-After")
-    if not raw or not str(raw).strip():
-        return None
-    raw = str(raw).strip()
-    try:
-        secs: float
-        if raw.isdigit():
-            secs = float(int(raw))
-        else:
-            dt = parsedate_to_datetime(raw)
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=UTC)
-            now = datetime.now(UTC)
-            secs = (dt - now).total_seconds()
-        if secs < 0:
-            return None
-        if secs < CRAWL_RETRY_BASE_SEC:
-            secs = CRAWL_RETRY_BASE_SEC
-        if secs > CRAWL_RETRY_MAX_SEC:
-            secs = CRAWL_RETRY_MAX_SEC
-        return secs
-    except (ValueError, TypeError, OSError):
-        return None
 
 
 def get_crawl_retry_wait(retry_state: RetryCallState) -> float:
@@ -124,6 +87,12 @@ class _BoundedSeenSet:
             self._set.discard(oldest)
         self._deque.append(x)
         self._set.add(x)
+
+    def claim(self, x: str) -> bool:
+        if x in self._set:
+            return False
+        self.add(x)
+        return True
 
     def __contains__(self, x: str) -> bool:
         return x in self._set
@@ -185,6 +154,24 @@ class _RedisSeenSet:
             if self._required:
                 raise RuntimeError(f"Redis Seen Set add failed (required): {e}") from e
             logger.warning("RedisSeenSet add failed: %s", e)
+
+    def claim(self, x: str) -> bool:
+        self._ensure_client()
+        if self._client is None:
+            if self._required:
+                raise RuntimeError("Redis Seen Set required but client is unavailable (init failed).")
+            return True
+        try:
+            pipe = self._client.pipeline()
+            pipe.sadd(self._key, x)
+            pipe.expire(self._key, self._ttl)
+            added, _ = pipe.execute()
+            return bool(int(added or 0) == 1)
+        except Exception as e:
+            if self._required:
+                raise RuntimeError(f"Redis Seen Set claim failed (required): {e}") from e
+            logger.warning("RedisSeenSet claim failed: %s", e)
+            return True
 
     def __contains__(self, x: str) -> bool:
         self._ensure_client()

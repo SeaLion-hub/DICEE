@@ -225,7 +225,12 @@ async def add_access_to_blocklist(client: RedisAsyncio | None, jti: str, ttl_sec
         raise BlocklistUnavailableError("Blocklist temporarily unavailable") from e
 
 
-async def acquire_trigger_lock(client: RedisAsyncio | None, college_code: str) -> tuple[bool, str | None]:
+async def acquire_trigger_lock(
+    client: RedisAsyncio | None,
+    college_code: str,
+    *,
+    ttl_seconds: int | None = None,
+) -> tuple[bool, str | None]:
     """
     college별 크롤 트리거 락 획득. SET key <uuid> NX EX.
     성공 시 (True, token), 이미 잠김 시 (False, None).
@@ -238,7 +243,7 @@ async def acquire_trigger_lock(client: RedisAsyncio | None, college_code: str) -
         return (True, None)
     key = f"{TRIGGER_LOCK_KEY_PREFIX}{college_code}"
     token = str(uuid.uuid4())
-    ttl = settings.redis.redis_trigger_lock_ttl_seconds
+    ttl = int(ttl_seconds or settings.redis.redis_trigger_lock_ttl_seconds)
     try:
         ok = await client.set(key, token, nx=True, ex=ttl)
         if ok:

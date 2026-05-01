@@ -23,6 +23,16 @@ def test_acquire_trigger_lock_uses_ttl_from_settings():
         assert call_kw.get("ex") == 3600
 
 
+def test_acquire_trigger_lock_accepts_ttl_override():
+    from app.core import redis as redis_module
+
+    mock_client = AsyncMock()
+    mock_client.set = AsyncMock(return_value=True)
+    result = asyncio.run(redis_module.acquire_trigger_lock(mock_client, "engineering", ttl_seconds=7200))
+    assert result[0] is True
+    assert mock_client.set.call_args[1].get("ex") == 7200
+
+
 def test_acquire_trigger_lock_none_client_returns_true_when_not_required():
     """Redis client None이고 redis_trigger_lock_required False면 (True, None) 반환."""
     from app.core import redis as redis_module

@@ -3,6 +3,7 @@
 from pathlib import Path
 
 import pytest
+from app.services.crawlers.base import ParserStructureError
 from app.services.crawlers.yonsei_engineering import parse_yonsei_engineering_precise_from_html
 
 _FIXTURE = Path(__file__).resolve().parent / "fixtures" / "yonsei_engineering_detail_min.html"
@@ -24,10 +25,7 @@ def test_parse_yonsei_engineering_from_fixture_extracts_title_date_body(engineer
     assert "report.pdf" in result.attachments
 
 
-def test_parse_yonsei_engineering_missing_body_anchor_returns_placeholder() -> None:
+def test_parse_yonsei_engineering_missing_body_anchor_raises_parser_error() -> None:
     html = "<html><body><h3>Only Title</h3><p>2099-12-31</p></body></html>"
-    result = parse_yonsei_engineering_precise_from_html(html, "https://example.com/x")
-
-    assert result.title == "Only Title"
-    assert result.date_str == "2099-12-31"
-    assert result.html_content == "(본문 영역인 <dd> 태그를 찾지 못했습니다.)"
+    with pytest.raises(ParserStructureError):
+        parse_yonsei_engineering_precise_from_html(html, "https://example.com/x")

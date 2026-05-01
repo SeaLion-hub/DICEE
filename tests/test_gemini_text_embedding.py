@@ -6,6 +6,7 @@ import pytest
 
 pytest.importorskip("google.api_core.exceptions")
 
+from app.services.ai.exceptions import EmbeddingProviderTransientError
 from app.services.gemini_text_embedding import EmbeddingProviderError, embed_text_sync
 from google.api_core import exceptions as gae
 
@@ -22,5 +23,9 @@ def test_embed_text_sync_wraps_google_api_error(monkeypatch: pytest.MonkeyPatch)
             side_effect=gae.ResourceExhausted("rate limited"),
         ),
     ):
-        with pytest.raises(EmbeddingProviderError, match="embedding provider request failed"):
+        with pytest.raises(EmbeddingProviderTransientError, match="embedding provider request failed"):
             embed_text_sync("hello")
+
+
+def test_embedding_transient_error_preserves_embedding_provider_base() -> None:
+    assert issubclass(EmbeddingProviderTransientError, EmbeddingProviderError)
